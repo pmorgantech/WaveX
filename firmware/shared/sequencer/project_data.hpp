@@ -12,6 +12,20 @@ constexpr uint8_t kMaxSongs = 16;
 constexpr uint16_t kMaxSongEntries = 128;
 constexpr uint8_t kNoSong = 0xff;
 
+// Saved edits are keyed by full card path, never a boot-local Pool id. File
+// dimensions detect replaced dependencies before applying absolute markers.
+constexpr uint16_t kMaxProjectSamples = 1024;
+struct ProjectSample {
+    char path[Protocol::BROWSE_PATH_MAX]{};
+    uint32_t sample_rate = 0, total_frames = 0;
+    uint32_t start_frame = 0, end_frame = 0, loop_start = 0, loop_end = 0;
+    int16_t gain_db_x10 = 0;
+    uint16_t fade_in_ms = Protocol::kDefaultDeclickMs;
+    uint16_t fade_out_ms = Protocol::kDefaultDeclickMs;
+    uint8_t channels = 0, bits_per_sample = 0;
+    bool loop_enabled = false;
+    uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
+};
 struct ProjectTrack {
     char instrument_path[Protocol::BROWSE_PATH_MAX]{};
     uint8_t midi_in = Protocol::TRACK_MIDI_IN_OMNI;
@@ -49,6 +63,8 @@ struct Project {
     uint8_t input_mode = Protocol::SEQ_INPUT_PLAY;
     bool quantize = false;
     float master_gain = 1;
+    uint16_t sample_count = 0;
+    ProjectSample samples[kMaxProjectSamples]{};
     ProjectTrack tracks[kMaxTracks]{};
     ProjectPattern patterns[kMaxPatterns]{};
     Song songs[kMaxSongs]{};

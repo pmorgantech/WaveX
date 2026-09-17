@@ -33,6 +33,18 @@ MIDI input, polyphony limit, priority, Program Change setting, gain, pan offset
 and mute; the Project also stores master gain. Runtime sample IDs and pointers
 are never persisted.
 
+Sample edits are Project-owned snapshots keyed by the full, case-sensitive WAV
+path, matching Pool identity. Up to 1024 unique paths retain trim/loop markers,
+gain, fades and channel mode. Saved rate/frame/channel/bit-depth dimensions
+must match the loaded dependency before the candidate receives those edits;
+its runtime ID, generation and residency remain intact. These dimension checks
+do not detect replacement PCM with identical dimensions. Ordered records and
+an explicit count detect missing/duplicate entries without a large decoder
+bitmap. This is Project-scoped metadata, not a global sidecar that changes the
+same WAV in every Project. The coordinator must capture every referenced
+sample and restore edits before preparing voice maps; the adapters alone do
+not make the current Sample Edit screen persistent.
+
 Pattern swing remains explicit (50–75), matching the current scheduler.
 The future Song-default swing inheritance described in the target model has
 not been added to this codec or the scheduler. Scenes, effects, melodic gate
@@ -41,8 +53,9 @@ lanes and future settings require their own versioned chunks when implemented.
 ## File transaction
 
 [project_file.hpp](../../firmware/shared/wxcf/project_file.hpp) defines the
-schema: WXCF Project file type 6, version 1.0, with HEAD, Bank-reference,
-per-Track, per-Pattern and per-Song chunks. Float bit patterns and integer
+schema: WXCF Project file type 6, version 1.1, with HEAD, Bank-reference,
+per-Track, per-Pattern, per-Song and per-sample edit chunks. Version 1.0 files
+remain readable with no saved sample edits. Float bit patterns and integer
 records use explicit little-endian encoders. No native C++ structure layout
 is an on-disk contract.
 
@@ -55,7 +68,7 @@ repeat, booleans and finite numeric ranges are checked, and Song references
 must name populated Pattern slots before the decoder returns Done.
 
 The caller must own a private transaction workspace. The complete Project
-occupies roughly 3 MiB: never construct it on either MCU's stack or make it
+occupies roughly 3.5 MiB: never construct it on either MCU's stack or make it
 callback-visible. Device integration must reserve foreground scratch
 exclusively and release it when the transaction ends. Playback retains its
 current prepared Pattern while decoding takes place.

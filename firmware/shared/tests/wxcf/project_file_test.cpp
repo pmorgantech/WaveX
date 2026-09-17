@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -128,6 +129,15 @@ TEST(ProjectFile, FullCapacityRoundTripStaysWithinFileAndPerAdvanceBudgets) {
         for (unsigned i = 0; i < Sequencer::kMaxSongEntries; ++i)
             song.entries[i] = {static_cast<uint8_t>(i), 1};
     }
+    p->sample_count = Sequencer::kMaxProjectSamples;
+    for (unsigned i = 0; i < p->sample_count; ++i) {
+        auto& sample = p->samples[i];
+        std::snprintf(sample.path, sizeof(sample.path), "/wavex/samples/%u.wav", i);
+        sample.sample_rate = 48000;
+        sample.total_frames = 48000;
+        sample.channels = 2;
+        sample.bits_per_sample = 16;
+    }
     auto m = Encode(*p);
     EXPECT_LT(m.bytes.size(), ProjectFile::kMaxFileBytes);
     auto restored = std::make_unique<Sequencer::Project>();
@@ -193,5 +203,88 @@ TEST(ProjectFile, WriteErrorsAndUnterminatedPathsAreNotSuccessfulSaves) {
     Memory bad;
     ProjectFile::Encoder invalid(bad.Io(), *p);
     EXPECT_EQ(AdvanceAll(invalid, bad), Result::Invalid);
+}
+}  // namespace
+
+namespace {
+void AddSample(Sequencer::Project& p) {
+    p.sample_count = 1;
+    auto& s = p.samples[0];
+    std::strcpy(s.path, "/wavex/samples/Long stereo name.wav");
+    s.sample_rate = 48000;
+    s.total_frames = 48000;
+    s.channels = 2;
+    s.bits_per_sample = 16;
+    s.start_frame = 120;
+    s.end_frame = 40000;
+    s.loop_start = 500;
+    s.loop_end = 20000;
+    s.gain_db_x10 = -123;
+    s.fade_in_ms = 7;
+    s.fade_out_ms = 23;
+    s.loop_enabled = true;
+    s.channel_mode = Protocol::SAMPLE_CH_MONO_SUM;
+}
+TEST(ProjectFile, SampleEditsRoundTripWithBoundedTransfersAndNoRuntimeIdentity) {
+    auto p = Example();
+    AddSample(*p);
+    auto m = Encode(*p);
+    auto restored = std::make_unique<Sequencer::Project>();
+    ASSERT_EQ(Decode(m, *restored), Result::Done);
+    ASSERT_EQ(restored->sample_count, 1);
+    const auto& s = restored->samples[0];
+    EXPECT_STREQ(s.path, p->samples[0].path);
+    EXPECT_EQ(s.sample_rate, 48000u);
+    EXPECT_EQ(s.total_frames, 48000u);
+    EXPECT_EQ(s.start_frame, 120u);
+    EXPECT_EQ(s.end_frame, 40000u);
+    EXPECT_EQ(s.loop_start, 500u);
+    EXPECT_EQ(s.loop_end, 20000u);
+    EXPECT_EQ(s.gain_db_x10, -123);
+    EXPECT_EQ(s.fade_in_ms, 7);
+    EXPECT_EQ(s.fade_out_ms, 23);
+    EXPECT_EQ(s.channels, 2);
+    EXPECT_EQ(s.bits_per_sample, 16);
+    EXPECT_TRUE(s.loop_enabled);
+    EXPECT_EQ(s.channel_mode, Protocol::SAMPLE_CH_MONO_SUM);
+}
+TEST(ProjectFile, SampleTableRequiresCompleteUniqueValidRecords) {
+    auto p = Example();
+    AddSample(*p);
+    const auto good = Encode(*p);
+    auto restored = std::make_unique<Sequencer::Project>();
+    for (size_t missing: {size_t{1}, size_t{ProjectFile::kSampleBytes + 8}}) {
+        auto m = good;
+        m.bytes.resize(m.bytes.size() - missing);
+        EXPECT_NE(Decode(m, *restored), Result::Done);
+    }
+    auto duplicate = good;
+    duplicate.bytes.insert(
+        duplicate.bytes.end(), good.bytes.end() - ProjectFile::kSampleBytes - 8, good.bytes.end());
+    EXPECT_EQ(Decode(duplicate, *restored), Result::Invalid);
+    p->sample_count = 2;
+    p->samples[1] = p->samples[0];
+    Memory bad;
+    ProjectFile::Encoder duplicates(bad.Io(), *p);
+    EXPECT_EQ(AdvanceAll(duplicates, bad), Result::Invalid);
+    p->sample_count = 1;
+    p->samples[0].end_frame = p->samples[0].start_frame;
+    Memory markers;
+    ProjectFile::Encoder invalid(markers.Io(), *p);
+    EXPECT_EQ(AdvanceAll(invalid, markers), Result::Invalid);
+    auto malformed = good;
+    malformed.bytes[malformed.bytes.size() - 4] = 2;  // boolean loop_enabled
+    EXPECT_EQ(Decode(malformed, *restored), Result::Invalid);
+}
+TEST(ProjectFile, LegacyProjectHasNoEditsAndNewVersionRequiresSampleCount) {
+    auto p = Example();
+    auto m = Encode(*p);
+    m.bytes.resize(m.bytes.size() - 10);  // remove the empty sample count chunk
+    auto restored = std::make_unique<Sequencer::Project>();
+    EXPECT_EQ(Decode(m, *restored), Result::Invalid);
+    m.bytes[6] = 0;  // version 1.0
+    restored->sample_count = 10;
+    EXPECT_EQ(Decode(m, *restored), Result::Done);
+    EXPECT_EQ(restored->sample_count, 0);
 }
 }  // namespace

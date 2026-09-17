@@ -12,12 +12,14 @@ namespace ProjectFile {
 using PatternFile::Result;
 using namespace Sequencer;
 constexpr uint16_t kFileType = 6;
-constexpr uint16_t kVersion = 0x0100;
+constexpr uint16_t kVersion = 0x0101;
 constexpr uint32_t kMaxFileBytes = 4 * 1024 * 1024;
 constexpr uint32_t kHeadBytes = 36, kTrackBytes = 272, kPatternPrefixBytes = 44;
 constexpr uint32_t kPatternBytes =
     kPatternPrefixBytes + kMaxTracks * kMaxSteps * PatternFile::kStepBytes;
 constexpr uint32_t kSongPrefixBytes = 28;
+constexpr uint32_t kSampleEditBytes = 36;
+constexpr uint32_t kSampleBytes = Protocol::BROWSE_PATH_MAX + kSampleEditBytes;
 
 namespace detail {
 using Wxcf::detail::ReadU16LE;
@@ -64,6 +66,53 @@ inline bool Track(const ProjectTrack& t) {
            t.poly_limit <= 128 && Gain(t.mix.gain) && std::isfinite(t.mix.pan_offset) &&
            t.mix.pan_offset >= -1 && t.mix.pan_offset <= 1;
 }
+inline bool Sample(const ProjectSample& s) {
+    const auto end = s.end_frame ? s.end_frame : s.total_frames;
+    const auto loop_end = s.loop_end ? s.loop_end : end;
+    return s.path[0] && Path(s.path) && s.sample_rate && s.total_frames &&
+           (s.channels == 1 || s.channels == 2) && s.bits_per_sample == 16 && s.start_frame < end &&
+           end <= s.total_frames && s.loop_start >= s.start_frame && s.loop_start < loop_end &&
+           loop_end <= end && s.gain_db_x10 >= -240 && s.gain_db_x10 <= 120 &&
+           s.channel_mode <= Protocol::SAMPLE_CH_MONO_SUM;
+}
+inline bool UniqueSample(const Project& p, uint16_t index) {
+    for (uint16_t i = 0; i < index; ++i)
+        if (std::strcmp(p.samples[i].path, p.samples[index].path) == 0)
+            return false;
+    return true;
+}
+inline void EncodeSampleEdits(uint8_t* b, const ProjectSample& s) {
+    Wxcf::detail::WriteU32LE(b, s.sample_rate);
+    Wxcf::detail::WriteU32LE(b + 4, s.total_frames);
+    Wxcf::detail::WriteU32LE(b + 8, s.start_frame);
+    Wxcf::detail::WriteU32LE(b + 12, s.end_frame);
+    Wxcf::detail::WriteU32LE(b + 16, s.loop_start);
+    Wxcf::detail::WriteU32LE(b + 20, s.loop_end);
+    WriteU16LE(b + 24, static_cast<uint16_t>(s.gain_db_x10));
+    WriteU16LE(b + 26, s.fade_in_ms);
+    WriteU16LE(b + 28, s.fade_out_ms);
+    b[30] = s.channels;
+    b[31] = s.bits_per_sample;
+    b[32] = s.loop_enabled;
+    b[33] = s.channel_mode;
+}
+inline bool DecodeSampleEdits(const uint8_t* b, ProjectSample& s) {
+    s.sample_rate = Wxcf::detail::ReadU32LE(b);
+    s.total_frames = Wxcf::detail::ReadU32LE(b + 4);
+    s.start_frame = Wxcf::detail::ReadU32LE(b + 8);
+    s.end_frame = Wxcf::detail::ReadU32LE(b + 12);
+    s.loop_start = Wxcf::detail::ReadU32LE(b + 16);
+    s.loop_end = Wxcf::detail::ReadU32LE(b + 20);
+    const auto gain = ReadU16LE(b + 24);
+    s.gain_db_x10 = static_cast<int16_t>(gain < 32768 ? gain : static_cast<int32_t>(gain) - 65536);
+    s.fade_in_ms = ReadU16LE(b + 26);
+    s.fade_out_ms = ReadU16LE(b + 28);
+    s.channels = b[30];
+    s.bits_per_sample = b[31];
+    s.loop_enabled = b[32] != 0;
+    s.channel_mode = b[33];
+    return b[32] <= 1 && !b[34] && !b[35] && Sample(s);
+}
 inline bool Links(const Project& p) {
     if (!p.patterns[p.active_pattern].used ||
         (p.selected_song != kNoSong && !p.songs[p.selected_song].used))
@@ -91,7 +140,8 @@ class Encoder {
             return result_;
         uint8_t b[kTrackBytes]{};
         if (phase_ == 0) {
-            if (!detail::Head(p_) || !detail::Path(p_.bank_path) || !detail::Links(p_))
+            if (!detail::Head(p_) || !detail::Path(p_.bank_path) || !detail::Links(p_) ||
+                p_.sample_count > kMaxProjectSamples)
                 return result_ = Result::Invalid;
             std::memcpy(b, p_.name, sizeof(p_.name));
             detail::WriteU16LE(b + 24, p_.tempo_bpm_x100);
@@ -176,10 +226,42 @@ class Encoder {
             }
             return result_;
         }
+        if (phase_ == 5) {
+            detail::WriteU16LE(b, p_.sample_count);
+            if (!Chunk(3, b, 2))
+                return result_ = Result::IoError;
+            ++phase_;
+            return result_;
+        }
+        if (phase_ == 6) {
+            if (index_ == p_.sample_count)
+                return result_ = Result::Done;
+            const auto& sample = p_.samples[index_];
+            if (!record_) {
+                if (!detail::Sample(sample) || !detail::UniqueSample(p_, index_))
+                    return result_ = Result::Invalid;
+                if (writer_.BeginChunk(static_cast<uint16_t>(0x1000 + index_),
+                                       kVersion,
+                                       kSampleBytes) != Wxcf::Result::Ok ||
+                    writer_.WriteData(sample.path, sizeof(sample.path)) != Wxcf::Result::Ok)
+                    return result_ = Result::IoError;
+                record_ = 1;
+            } else {
+                detail::EncodeSampleEdits(b, sample);
+                if (writer_.WriteData(b, kSampleEditBytes) != Wxcf::Result::Ok)
+                    return result_ = Result::IoError;
+                record_ = 0;
+                ++index_;
+            }
+            return result_;
+        }
         while (index_ < kMaxSongs && !p_.songs[index_].used)
             ++index_;
-        if (index_ == kMaxSongs)
-            return result_ = Result::Done;
+        if (index_ == kMaxSongs) {
+            index_ = 0;
+            ++phase_;
+            return result_;
+        }
         const auto& song = p_.songs[index_];
         if (!record_) {
             std::memcpy(b, song.name, sizeof(song.name));
@@ -218,6 +300,7 @@ class Encoder {
 class Decoder {
    public:
     Decoder(Wxcf::IoContext io, Project& project) : reader_(io), p_(project) {
+        p_.sample_count = 0;
         for (auto& pattern: p_.patterns)
             pattern.used = false;
         for (auto& song: p_.songs)
@@ -232,6 +315,7 @@ class Decoder {
             if (reader_.ReadHeader(type, version, length) != Wxcf::Result::Ok ||
                 type != kFileType || Wxcf::VersionMajor(version) != 1 || length > kMaxFileBytes)
                 return Fail(Result::Invalid);
+            needs_samples_ = version >= 0x0101;
             started_ = true;
             return result_;
         }
@@ -243,6 +327,16 @@ class Decoder {
             return result_;
         }
         uint8_t b[kTrackBytes]{};
+        if (sample_pending_) {
+            auto& sample = p_.samples[samples_read_];
+            if (!Read(b, kSampleEditBytes))
+                return result_;
+            if (!detail::DecodeSampleEdits(b, sample) || !detail::UniqueSample(p_, samples_read_))
+                return Fail(Result::Invalid);
+            ++samples_read_;
+            sample_pending_ = false;
+            return result_;
+        }
         if (record_) {
             if (song_) {
                 if (!Read(b, 2))
@@ -270,10 +364,11 @@ class Decoder {
         Wxcf::ChunkHeader h;
         const auto r = reader_.NextChunkHeader(h);
         if (r == Wxcf::Result::EndOfFile)
-            return result_ =
-                       head_ && bank_ && tracks_ == 0xffff && detail::Head(p_) && detail::Links(p_)
-                           ? Result::Done
-                           : Result::Invalid;
+            return result_ = head_ && bank_ && tracks_ == 0xffff && detail::Head(p_) &&
+                                     detail::Links(p_) && (!needs_samples_ || samples_head_) &&
+                                     samples_read_ == p_.sample_count
+                                 ? Result::Done
+                                 : Result::Invalid;
         if (r != Wxcf::Result::Ok)
             return Fail(Result::IoError);
         if (h.payload_len > kMaxFileBytes - 8 || consumed_ > kMaxFileBytes - 8 - h.payload_len)
@@ -304,6 +399,24 @@ class Decoder {
             if (!detail::Path(p_.bank_path))
                 return Fail(Result::Invalid);
             bank_ = true;
+        } else if (h.chunk_id == 3) {
+            if (samples_head_ || !major || h.payload_len != 2)
+                return Fail(Result::Invalid);
+            if (!Read(b, 2))
+                return result_;
+            p_.sample_count = detail::ReadU16LE(b);
+            if (p_.sample_count > kMaxProjectSamples)
+                return Fail(Result::Invalid);
+            samples_head_ = true;
+        } else if (h.chunk_id >= 0x1000 && h.chunk_id < 0x1000 + kMaxProjectSamples) {
+            // Ordered, contiguous records make completeness and duplicate detection
+            // independent of a large MCU-side bitmap. Paths remain the identity.
+            if (!samples_head_ || !major || h.payload_len != kSampleBytes ||
+                h.chunk_id != 0x1000 + samples_read_ || samples_read_ >= p_.sample_count)
+                return Fail(Result::Invalid);
+            if (!Read(p_.samples[samples_read_].path, Protocol::BROWSE_PATH_MAX))
+                return result_;
+            sample_pending_ = true;
         } else if (h.chunk_id >= 0x100 && h.chunk_id < 0x100 + kMaxTracks) {
             const uint8_t t = static_cast<uint8_t>(h.chunk_id - 0x100);
             if ((tracks_ & (1u << t)) || !major || h.payload_len != kTrackBytes)
@@ -378,7 +491,8 @@ class Decoder {
     Wxcf::Reader reader_;
     Project& p_;
     uint32_t consumed_ = 12, skip_ = 0;
-    uint16_t tracks_ = 0, record_ = 0;
+    uint16_t tracks_ = 0, record_ = 0, samples_read_ = 0;
+    bool needs_samples_ = false, samples_head_ = false, sample_pending_ = false;
     uint8_t index_ = 0;
     bool started_ = false, head_ = false, bank_ = false, song_ = false;
     Result result_ = Result::More;

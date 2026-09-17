@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Project format 1.1 retains path-keyed Sample editor markers, gain, fades and
+  channel mode with dependency dimension checks before candidate restore.
+  Version 1.0 remains readable; device transaction wiring remains in progress.
+
 - Added isolated Project Instrument/Pool staging with rollback of newly loaded
   PCM, preserved live edits/modulation, and explicit commit after dependency
   admission. Session orchestration and the Project file UI remain open.
