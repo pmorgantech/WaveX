@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- ESP32 display bring-up for Waveshare 8-DSI-TOUCH-A using the existing
+  JD9365/GT911 BSP stack: RGB888, PPA-rotated 1280×800 landscape, PSRAM draw
+  buffers and updated UI geometry. The current partial-flush path is not
+  tear-free; panel/touch/brightness verification and ten-contact support
+  remain open in the roadmap.
+
 - Bank Manager → Shift → Slot tools copies or moves an occupied slot into a
   new named Bank, with explicit source/destination and replacement confirmation.
   Serialized Instrument extensions are preserved, every save checks free space,

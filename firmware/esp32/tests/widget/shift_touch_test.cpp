@@ -2,6 +2,7 @@
 
 #include "ui/multi_touch_input.h"
 #include "ui/ui_navigator.h"
+#include "ui_theme.h"
 
 #include <cstring>
 #include <memory>
@@ -12,7 +13,7 @@ void statusStripCreate(lv_obj_t*) {}
 }  // namespace wavex_ui
 
 namespace {
-uint16_t pixels[1280 * 720];
+uint16_t pixels[UI_SCREEN_WIDTH * UI_SCREEN_HEIGHT];
 uint32_t tick = 0;
 uint32_t Tick() {
     return tick;
@@ -57,7 +58,7 @@ lv_obj_t* FindShift(lv_obj_t* parent) {
 TEST(ShiftTouchTest, HeldShiftFiresAlternateAndReleaseDoesNotRelatch) {
     lv_init();
     lv_tick_set_cb(Tick);
-    auto* display = lv_display_create(1280, 720);
+    auto* display = lv_display_create(UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT);
     lv_display_set_buffers(display, pixels, nullptr, sizeof(pixels), LV_DISPLAY_RENDER_MODE_DIRECT);
     lv_display_set_flush_cb(display, Flush);
     auto page = std::make_shared<ShiftPage>();

@@ -10,7 +10,7 @@
 #include <utility>
 
 namespace {
-uint16_t pixels[1280 * 720];
+uint16_t pixels[UI_SCREEN_WIDTH * UI_SCREEN_HEIGHT];
 uint32_t tick = 0, flushes = 0;
 uint32_t Tick() {
     return tick;
@@ -26,7 +26,7 @@ class ParameterWidgetsTest : public ::testing::Test {
         if (!initialized) {
             lv_init();
             lv_tick_set_cb(Tick);
-            display_ = lv_display_create(1280, 720);
+            display_ = lv_display_create(UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT);
             lv_display_set_buffers(
                 display_, pixels, nullptr, sizeof(pixels), LV_DISPLAY_RENDER_MODE_DIRECT);
             lv_display_set_flush_cb(display_, Flush);

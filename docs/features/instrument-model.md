@@ -417,7 +417,7 @@ assignment and Instrument replacement remain the explicit stop/next-note
 boundaries.
 The frontend suite passes 274 tests, and the two-board LFO HIL verifies the
 transport, automatic preview and WXI readback (11.70 seconds). The inspected
-1280×720 capture is `logs/instrument-lfo-20260912.png`; all eight tiles fit
+pre-migration capture is `logs/instrument-lfo-20260912.png`; all eight tiles fit
 without clipping.
 
 ### Render-channel reservation and Mono persistence

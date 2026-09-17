@@ -88,6 +88,9 @@ Use [panel-controls.md](features/panel-controls.md) and the checklist:
   calibration, saved settings, feel and shared-bus timing.
 - **HV-014:** DIN wiring and latency, USB enumeration, clock jitter,
   Start/Continue/Stop and SPP synchronization with a DAW.
+- **HV-018:** 8-DSI-TOUCH-A display startup, touch coordinates, brightness,
+  wake and rendering under load; current startup failure is recorded in the
+  hardware-validation checklist.
 
 **Gate (2.P):** from the panel alone, jump to Instrument, change cutoff with a
 pot and hear it, latch Shift and fire a shifted softkey, then BACK out, with
@@ -170,7 +173,7 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–017. Keep partial/deferred checks open;
+image identities and results for HV-001–018. Keep partial/deferred checks open;
 formatting remains deferred until the user tests it. Save/load HIL and selected
 bench passes do not replace physical or full-phase acceptance.
 
@@ -318,6 +321,20 @@ choice and measure ring low-water and service latency.
   libDaisy submodule change.
 
 ### UI and frontend maintenance
+
+#### 8-inch display bring-up
+
+- [ ] Investigate font sizes and vertical layout on the 1280×800 panel.
+  The display adds 80 pixels of height. Evaluate content space below the
+  title/status bar, page tabs and soft-buttons on the real panel.
+
+The 8-DSI-TOUCH-A migration selects the JD9365 BSP profile, RGB888, PPA
+rotation and 1280×800 landscape geometry. It retains partial flushes and five
+touch pointers. Hardware acceptance remains open; compilation and host widget
+tests do not close the phase gate. Resolve tear-free landscape scanout and
+verify backlight registers on hardware before claiming double buffering.
+Ten-contact support requires a GT9271-capable read path because the current
+GT911 driver rejects reports above five.
 
 - Reconcile Play's displayed octave and Pads/Keys range labels without changing
   MIDI note numbers.

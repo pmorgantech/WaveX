@@ -1,8 +1,8 @@
 # WaveX — Dual-MCU Sampler / Groovebox
 
-WaveX is a modern **sampler / groovebox / drum machine** with a 5" touchscreen, per-voice **analog filtering** (VCF/VCA), CV/Gate outputs, and offline sample editing — built on a dual-MCU architecture:
+WaveX is a modern **sampler / groovebox / drum machine** with an 8" touchscreen, per-voice **analog filtering** (VCF/VCA), CV/Gate outputs, and offline sample editing — built on a dual-MCU architecture:
 
-- **Frontend — ESP32-P4** (ESP-IDF 5.5, LVGL 9): 1280×720 MIPI-DSI touchscreen UI, encoders, button matrix, LEDs, MIDI I/O.
+- **Frontend — ESP32-P4** (ESP-IDF 5.5, LVGL 9): 1280×800 MIPI-DSI touchscreen UI, encoders, button matrix, LEDs, MIDI I/O.
 - **Backend — Daisy Seed / STM32H750** (libDaisy, 480 MHz Cortex-M7, 64 MB SDRAM): real-time audio engine at 48 kHz, sample streaming from SD (SDMMC 4-bit), CV outputs, DSP.
 - **Inter-MCU link**: UART at 2 Mbaud (ESP32 UART1 ↔ Daisy UART4), full-duplex DMA both ends, carrying a shared, tested wire protocol (`firmware/shared/uart_protocol/` framing over `firmware/shared/spi_protocol/protocol.h` payloads) with CRC16 and sequence numbers. An SPI link is wired and an ATTN line exists, but both are **compiled out** (`WAVEX_SPI_LINK_ENABLED=0`) — see [`docs/architecture.md`](docs/architecture.md) §4.4.
 
@@ -151,7 +151,7 @@ Full component table and open hardware decisions: [`docs/architecture.md`](docs/
 | | Frontend | Backend |
 |---|---|---|
 | MCU | ESP32-P4 (Waveshare P4-WIFI6 board, 16 MB flash, PSRAM) | Daisy Seed (STM32H750, 64 MB SDRAM, 8 MB QSPI) |
-| Display/UI | 5" 1280×720 MIPI-DSI (HX8394) + GT911 touch, PCNT encoder, TCA8418 button matrix, TLC5947 LEDs | — |
+| Display/UI | 8" 1280×800 MIPI-DSI (JD9365) + GT9271 touch (bring-up; panel verification pending), PCNT encoder, TCA8418 button matrix, TLC5947 LEDs | — |
 | Audio | — | built-in stereo codec (SAI1); PCM1690 8-ch TDM DAC planned (SAI2) |
 | Storage | 16 MB flash | microSD via SDMMC 4-bit + FatFs |
 | MIDI | DIN (UART2) + USB | — |

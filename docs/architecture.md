@@ -12,7 +12,7 @@ When this document and the code disagree, the code wins for *as-built* sections 
 
 WaveX is a modern **sampler / groovebox / drum machine** built around:
 
-- A **5" 1280×720 MIPI-DSI touchscreen** with encoders, a button/pad matrix, and LED feedback — fast, tactile performance workflow (Elektron/MPC-style).
+- A **8" 1280×800 MIPI-DSI touchscreen** with encoders, a button/pad matrix, and LED feedback — fast, tactile performance workflow (Elektron/MPC-style).
 - A **digital sampler engine** on a Daisy Seed (STM32H750, 480 MHz Cortex-M7, 64 MB SDRAM), organized around a target typed oscillator-source boundary: sampler sources are the implemented product core; wavetable sources are a deferred extension that may share PCM storage infrastructure without sharing sampler playback semantics.
 - A **per-voice analog signal path** — VCF (SSI2144) and VCA (SSI2164) per voice, driven by CV DACs — for genuinely analog filtering and level control.
 - **CV/Gate outputs** for modular integration.
@@ -38,7 +38,7 @@ Dual-MCU split, each processor doing what it is best at:
 │  ESP-IDF 5.5.1 / FreeRTOS    │   UART   │  libDaisy v8.1.0 (bare-metal)    │
 │                              │ 2 Mbaud  │                                  │
 │  • LVGL 9.5 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
-│    (1280×720 MIPI-DSI+GT911) │◄────────►│  • Sample streaming from SD      │
+│    (1280×800 MIPI-DSI+GT9271) │◄────────►│  • Sample streaming from SD      │
 │  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC 4-bit + FatFs)         │
 │    button matrix, TLC5947 LEDs│         │  • 64 MB SDRAM sample RAM        │
 │  • MIDI (UART DIN + USB)     │ (SPI link│  • CV outputs (VCF/VCA/CV-Gate)  │
@@ -70,8 +70,8 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Component | Part | Interface | Status |
 |---|---|---|---|
 | Frontend MCU | ESP32-P4 (Waveshare ESP32-P4-WIFI6, 16 MB flash, PSRAM hex-mode @200 MHz) | — | working |
-| Display | 5" 1280×720, HX8394 controller | MIPI-DSI 2-lane | working |
-| Touch | GT911 capacitive | I2C0 (shared) | working |
+| Display | 8-DSI-TOUCH-A, JD9365, native 800×1280 / landscape 1280×800 | MIPI-DSI 2-lane | configured; new-panel bench gate open |
+| Touch | GT9271 capacitive via GT911 driver | I2C0 (shared with backlight and keypad) | configured; five-contact software limit, bench gate open |
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× RV112FF 20 kΩ endless pots via MCP3208 | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3208 driver/calibration/bindings implemented (2.P.4), HV-013 open |
 | LEDs | 2× TLC5947 chained, temporary | SPI2 DMA, `panel_task` only | implemented (2.P.3), HV-012 open; chip-independent frames, PCA9956B stub for later board |
@@ -113,7 +113,7 @@ firmware/
 │   │   ├── comm/           # packet_router, statistics, ICommInterface
 │   │   └── inter_mcu.cpp   # facade over link + router (large; slated for split)
 │   ├── components/ui/      # navigator/page/softkey UI framework + pages
-│   └── managed_components/ # lvgl 9.5, esp_lvgl_port, hx8394, gt911, p4 BSP
+│   └── managed_components/ # lvgl 9.5, esp_lvgl_port, jd9365_8, gt911, p4 BSP
 ├── daisy/                  # CMake + arm-gcc project (libDaisy v8.1.0, DaisySP)
 │   └── src/
 │       ├── audio/          # audio_engine (callback, streaming, q15 pipeline), voice_manager
@@ -418,7 +418,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 ### 7.2 ESP32-P4
 
 1. **SPI slave DMA buffers** must be in internal, DMA-capable memory (`MALLOC_CAP_DMA`), aligned to complete cache lines using the configured P4 cache-line size. The dormant adapter uses the fixed physical frame in `spi_transport.hpp` with ESP-IDF performing cache maintenance.
-2. **LVGL framebuffers**: MIPI-DSI scans from three full framebuffers in DMA-capable PSRAM; two LVGL partial buffers plus PPA rotation scratch use internal DMA-capable RAM. Log capability-specific free/minimum heap before and after display creation. Avoid CPU-touching the active scanout buffer.
+2. **LVGL framebuffers**: the 8-inch bring-up configuration allocates two RGB888 DPI framebuffers in PSRAM (6,144,000 bytes), plus two partial draw buffers and PPA rotation scratch in PSRAM. The BSP/port own allocation, DMA and cache synchronization. The current partial-flush path updates the active scanout buffer through the driver and does not guarantee tear-free output; explicit front/back handoff with rotation is outstanding. New buffer paths must avoid writing the active scanout buffer. Log capability-specific free/minimum heap before and after display creation. See [UI constraints](ui-design-constraints.md#display-bring-up-and-remaining-limits) for the ownership contract and upstream limitations.
 3. **PSRAM (hex-mode @200 MHz)** is fast but shared with display refresh — bulk copies during UI animation cause bandwidth contention; schedule waveform-preview decode between frames.
 4. **Never call LVGL from a non-UI task** (deadlocks under lock contention); use the deferred-update pattern (`ui-architecture.md`).
 

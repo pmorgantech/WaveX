@@ -21,7 +21,7 @@ references are the audit trail; re-verify before trusting):
 
 | Piece | State |
 |---|---|
-| Touch (GT911) | The only `lv_indev` fed by hardware. Bus is the BSP's I2C (`bsp_i2c_get_handle()`), shared with the keypad. |
+| Touch (GT9271 via GT911 driver) | The only `lv_indev` fed by hardware. Bus is the BSP's I2C (`bsp_i2c_get_handle()`), shared with the keypad. |
 | Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled by `panel_task` with a 2 ms delay plus I/O (`main/pcnt_task.cpp` supplies the service routine). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1 counts negative on clockwise as wired; direction is now one per-encoder setting in `hardware_config.h` (`WAVEX_*_DIRECTION`) applied in the PCNT task, and the three pages that had compensated were reverted to the shared `steps()` contract (2026-09-05). No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
 | Keypad (TCA8418) | INT wakes a bounded FIFO task; 100 ms safety poll, 10 ms fallback without INT. Logical key map and diagnostics exist. Geometry and wiring remain unverified; see HV-011. |
 | Softkeys | Six on-screen buttons, touch only. `SoftkeyBar::focusNext()` / `pressFocused()` exist with no callers — the documented "encoder scrolls softkeys" interaction is not in the binary. |
@@ -97,7 +97,7 @@ reasoning for each move recorded there.
 
 ```
 ESP32-P4
-├─ I2C (BSP bus, 400 kHz)      GT911 touch ── TCA8418 keypad (100 kHz device clock) + INT
+├─ I2C (BSP bus, 400 kHz)      GT9271 touch + backlight ── TCA8418 keypad (100 kHz device clock) + INT
 ├─ SPI2 master                 TLC5947 #0 ─ TLC5947 #1 (chain; XLAT, BLANK)   MCP3208 (CS)
 ├─ PCNT unit 0, unit 1         NAV_A, NAV_B quadrature (push switches → TCA8418 matrix)
 ├─ UART1                       inter-MCU link (as-built)

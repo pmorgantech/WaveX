@@ -2,6 +2,7 @@
 
 #include "ui/ui_navigator.h"
 #include "ui/ui_softkey_bar.h"
+#include "ui_theme.h"
 
 #include <cstdint>
 
@@ -11,7 +12,7 @@ void UINavigator::notifySoftkeyUsed() {}
 }  // namespace wavex_ui
 
 namespace {
-uint16_t framebuffer[1280 * 720];
+uint16_t framebuffer[UI_SCREEN_WIDTH * UI_SCREEN_HEIGHT];
 uint32_t tick_ms = 0;
 uint32_t flushes = 0;
 uint32_t Tick() {
@@ -26,7 +27,7 @@ lv_display_t* Display() {
     if (!display) {
         lv_init();
         lv_tick_set_cb(Tick);
-        display = lv_display_create(1280, 720);
+        display = lv_display_create(UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT);
         lv_display_set_buffers(
             display, framebuffer, nullptr, sizeof(framebuffer), LV_DISPLAY_RENDER_MODE_DIRECT);
         lv_display_set_flush_cb(display, Flush);

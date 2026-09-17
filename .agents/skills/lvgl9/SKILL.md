@@ -20,14 +20,16 @@ override them.
 
 ## The concrete facts worth holding in your head
 
-- **LVGL 9.5.0**, ESP-IDF 5.5, RGB565 (`CONFIG_LV_COLOR_DEPTH=16`), pinned via
+- **LVGL 9.5.0**, ESP-IDF 5.5, RGB888 (`CONFIG_LV_COLOR_DEPTH=24`), pinned via
   `main/idf_component.yml` (`>=9.4,<10`) and resolved in
   `firmware/esp32/dependencies.lock`.
-- 5-inch 720×1280 MIPI-DSI panel, software-rotated 90° to 1280×720 landscape
+- 8-DSI-TOUCH-A, JD9365 800×1280 MIPI-DSI panel, PPA-rotated 90° to 1280×800 landscape
   (`lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` +
-  `.flags.sw_rotate = true`, `display_manager.cpp`). Flush happens in 20-line
-  strips from a small internal-RAM DMA buffer (`buffer_size = 720 * 20`).
-- Fixed chrome: 64 px header + 3 px rule + 96 px, 6-button softkey bar → **1280×557 px**
+  `.flags.sw_rotate = true`, `display_manager.cpp`). The port uses two partial PSRAM draw buffers (`buffer_size = BSP_LCD_H_RES * 20`)
+  and PPA scratch. Two RGB888 DPI buffers are allocated, but the current partial
+  flush path does not page-flip or guarantee tear-free output. The BSP disables
+  rotation when tear avoidance is enabled; do not combine those modes.
+- Fixed chrome: 64 px header + 3 px rule + 96 px, 6-button softkey bar → **1280×637 px**
   usable content area. UI task targets 30 FPS (`vTaskDelay(32ms)` in
   `main/ui_task.cpp`).
 - Montserrat prose and JetBrains Mono numeric roles; use the compiled sizes
@@ -38,10 +40,12 @@ override them.
   canvas, tabview. Nothing else is compiled in — don't design around a widget
   that isn't in this list without adding it deliberately (menuconfig +
   sdkconfig.defaults + a measured reason).
-- The touch/display axis mismatch (GT911 native 720×1280 vs. LVGL's rotated
-  1280×720 canvas) is a known, unfixed discrepancy — see
-  `ui-design-constraints.md` "Known discrepancy". Don't design around it or
-  silently "fix" the axis without corner-tap verification.
+- The panel has GT9271 touch through `esp_lcd_touch_gt911`. Native 800×1280
+  points are rotated by LVGL; corner-tap verification remains open. The driver
+  rejects reports above five contacts despite the hardware's ten-touch rating.
+  Backlight is I2C through the BSP; verify brightness/blank-wake on the panel.
+  See `ui-design-constraints.md` for the wiki/BSP register discrepancy.
+
 
 ## Page contract (`UIPage`, `ui/ui_page.h`)
 
@@ -242,7 +246,7 @@ For every significant LVGL/UI review:
   under an explicit `LV_LOCK()`/`LV_UNLOCK()` pair, or reached from a
   background task? The last one is a bug regardless of how unlikely the race
   looks.
-- Check the 1280×557 content budget, the fixed 6-softkey contract (dimmed not
+- Check the 1280×637 content budget, the fixed 6-softkey contract (dimmed not
   hidden, `why` set when disabled), and that styling uses `ui_theme.h`
   constants rather than literals.
 - Check that a new custom-drawn widget is justified by a measurement against

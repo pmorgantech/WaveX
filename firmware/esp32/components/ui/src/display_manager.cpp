@@ -1,5 +1,6 @@
 #include "ui/display_manager.h"
 
+#include "../styles/ui_theme.h"
 #include "bsp/esp32_p4_nano.h"
 #include "config/pin_config.h"
 #include "driver/gpio.h"
@@ -247,6 +248,14 @@ esp_err_t DisplayManager::panelHandle(esp_lcd_panel_handle_t* out) {
 }
 
 esp_err_t DisplayManager::initLvglDisplay() {
+    static_assert(UI_SCREEN_WIDTH == BSP_LCD_V_RES && UI_SCREEN_HEIGHT == BSP_LCD_H_RES,
+                  "UI geometry must match the BSP panel rotated 90 degrees");
+#if CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR
+#error "The BSP tear-avoidance path disables the rotation required by WaveX"
+#endif
+#if !CONFIG_LVGL_PORT_ENABLE_PPA
+#error "WaveX landscape display requires the LVGL port's PPA rotation"
+#endif
     // No lv_init() here: bsp_display_start_with_config() below runs
     // lvgl_port_init(), which does it. Calling it first only meant LVGL warned
     // "already initialized" when the port tried, and the log callback has to be
@@ -257,13 +266,20 @@ esp_err_t DisplayManager::initLvglDisplay() {
              esp_get_minimum_free_heap_size());
     log_dma_heap("before display init");
 
-    ESP_LOGI(TAG, "Starting BSP display with optimised configuration...");
+    // RGB888 is supported by the port with buff_dma=false; the flag selects
+    // LVGL allocation capabilities, not whether DPI/DMA2D uses DMA. Keep the
+    // two partial draw buffers and aligned PPA scratch in PSRAM. The BSP owns
+    // the separate DPI framebuffers; these partial flushes do not page-flip.
+    ESP_LOGI(TAG,
+             "Starting BSP display: %dx%d native, PPA rotation, partial refresh",
+             BSP_LCD_H_RES,
+             BSP_LCD_V_RES);
     bsp_display_cfg_t cfg = {.lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-                             .buffer_size = 720 * 20,
+                             .buffer_size = BSP_LCD_H_RES * 20,
                              .double_buffer = true,
                              .flags = {
-                                 .buff_dma = true,
-                                 .buff_spiram = false,
+                                 .buff_dma = false,
+                                 .buff_spiram = true,
                                  .sw_rotate = true,
                              }};
 

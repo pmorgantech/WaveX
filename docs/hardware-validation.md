@@ -27,6 +27,7 @@ this document owns the runnable checks and their validation status.
 - [HV-015 — LFO range and musical rate controls](#hv-015--lfo-range-and-musical-rate-controls)
 - [HV-016 — Bank SD transactions](#hv-016--bank-sd-transactions)
 - [HV-017 — Sample Edit selection](#hv-017--sample-edit-selection)
+- [HV-018 — 8-inch display bring-up](#hv-018--8-inch-display-bring-up)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -85,6 +86,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
 | HV-016 | Bank SD transactions and Track recall | Partial | Sparse Bank HIL passed 2026-09-18; full-Bank, DWT, MIDI timing and failure/recovery gates remain open |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
+| HV-018 | 8-inch display bring-up | Failed (startup) | Flash verified 2026-09-18; blank panel, CPU waiting for DSI read completion |
 
 ## HV-001 — SD card formatting
 
@@ -901,6 +903,61 @@ stereo/mono files, two assigned Tracks, serial/audio capture and render profilin
 
 **Blockers:** Requires the new frontend image and physical touch/audio checks.
 No hardware result is claimed by the host tests.
+
+## HV-018 — 8-inch display bring-up
+
+**Introduced:** 8-DSI-TOUCH-A display migration.
+**Design / gate:** [Display bring-up](roadmap.md#8-inch-display-bring-up),
+[display constraints](ui-design-constraints.md#display-bring-up-and-remaining-limits).
+**Setup:** ESP32-P4 with the attached 8-DSI-TOUCH-A panel, USB flash and
+console connections; paired Daisy for playback/load checks.
+
+- [ ] **018a — Flash and boot:** Build and flash the ESP32 debug image using
+  [flashing.md](flashing.md). Capture the console and a UI screenshot.
+  **Pass:** Flash verification succeeds, panel/touch initialization succeeds,
+  the UI starts without a panic, and the screenshot is 1280×800.
+- [ ] **018b — Physical image and touch:** Inspect orientation, colours and
+  all four edges; tap controls near each corner and the centre. Exercise
+  Shift plus softkeys, two held pads/dials and independent releases, then
+  five contacts. **Pass:** Correct landscape image and coordinates, readable
+  unclipped controls and no stuck contacts. Ten-contact support is deferred.
+- [ ] **018c — Brightness and wake:** Change Settings → Display brightness;
+  leave the panel idle until blanking, then wake by touch and encoder.
+  **Pass:** Brightness visibly changes, blanking works and wake restores
+  the chosen level without losing input.
+- [ ] **018d — Rendering under load:** Navigate and scroll during sample
+  loading/playback, inspect for corruption/tearing, and record render timing,
+  heap/stack headroom and audio underruns. **Pass:** No corruption, crash or
+  audio underruns; record any tearing separately. Partial flushes do not
+  establish tear-free scanout or close the full phase gate.
+
+**Latest run:** 2026-09-18, ESP32 debug build from `f63e590` (display code
+unchanged by the subsequent documentation reconciliation in `1d5834b`),
+firmware version 0.5.0. App SHA-256:
+`25882810257a453cf78563a9cd0bc2d7e04141ec72513b0baa8087484fd5f7bc`;
+ELF SHA-256:
+`1ede590a3e934ae44f88412b58d1082944087950eb8b5644f8eb1de88ce07f23`.
+Daisy was not flashed; its running image identity was not established and
+no audio result is claimed.
+
+- **018a failed:** ESP32 build and USB-JTAG flash succeeded with all write
+  hashes verified. Serial startup selected the 8-inch JD9365 driver but did
+  not reach touch/UI initialization; the screenshot request timed out.
+- User observed a blink after flashing followed by a black/blank screen.
+  A clean single-reader capture reproduced the stop after the driver's
+  `I2C Bus V2 uses the externally initialized bus handle` message.
+- After reset and six seconds of execution, OpenOCD halted CPU0 at
+  `0x480cc472`. The matching ELF resolves this to
+  `mipi_dsi_hal_host_gen_read_short_packet`, waiting on the DSI read-busy bit.
+  The panel initialization reads its ID before sending the vendor sequence.
+  The debugger resumed the board afterward; its RTOS backtrace was incomplete,
+  so this identifies the active wait rather than proving the underlying cause.
+- Local evidence (gitignored): `logs/display-build-20260918.log`,
+  `logs/display-flash-20260918.log`, `logs/display-boot-clean-20260918.log`,
+  `logs/display-openocd-20260918.log`, `logs/display-backtrace-20260918.log`.
+  **Follow-up:** Confirm separate panel power and ribbon seating/orientation,
+  power-cycle, then repeat startup. Investigate reset/read behavior if the DSI
+  wait persists. Touch, brightness, rendering and audio/load cases remain open.
 
 ## Recording a validation session
 

@@ -1,6 +1,8 @@
 # WaveX UI Design Constraints
 
-A one-page brief for design work (human or AI). Everything here is verified
+A brief for design work (human or AI). Display configuration updated for
+8-DSI-TOUCH-A bring-up on 2026-09-16;
+new-panel hardware verification remains open. Other constraints are checked
 against the code as of 2026-09-05 — file references inline so it can be
 re-verified when things change. If a design conflicts with this page, the
 design loses.
@@ -10,9 +12,9 @@ structured, and how to build a page.
 
 ## The paste-ready brief
 
-> Design screens for a hardware groovebox/sampler with a **5-inch 1280×720
-> landscape touchscreen** (720×1280 panel, software-rotated 90°), rendered
-> with **LVGL 9.5** at **RGB565** (16-bit color, no alpha-heavy effects).
+> Design screens for a hardware groovebox/sampler with an **8-inch 1280×800
+> landscape touchscreen** (800×1280 panel, PPA-rotated 90°), rendered
+> with **LVGL 9.5** at **RGB888** (24-bit color, no alpha-heavy effects).
 >
 > **Fixed chrome, not negotiable:** a 64 px header (page title left, then the
 > page's context line; output meters, engine-CPU readout and the SHIFT chip
@@ -22,7 +24,7 @@ structured, and how to build a page.
 > change with state (e.g. "Audition" ↔ "Stop"). An action that is unavailable
 > leaves its cell empty; one that exists but is disabled stays visible and
 > dimmed. Either way the row never reflows. The usable content area is
-> therefore **1280×557 px**.
+> therefore **1280×637 px**.
 >
 > **Input model:** capacitive touch, plus a **rotary encoder** that moves
 > page-defined selection/values and clicks to activate, plus a hardware
@@ -46,11 +48,12 @@ structured, and how to build a page.
 > `contrast`) are selected at compile time with
 > `-DWAVEX_UI_THEME=<name>`; they re-map colours only, so a design that fits
 > one fits all four. Design against the roles, never a hex value. Gradients
-> should be used sparingly (RGB565 bands visibly on smooth gradients).
+> and large blended areas still consume rendering bandwidth.
 >
-> **Rendering budget:** the display flushes in 20-line strips from a small
-> DMA buffer and rotation is done in software, so **large animated regions
-> are expensive**. UI runs at 30 FPS max. Fine for: audio meters (already
+> **Rendering budget:** the display uses partial buffers of 800×20 pixels
+> in PSRAM, with PPA rotation through the LVGL port. Tear-free scanout is
+> not yet implemented; **large animated regions remain expensive**. UI runs
+> at 30 FPS max. Fine for: audio meters (already
 > update at 30 FPS), progress bars, list scrolling, small spinners. Avoid:
 > full-screen animations, parallax, large moving images, video-like effects,
 > per-frame full redraws.
@@ -78,17 +81,17 @@ structured, and how to build a page.
 
 | Claim | Source |
 |---|---|
-| 720×1280 panel, 5-inch, MIPI DSI | `CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A` in `firmware/esp32/sdkconfig`; Waveshare ESP32-P4 Nano BSP |
-| Software rotation to landscape | `lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` + `.sw_rotate = true`, `display_manager.cpp` |
-| LVGL 9.5.0, RGB565 | `main/idf_component.yml` pins `lvgl/lvgl: >=9.4,<10`; `firmware/esp32/dependencies.lock` resolves **9.5.0**. `CONFIG_LV_COLOR_DEPTH=16` |
-| 20-line strip buffer, DMA, internal RAM | `.buffer_size = 720 * 20, .double_buffer = true, .buff_dma = true, .buff_spiram = false`, `display_manager.cpp` |
-| Header 64 px / rule 3 px / softkeys 96 px / 6 cards / content 1280×557 | `UI_HEADER_HEIGHT`, `UI_SHIFT_RULE_HEIGHT`, `UI_HOTKEY_HEIGHT`, `UI_CONTENT_HEIGHT` in `components/ui/styles/ui_theme.h`; `NUM_SOFTKEYS = 6` in `ui_softkey.h` |
+| 800×1280 panel, 8-inch, MIPI DSI | `CONFIG_BSP_LCD_TYPE_800_1280_8_INCH_A` in `firmware/esp32/sdkconfig`; Waveshare ESP32-P4 Nano BSP |
+| PPA rotation to landscape | `lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` + `.sw_rotate = true`, `CONFIG_LVGL_PORT_ENABLE_PPA=y`, `display_manager.cpp` |
+| LVGL 9.5.0, RGB888 | `main/idf_component.yml` pins `lvgl/lvgl: >=9.4,<10`; `firmware/esp32/dependencies.lock` resolves **9.5.0**. `CONFIG_LV_COLOR_DEPTH=24` |
+| Partial draw buffers and PPA scratch in PSRAM | `.buffer_size = BSP_LCD_H_RES * 20, .double_buffer = true, .buff_dma = false, .buff_spiram = true`, `display_manager.cpp` |
+| Header 64 px / rule 3 px / softkeys 96 px / 6 cards / content 1280×637 | `UI_HEADER_HEIGHT`, `UI_SHIFT_RULE_HEIGHT`, `UI_HOTKEY_HEIGHT`, `UI_CONTENT_HEIGHT` in `components/ui/styles/ui_theme.h`; `NUM_SOFTKEYS = 6` in `ui_softkey.h` |
 | Empty vs disabled softkey | `SoftkeyBar::setSoftkeys()` in `ui_softkey_bar.cpp` |
 | Fonts | `CONFIG_LV_FONT_MONTSERRAT_*` in `sdkconfig.defaults`; mono tables in `components/ui/fonts/` (regenerate with `scripts/gen_ui_fonts.sh`); role mapping in `ui_theme.h` |
 | Palette, four compile-time themes | `WX_RGB_*` in `components/ui/styles/themes/`, roles in `ui_theme.h`, selection in `components/ui/CMakeLists.txt` |
 | Widget set | `CONFIG_LV_USE_*` in `firmware/esp32/sdkconfig` |
 | 30 FPS cap | `vTaskDelay(pdMS_TO_TICKS(32))` in `main/ui_task.cpp` |
-| Encoder + touch + keypad | `InputDispatcher`, GT911 touch, TCA8418 keypad component. Note the encoder moves focus *within a page* (`UIPage::onInput`); there is no focus concept on the softkey bar, so a softkey is reached by touch or by a panel SOFT key, never by scrolling to it |
+| Encoder + touch + keypad | `InputDispatcher`, GT9271 touch via the GT911 driver, TCA8418 keypad component. Note the encoder moves focus *within a page* (`UIPage::onInput`); there is no focus concept on the softkey bar, so a softkey is reached by touch or by a panel SOFT key, never by scrolling to it |
 | Pages recreated on entry | `ui-architecture.md` "Known Limitations" #2 |
 | Browse pagination, 20/page | `file_browser.cpp` (`entries_per_page = 20`) |
 
@@ -101,16 +104,38 @@ explicit flat styles without inherited blurred shadows or transitions; remove
 inherited styles before setting geometry because coordinates are style-backed.
 The [UI responsiveness measurements](ui-latency-notes.md) quantify this cost.
 
-## Known discrepancy (do not design around it — it should be fixed)
+## Display bring-up and remaining limits
 
-The vendored BSP's `bsp_touch_new()` (`esp32_p4_nano.c`, in
-`managed_components/waveshare__esp32_p4_nano/`) configures the GT911 touch
-controller with `x_max = 720, y_max = 1280` — the panel's **native**
-orientation — while LVGL draws to the software-rotated 1280×720 landscape
-canvas (`LV_DISPLAY_ROTATION_90` in `display_manager.cpp`). Touch and
-display disagree about which axis is which. If touch positions feel offset,
-swapped, or compressed, this is the first suspect; verify by tapping the
-four corners. Tracked in `docs/roadmap.md`.
+The [8-DSI-TOUCH-A wiki](https://www.waveshare.com/wiki/8-DSI-TOUCH-A)
+identifies JD9365 and GT9271. The existing Waveshare BSP selects the 8-inch
+JD9365 driver, its vendor DPI timing preset and two DSI lanes at 1500 Mbps.
+It owns panel/touch initialization and I2C brightness; WaveX does not create
+another driver or bus. No dependency upgrade is needed.
+
+Two RGB888 DPI framebuffers reserve 6,144,000 bytes in PSRAM. The LVGL port
+owns two 48,000-byte partial draw buffers and one cache-aligned PPA rotation
+buffer, also in PSRAM. Its `buff_dma` option must be false for RGB888; this
+is an allocation restriction in the port, not a switch disabling the panel's
+DPI/DMA2D transfers. `sw_rotate` names the port path, but rotation executes
+on PPA in the pinned `esp_lvgl_port` 2.8.0~1.
+
+**These are not tear-free front/back buffers.** The port copies rotated
+partial regions into the active DPI framebuffer. The BSP disables rotation
+when tear avoidance is enabled; the port's direct/full modes cannot provide
+this rotated pipeline. `DisplayManager` rejects that incompatible build
+configuration. A rotation-aware buffer handoff remains follow-up work in
+[roadmap.md](roadmap.md#8-inch-display-bring-up).
+See the [pinned port documentation](https://components.espressif.com/components/espressif/esp_lvgl_port/versions/2.8.0~1/readme).
+
+The controller supplies native 800×1280 coordinates; LVGL rotates pointers
+to the landscape canvas. Corner taps and simultaneous controls still need
+panel verification. WaveX exposes five contacts; the pinned GT911 driver
+rejects reports containing more than five even though GT9271 hardware
+supports ten. Raising the configuration limit alone does not fix that.
+The BSP writes backlight register `0x96` at I2C address `0x45`, whereas the
+wiki says `0x86`. Retain the BSP behavior until brightness and blank/wake
+are verified on the actual panel. The screenshot transport deliberately
+continues to capture RGB565 independently of the RGB888 display.
 
 ## Iterating with Claude Design
 

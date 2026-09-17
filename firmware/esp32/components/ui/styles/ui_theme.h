@@ -125,19 +125,19 @@
 // ---------------------------------------------------------------------------
 // Chrome geometry
 //
-// The panel is 720x1280 rotated 90 degrees in software, so the UI draws to
-// 1280x720. Header, shift rule and softkey bar are fixed on every page; what
+// The panel is 800x1280 rotated 90 degrees by the PPA, so the UI draws to
+// 1280x800. Header, shift rule and softkey bar are fixed on every page; what
 // is left is the content area, and a page may not draw outside it.
 // ---------------------------------------------------------------------------
 #define UI_SCREEN_WIDTH 1280
-#define UI_SCREEN_HEIGHT 720
+#define UI_SCREEN_HEIGHT 800
 
 #define UI_HEADER_HEIGHT 64     // title, context, meter, CPU, SHIFT chip
 #define UI_SHIFT_RULE_HEIGHT 3  // under the header; shift-coloured when latched
 #define UI_HOTKEY_HEIGHT 96     // softkey bar, including its padding
 
 #define UI_CONTENT_TOP (UI_HEADER_HEIGHT + UI_SHIFT_RULE_HEIGHT)                  // 67
-#define UI_CONTENT_HEIGHT (UI_SCREEN_HEIGHT - UI_CONTENT_TOP - UI_HOTKEY_HEIGHT)  // 557
+#define UI_CONTENT_HEIGHT (UI_SCREEN_HEIGHT - UI_CONTENT_TOP - UI_HOTKEY_HEIGHT)  // 637
 #define UI_CONTENT_WIDTH UI_SCREEN_WIDTH
 
 // Softkey bar internals. Six equal cards, never fewer - an unavailable action

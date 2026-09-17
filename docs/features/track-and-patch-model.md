@@ -172,7 +172,7 @@ pan/balance and mute; future polyphony/Bank/Scene controls retain their roadmap 
 
 Every page acts on **one** selected Track (`ui/current_track.h`): Play sends notes on it, the Sample Manager assigns to it, the Instrument page edits it, the browser loads into it. Before this existed, four pages kept four private copies, which was the whole of the "which Track?" bench finding. Rules:
 
-- The Track selector shows **eight Tracks per page** (1–8, 9–16); paging, not a 16-wide strip, so the numbers stay legible on the 1280×720 panel.
+- The Track selector shows **eight Tracks per page** (1–8, 9–16); paging, not a 16-wide strip, so the numbers stay legible on the 1280×800 panel.
 - The selection is **displayed on every page** as a header chip — `T3 · Piano` — alongside the SHIFT chip, and **changed from anywhere** with one gesture (Shift + encoder, or Track −/+ softkeys on the pages that act on a Track: Play, Instrument, Sample). The Track page (§6) holds what does not fit in a chip: MIDI in, poly limit, program change, mixer strip, Load/Save. Decided 2026-09-04 (§9 item 4); the bench finding was precisely that no page said which Track it was acting on.
 
 ---

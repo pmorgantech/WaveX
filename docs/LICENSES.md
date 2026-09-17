@@ -43,10 +43,10 @@ LVGL includes several third-party libraries with their own licenses:
 - **TLSF Memory Allocator**: BSD 3-Clause License
 - **Printf Library**: MIT License
 
-### esp_lcd_touch_gt911 (current touch controller)
+### esp_lcd_touch_gt911 (driver for GT9271)
 - **Source**: Espressif Systems, ESP-IDF Component Manager (`espressif/esp_lcd_touch_gt911`)
 - **License**: Apache License 2.0
-- **Usage**: GT911 capacitive touch controller driver — the touch controller actually fitted; supersedes XPT2046 below
+- **Usage**: Goodix touch driver used for the GT9271 fitted to 8-DSI-TOUCH-A; supersedes XPT2046 below
 - **Vendored Path**: `firmware/esp32/managed_components/espressif__esp_lcd_touch_gt911/`
 - **License File**: `firmware/esp32/managed_components/espressif__esp_lcd_touch_gt911/license.txt`
 
@@ -72,7 +72,7 @@ LVGL includes several third-party libraries with their own licenses:
 ### Waveshare ESP32-P4-NANO BSP and panel drivers
 - **Source**: Waveshare, ESP-IDF Component Manager
 - **License**: Apache License 2.0
-- **Usage**: Board support package (`waveshare__esp32_p4_nano`) and MIPI-DSI panel drivers (`waveshare__esp_lcd_dsi`, `waveshare__esp_lcd_hx8394`, `waveshare__esp_lcd_ili9881c`, `waveshare__esp_lcd_jd9365_10_1`, `waveshare__esp_lcd_jd9365_8`)
+- **Usage**: Board support package (`waveshare__esp32_p4_nano`) and its bundled MIPI-DSI panel drivers; the selected 8-DSI-TOUCH-A driver is `waveshare__esp_lcd_jd9365_8`. Other BSP panel dependencies remain vendored but are not the selected hardware
 - **Vendored Path**: `firmware/esp32/managed_components/waveshare__*/`
 
 ### esp_codec_dev, i2c_bus, cmake_utilities
@@ -85,7 +85,7 @@ LVGL includes several third-party libraries with their own licenses:
 - **Source**: https://github.com/PaulStoffregen/XPT2046_Touchscreen.git
 - **License**: MIT License
 - **Copyright**: Copyright (c) 2015, Paul Stoffregen, paul@pjrc.com
-- **Status**: `.gitmodules` still declares this at `firmware/esp32/libs/xpt2046`, but the path does not exist on disk and nothing in the tree references it — the GT911 driver above is what's actually fitted and used. Retained here only until the dead `.gitmodules` entry is cleaned up.
+- **Status**: `.gitmodules` still declares this at `firmware/esp32/libs/xpt2046`, but the path does not exist on disk and nothing in the tree references it — the driver above serves the fitted GT9271. Retained here only until the dead `.gitmodules` entry is cleaned up.
 
 ## Daisy Backend Dependencies
 

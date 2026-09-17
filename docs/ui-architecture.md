@@ -19,8 +19,8 @@ palette and rendering limits live in
 
 | Owner | Responsibility |
 |---|---|
-| `DisplayManager` | Starts the BSP display, configures software rotation, exposes panel/display handles and services brightness/blanking |
-| BSP + `esp_lvgl_port` | Own the GT911 controller, LVGL tick and rendering task; do not initialize a second touch driver or tick |
+| `DisplayManager` | Starts the BSP display, configures PPA rotation, exposes panel/display handles and services brightness/blanking |
+| BSP + `esp_lvgl_port` | Own the GT9271 controller through the GT911 driver, LVGL tick and rendering task; do not initialize a second touch driver or tick |
 | `MultiTouchInput` + `multi_touch_port.cpp` | Adapt the BSP touch registration to five independent pointers, sampled together under the LVGL port lock |
 | `UINavigator` | Owns the page stack and shared header/content/softkey chrome |
 | `UITask` | Drains queued panel/encoder input and services deferred application updates |
@@ -353,7 +353,7 @@ private Instrument copies; MIDI Program Change recall remains Phase 2.5 work. No
 
 The final editor regression selection passed 17 two-board HIL tests, covering
 Key Map, Pad Map overrides, Track routing, Instrument/Sample loading, shared pool
-ownership and the sequencer grid. The 1280×720 Key Map capture was inspected on
+ownership and the sequencer grid. The historical pre-migration Key Map capture was inspected on
 2026-09-11 after adjusting control heights to separate values from their fill
 bars. The capture is local at logs/key-map-20260911.png (gitignored).
 
@@ -387,7 +387,7 @@ state and `SLOPE <0|1>` / `DRIVE <0-1000>` on the tab. The Filter tab row is
 six tiles wide; the three word-valued tiles use the smaller mono value font
 so "Band-pass" and "Ladder 2x" fit (`logs/filter-tab-20260914.png`).
 The frontend suite passes 274 tests, and the two-board LFO HIL passes the
-save/readback flow (11.70 seconds). The inspected 1280×720 capture is
+save/readback flow (11.70 seconds). The historical pre-migration capture is
 `logs/instrument-lfo-20260912.png`.
 
 

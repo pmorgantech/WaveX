@@ -50,7 +50,7 @@ Three things are missing, and they are what this document adds:
 
 `InputType` declares `TouchDown`, `TouchUp` and `TouchMove`
 (`ui/input_event.h:9-11`) and **nothing constructs any of them.** Touch does not
-pass through `InputDispatcher` at all: GT911 → `esp_lvgl_port` → LVGL widget
+pass through `InputDispatcher` at all: GT9271 → `esp_lvgl_port` → LVGL widget
 callbacks, directly. The only real producers of `InputEvent` are the TCA8418
 keypad (`tca8418_keypad.cpp:55`) and the encoder/pot poll in the UI task
 (`ui_task.cpp:221,255`).
@@ -92,7 +92,7 @@ makes malformed-packet fault injection possible.
 
 Register an additional `LV_INDEV_TYPE_POINTER` indev whose `read_cb` drains a
 small FreeRTOS queue filled by the harness console task. LVGL supports multiple
-indevs of one type; the real GT911 indev is not modified, wrapped or displaced,
+indevs of one type; the real touch indev is not modified, wrapped or displaced,
 so a release build is byte-identical to today's and a debug build has one extra
 indev that reports "not pressed" unless a test is driving it.
 
@@ -333,7 +333,7 @@ fact.
 ### What it cannot test — read this before trusting a green run
 
 - **The input drivers themselves.** Injection enters at
-  `InputDispatcher::post()` and at a second indev, so TCA8418 decode, GT911
+  `InputDispatcher::post()` and at a second indev, so TCA8418 decode, GT9271
   coordinate handling and debounce are all *upstream* of every test here. The
   roadmap's "Keypad and encoder after the E-KEY/E-ENC fixes" row still needs a
   finger. What the harness does cover is everything downstream — which is where

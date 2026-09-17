@@ -153,7 +153,7 @@ Load the musical arrangement with `scripts/bench_drum_chords.py` only when
 replacing the current session pattern and Track bindings is intended.
 
 Synthetic touch exercises LVGL input/events, the UI lock, UART/backend readback
-and real rendering/flush submission. It excludes GT911 sensing and physical
+and real rendering/flush submission. It excludes touch-controller sensing and physical
 finger timing. `REFR_READY` is not a panel scanout/photodiode timestamp, nor an
 audio onset measurement. Physical touch and visual confirmation remain the
 user-facing follow-up; do not claim every UI page now has these latencies.
