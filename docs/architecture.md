@@ -72,7 +72,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Frontend MCU | ESP32-P4 (Waveshare ESP32-P4-WIFI6, 16 MB flash, PSRAM hex-mode @200 MHz) | — | working |
 | Display | 5" 1280×720, HX8394 controller | MIPI-DSI 2-lane | working |
 | Touch | GT911 capacitive | I2C0 (shared) | working |
-| Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT (INT not yet used) | driver present; four keys mapped — full panel key model is Phase 2.P (`features/panel-controls.md`) |
+| Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
 | LEDs | 2× TLC5947 chained | SPI2 (one owner task) | planned (2.P.3); no driver yet |
 | MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |

@@ -80,7 +80,7 @@ idf_component_register(
         esp_lvgl_port
         esp_lcd_touch_gt911
         driver
-        esp_tca8418
+        esp_driver_i2c
         esp_driver_gpio
         esp_driver_spi
         esp32_p4_nano

@@ -3,221 +3,219 @@
 #include "bsp/esp32_p4_nano.h"
 #include "config/hardware_config.h"
 #include "driver/gpio.h"
-#include "esp_check.h"
+#include "driver/i2c_master.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "pin_config.h"
 #include "ui/input_dispatcher.h"
-#include "ui/input_event.h"
+#include "ui/panel/keypad_fifo.h"
 #include "ui/panel_key.h"
 
 #include <atomic>
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-#include "esp_tca8418.hxx"
-#endif
 
 namespace wavex_ui {
+namespace {
+constexpr const char* TAG = "TCA8418";
+std::atomic<TaskHandle_t> s_task{nullptr};
+std::atomic<bool> s_running{false}, s_interrupt{false};
+i2c_master_dev_handle_t s_device = nullptr;
+gpio_num_t s_int_gpio = GPIO_NUM_NC;
+bool s_handler = false;
+// The endpoint lock serializes ISR notification with endpoint withdrawal.
+// The task is never deleted until all possible notifiers have released it.
+DRAM_ATTR portMUX_TYPE s_irq_lock = portMUX_INITIALIZER_UNLOCKED;
+DRAM_ATTR TaskHandle_t s_irq_task = nullptr;
+std::atomic<uint8_t> s_last_keycode{0};
+std::atomic<bool> s_last_pressed{false};
+std::atomic<uint32_t> s_events{0}, s_unmapped{0}, s_errors{0}, s_overflows{0};
 
-static const char* TAG = "TCA8418";
-static std::atomic<TaskHandle_t> s_task{nullptr};
-// Shutdown handshake: the task talks I2C on a bus shared with the touch
-// controller, so killing it mid-transaction would leak the bus mutex and take
-// touch down with it permanently.
-static std::atomic<bool> s_running{false};
-static gpio_num_t s_int_gpio = GPIO_NUM_NC;
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-static TCA8418* s_dev = nullptr;
-#endif
-
-// What the Diagnostics ▸ Panel tab shows: the last raw keycode the matrix
-// reported, before the WAVEX_KEYCODE_* map, so an unmapped key still says
-// which row and column it is on - which is how the map gets verified.
-static std::atomic<uint8_t> s_last_keycode{0};
-static std::atomic<bool> s_last_pressed{false};
-static std::atomic<uint32_t> s_events{0};
-static std::atomic<uint32_t> s_unmapped{0};
-
-static void post_key(bool pressed, uint8_t keycode) {
-    if (pressed) {
-        s_last_keycode.store(keycode, std::memory_order_relaxed);
-        s_events.fetch_add(1, std::memory_order_relaxed);
+struct Registers {
+    bool read(uint8_t reg, uint8_t& value) {
+        return i2c_master_transmit_receive(s_device, &reg, 1, &value, 1, 20) == ESP_OK;
     }
-    s_last_pressed.store(pressed, std::memory_order_relaxed);
+    bool write(uint8_t reg, uint8_t value) {
+        const uint8_t bytes[]{reg, value};
+        return i2c_master_transmit(s_device, bytes, sizeof(bytes), 20) == ESP_OK;
+    }
+};
+KeypadFifo s_fifo;
+
+bool post_key(bool pressed, uint8_t keycode) {
     const PanelKey key = panelKeyFromKeycode(keycode);
-    if (key == PanelKey::None) {
-        // Not dropped silently: the Panel tab counts these, and the keycode
-        // above says where the key is.
-        if (pressed) {
-            s_unmapped.fetch_add(1, std::memory_order_relaxed);
-            ESP_LOGW(TAG,
-                     "Unmapped keycode %u (row %u col %u)",
-                     keycode,
-                     (keycode - 1) / 10,
-                     (keycode - 1) % 10);
-        }
-        return;
+    if (key != PanelKey::None) {
+        InputEvent event{};
+        event.type = pressed ? InputType::KeyPress : InputType::KeyRelease;
+        event.source_id = static_cast<uint8_t>(key);
+        event.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+        if (!InputDispatcher::instance().post(event))
+            return false;
+    } else if (pressed) {
+        s_unmapped.fetch_add(1, std::memory_order_relaxed);
     }
-    InputEvent evt{};
-    evt.type = pressed ? InputType::KeyPress : InputType::KeyRelease;
-    evt.source_id = static_cast<uint8_t>(key);
-    evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    InputDispatcher::instance().post(evt);
+    if (pressed)
+        s_events.fetch_add(1, std::memory_order_relaxed);
+    s_last_keycode.store(keycode, std::memory_order_relaxed);
+    s_last_pressed.store(pressed, std::memory_order_relaxed);
+    return true;
 }
 
-// Poll period. The controller debounces in hardware and buffers up to ten
-// events, so this only bounds latency, not whether a key is seen at all.
-static constexpr uint32_t kPollIntervalMs = 10;
+void IRAM_ATTR keypad_interrupt(void*) {
+    BaseType_t wake = pdFALSE;
+    portENTER_CRITICAL_ISR(&s_irq_lock);
+    if (s_irq_task)
+        vTaskNotifyGiveFromISR(s_irq_task, &wake);
+    portEXIT_CRITICAL_ISR(&s_irq_lock);
+    if (wake)
+        portYIELD_FROM_ISR();
+}
 
-// The FIFO is ten deep; the cap only stops a wedged controller reporting a
-// non-zero count forever from spinning this task.
-static constexpr int kMaxEventsPerPass = 16;
-
-static void keypad_task(void* arg) {
-    (void)arg;
-    ESP_LOGI(TAG, "Keypad task started");
-
-    while (s_running) {
-        // The INT line is deliberately not consulted.
-        //
-        // Nothing configures the controller to drive it: the driver's hw_init()
-        // sets the GPIO/keypad/debounce registers but never writes CFG, so the
-        // key-event interrupt enable stays at its reset default. Gating reads on
-        // INT therefore meant either no key was ever read, or - if INT did
-        // assert - a 100% busy-spin, because INT latches until INT_STAT is
-        // written back and the asserted branch had no delay. At priority 5
-        // pinned to core 1 that starves the UI task on the same core.
-        //
-        // Polling the event count is the authority instead, which works
-        // whatever CFG holds. Clearing INT_STAT is left undone on purpose: the
-        // only public way to do it is flush(), which also discards queued
-        // events, so calling it would open a window where a key pressed between
-        // our last read and the clear is silently dropped. A latched INT line
-        // nobody reads is harmless.
-        //
-        // An interrupt-driven path is still the better design (guide §2/§3) but
-        // needs CFG configured and confirmed on the bench; see roadmap
-        // § Outstanding hardware verification.
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-        int drained = 0;
-        while (s_dev && s_dev->get_event_count() > 0 && drained < kMaxEventsPerPass) {
-            const uint8_t event = s_dev->get_key();
-            if (event == 0) {
-                break;  // count and FIFO disagree; nothing to decode
-            }
-            drained++;
-
-            // KEY_EVENT_A packs the transition in bit 7 (1 = press) and the
-            // key code in bits 0-6. Masking it is not optional: reading the
-            // register raw made a press of key 1 arrive as 0x81, which fell
-            // through the keycode mapping and was dropped, while its release
-            // arrived as 0x01 and was posted as a *press*. Every button
-            // therefore fired on release, and chords were unrepresentable.
-            const bool pressed = (event & 0x80) != 0;
-            const uint8_t keycode = static_cast<uint8_t>(event & 0x7F);
-            post_key(pressed, keycode);
-        }
-#endif
-        vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
+void remove_interrupt() {
+    portENTER_CRITICAL(&s_irq_lock);
+    s_irq_task = nullptr;
+    portEXIT_CRITICAL(&s_irq_lock);
+    if (s_handler) {
+        gpio_intr_disable(s_int_gpio);
+        gpio_isr_handler_remove(s_int_gpio);
+        s_handler = false;
     }
+    s_interrupt.store(false);
+}
 
-    s_task = nullptr;
+void keypad_task(void*) {
+    // Creator publishes the endpoint and installs INT before this wakeup.
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    Registers io;
+    while (s_running.load()) {
+        const auto result = s_fifo.service(io, post_key);
+        s_errors.store(s_fifo.errors(), std::memory_order_relaxed);
+        s_overflows.store(s_fifo.overflows(), std::memory_order_relaxed);
+        if (result != KeypadFifo::Result::Idle) {
+            // A wedged/held-low device and a full UI queue always yield.
+            vTaskDelay(pdMS_TO_TICKS(result == KeypadFifo::Result::IoError ? 100 : 10));
+        } else {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(s_interrupt.load() ? 100 : 10));
+        }
+    }
+    remove_interrupt();
+    while (!s_fifo.stop(post_key))
+        vTaskDelay(pdMS_TO_TICKS(10));
+    io.write(0x01, 0);
+    i2c_master_bus_rm_device(s_device);
+    s_device = nullptr;
+    s_task.store(nullptr);  // no device/IRQ access after publishing completion
     vTaskDelete(nullptr);
 }
+}  // namespace
 
 void tca8418_keypad_last(tca8418_keypad_stats_t* out) {
-    if (!out) {
+    if (!out)
         return;
-    }
-    out->keycode = s_last_keycode.load(std::memory_order_relaxed);
-    out->pressed = s_last_pressed.load(std::memory_order_relaxed);
-    out->events = s_events.load(std::memory_order_relaxed);
-    out->unmapped = s_unmapped.load(std::memory_order_relaxed);
+    out->keycode = s_last_keycode.load();
+    out->pressed = s_last_pressed.load();
+    out->events = s_events.load();
+    out->unmapped = s_unmapped.load();
+    out->interrupt = s_interrupt.load();
+    out->errors = s_errors.load();
+    out->overflows = s_overflows.load();
 }
 
 esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
-    if (s_task)
-        return ESP_OK;
-
-    // Use BSP I2C bus (shared with touch per pin_config)
-    i2c_master_bus_handle_t i2c = bsp_i2c_get_handle();
-    if (i2c == nullptr) {
-        ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "Failed to init BSP I2C");
-        i2c = bsp_i2c_get_handle();
-    }
-
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-    s_dev = new TCA8418(i2c, GPIO_NUM_NC, i2c_addr);
-    if (!s_dev) {
-        ESP_LOGE(TAG, "Failed to create TCA8418 instance");
-        return ESP_FAIL;
-    }
-    if (!s_dev->hw_init(WAVEX_TCA8418_ROWS, WAVEX_TCA8418_COLUMNS)) {
-        ESP_LOGE(TAG, "TCA8418 hardware initialization failed");
-        delete s_dev;
-        s_dev = nullptr;
-        return ESP_FAIL;
-    }
-#else
+#if !WAVEX_ESP_BUTTON_MATRIX_ENABLED
+    (void)int_gpio;
     (void)i2c_addr;
-#endif
-
-    // Configure the INT GPIO if provided (from the pin_config macro in the
-    // caller). The task does not read it - see keypad_task() for why - but
-    // leaving the pin floating on a controller that may drive it low is worse
-    // than parking it as a pulled-up input, and an interrupt-driven path will
-    // want it configured exactly like this.
-    if (int_gpio >= 0) {
-        s_int_gpio = (gpio_num_t)int_gpio;
-        gpio_config_t io = {};
-        io.pin_bit_mask = 1ULL << s_int_gpio;
-        io.mode = GPIO_MODE_INPUT;
-        io.pull_up_en = GPIO_PULLUP_ENABLE;
-        io.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io.intr_type = GPIO_INTR_DISABLE;
-        ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "gpio_config failed");
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    if (s_task.load())
+        return ESP_OK;
+    if (int_gpio >= 0 && !GPIO_IS_VALID_GPIO(int_gpio))
+        return ESP_ERR_INVALID_ARG;
+    auto bus = bsp_i2c_get_handle();
+    if (!bus) {
+        const auto result = bsp_i2c_init();
+        if (result != ESP_OK)
+            return result;
+        bus = bsp_i2c_get_handle();
     }
-
-    s_running = true;
-    TaskHandle_t handle = nullptr;
-    BaseType_t ok = xTaskCreatePinnedToCore(keypad_task,
-                                            "tca8418_task",
-                                            WAVEX_TCA8418_TASK_STACK_SIZE,
-                                            nullptr,
-                                            WAVEX_TCA8418_TASK_PRIORITY,
-                                            &handle,
-                                            1);
-    s_task = handle;
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create keypad task");
-        s_running = false;
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-        delete s_dev;
-        s_dev = nullptr;
-#endif
+    esp_err_t result = i2c_master_probe(bus, i2c_addr, 20);
+    if (result != ESP_OK)
+        return result;  // missing keypad never takes down touch
+    i2c_device_config_t config{};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = i2c_addr;
+    config.scl_speed_hz = WAVEX_TCA8418_I2C_CLOCK_SPEED;
+    result = i2c_master_bus_add_device(bus, &config, &s_device);
+    if (result != ESP_OK)
+        return result;
+    s_fifo = {};
+    Registers io;
+    if (!s_fifo.configure(io, WAVEX_TCA8418_ROWS, WAVEX_TCA8418_COLUMNS)) {
+        i2c_master_bus_rm_device(s_device);
+        s_device = nullptr;
         return ESP_FAIL;
     }
+    s_int_gpio = static_cast<gpio_num_t>(int_gpio);
+    s_running.store(true);
+    TaskHandle_t task = nullptr;
+    if (xTaskCreatePinnedToCore(keypad_task,
+                                "tca8418_task",
+                                WAVEX_TCA8418_TASK_STACK_SIZE,
+                                nullptr,
+                                WAVEX_TCA8418_TASK_PRIORITY,
+                                &task,
+                                1) != pdPASS) {
+        s_running.store(false);
+        io.write(0x01, 0);
+        i2c_master_bus_rm_device(s_device);
+        s_device = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_task.store(task);
+    if (int_gpio >= 0 && WAVEX_TCA8418_INTERRUPT_ENABLED) {
+        gpio_config_t pins{};
+        pins.pin_bit_mask = 1ULL << int_gpio;
+        pins.mode = GPIO_MODE_INPUT;
+        pins.pull_up_en = GPIO_PULLUP_ENABLE;
+        pins.intr_type = GPIO_INTR_DISABLE;
+        result = gpio_config(&pins);
+        if (result == ESP_OK) {
+            result = gpio_install_isr_service(0);
+            if (result == ESP_ERR_INVALID_STATE)
+                result = ESP_OK;  // BSP owns shared service
+        }
+        if (result == ESP_OK) {
+            portENTER_CRITICAL(&s_irq_lock);
+            s_irq_task = task;
+            portEXIT_CRITICAL(&s_irq_lock);
+            result = gpio_isr_handler_add(s_int_gpio, keypad_interrupt, nullptr);
+            s_handler = result == ESP_OK;
+            if (s_handler)
+                result = gpio_set_intr_type(s_int_gpio, GPIO_INTR_NEGEDGE);
+            if (result == ESP_OK)
+                result = gpio_intr_enable(s_int_gpio);
+        }
+        if (result == ESP_OK)
+            s_interrupt.store(true);
+        else {
+            remove_interrupt();
+            ESP_LOGW(TAG, "INT unavailable; using polling");
+        }
+    }
+    xTaskNotifyGive(task); // also drains FIFO when INT was already low at startup
+    ESP_LOGI(TAG, "Keypad started: %s", s_interrupt.load() ? "INT + fallback poll" : "polling");
     return ESP_OK;
+#endif
 }
 
 esp_err_t tca8418_keypad_stop() {
-    s_running = false;
-    // Let the task finish any I2C transaction and self-delete before the
-    // device object goes away underneath it.
-    for (int waited_ms = 0; s_task && waited_ms < 300; waited_ms += 10) {
+    s_running.store(false);
+    // Same endpoint lock as ISR: a task completing stop cannot be notified
+    // after deletion. Startup/stop API calls are serialized by their UI owner.
+    portENTER_CRITICAL(&s_irq_lock);
+    if (s_irq_task)
+        xTaskNotifyGive(s_irq_task);
+    portEXIT_CRITICAL(&s_irq_lock);
+    for (unsigned waited = 0; s_task.load() && waited < 500; waited += 10)
         vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    if (s_task) {
-        ESP_LOGE(TAG, "keypad task did not exit; leaving the device allocated");
-        return ESP_ERR_TIMEOUT;
-    }
-#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-    if (s_dev) {
-        delete s_dev;
-        s_dev = nullptr;
-    }
-#endif
-    s_int_gpio = GPIO_NUM_NC;
-    return ESP_OK;
+    return s_task.load() ? ESP_ERR_TIMEOUT : ESP_OK;
 }
-
 }  // namespace wavex_ui

@@ -234,10 +234,14 @@ The user authorized stage 4 touchscreen editors to proceed on 2026-09-11:
 general key/velocity zones, Instrument Browser and Track page. This does not
 close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
-physical integration, LED/pot drivers and DIN MIDI remain deferred.
+physical integration, LED/pot drivers and DIN MIDI remain unverified or pending.
+The user authorized keypad/LED firmware on 2026-09-17 with a temporary TLC5947
+backend and a replaceable interface for a later PCA9956B.
 Stages, one commit each:
 
-2. TCA8418 interrupt-driven keypad task (fallback poll retained).
+2. TCA8418 interrupt-driven keypad task implemented, with bounded FIFO drains,
+   polling fallback and held-key recovery. Host tests pass; physical wiring,
+   shared-touch behavior and latency remain open in HV-011.
 3. `panel_task` owning SPI2: TLC5947 chain, LED policy, `LEDS` in `STATE`;
    absorbs `pcnt_task`.
 4. MCP3008 + endless-pot decoder (host-tested), calibration store, the

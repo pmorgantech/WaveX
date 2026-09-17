@@ -840,6 +840,9 @@
 #endif
 
 // TCA8418 Button Matrix Configuration
+#ifndef WAVEX_TCA8418_INTERRUPT_ENABLED
+#define WAVEX_TCA8418_INTERRUPT_ENABLED 1
+#endif
 #if WAVEX_ESP_BUTTON_MATRIX_ENABLED
 // I2C configuration
 // I2C address of the keypad controller. The bus itself belongs to the BSP

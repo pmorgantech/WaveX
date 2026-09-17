@@ -1201,7 +1201,13 @@ void UIDiagnosticsPage::refreshPanelTab() {
     }
 
     snprintf(v, sizeof(v), "%u", static_cast<unsigned>(disp.droppedEvents()));
-    setCard(panel_cards[6], v, "", "input queue full", -1);
+    snprintf(sub,
+             sizeof(sub),
+             "%s  I2C %lu  FIFO %lu",
+             k.interrupt ? "INT" : "POLL",
+             static_cast<unsigned long>(k.errors),
+             static_cast<unsigned long>(k.overflows));
+    setCard(panel_cards[6], v, "", sub, -1);
 }
 
 void UIDiagnosticsPage::refreshEsp32Tab() {

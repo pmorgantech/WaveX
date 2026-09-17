@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Interrupt-driven TCA8418 keypad processing with polling fallback, bounded
+  FIFO draining, retained events under queue pressure and held-key recovery
+  after overflow/I2C errors. Missing keypad hardware no longer aborts through
+  the managed wrapper. Diagnostics exposes interrupt mode and fault counts;
+  physical verification remains open in HV-011.
+
 - Waveform playback line in Browser, Sample Edit and Record: source positions
   follow the newest matching RAM voice or streamed audition, including rate
   conversion and loop wraps. Zoom clips the line, stale replies expire, and

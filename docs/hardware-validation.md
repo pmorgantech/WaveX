@@ -20,6 +20,7 @@ this document owns the runnable checks and their validation status.
 - [HV-008 — Project Pattern management](#hv-008--project-pattern-management)
 - [HV-009 — Song arrangement and playback](#hv-009--song-arrangement-and-playback)
 - [HV-010 — Waveform playback head](#hv-010--waveform-playback-head)
+- [HV-011 — Keypad interrupt and recovery](#hv-011--keypad-interrupt-and-recovery)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -71,6 +72,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-008 | Project Pattern slots | Pending | Stopped workflow, panel, reboot and callback checks |
 | HV-009 | Song arrangement and playback | Pending | Host tests; audio timing, panel, MIDI and DWT unrun |
 | HV-010 | Waveform playback head | Pending | Host/render checks; tracking, UART, DWT and soak unrun |
+| HV-011 | Keypad interrupt and recovery | Blocked | Firmware/host checks; physical matrix and INT wiring needed |
 
 ## HV-001 — SD card formatting
 
@@ -434,3 +436,30 @@ feedback, not a sample-accurate audio/visual synchronization promise.
 **Blockers:** Physical boards and measurements unavailable in the host run.
 Reverse playback and Track/Zone-specific views are not implemented; add their
 checks when those features reach their own gate.
+
+
+## HV-011 — Keypad interrupt and recovery
+
+**Status:** Blocked on physical wiring; no bench results recorded.
+**Design / gate:** [Panel controls, stage 2](features/panel-controls.md#keypad-int-implementation-stage-2-2026-09-17),
+roadmap 2.P. Record paired firmware identities and wiring revision when running.
+**Setup:** TCA8418 matrix and INT wired according to the canonical config headers,
+shared touch bus, logic analyzer, serial diagnostics, and a playable test kit.
+
+- [ ] Verify every mapped key and release in Diagnostics → Panel, including
+  row/column, Shift, softkeys, transport and pads. Record actual geometry.
+- [ ] Scope INT against FIFO service/UI dispatch; record latency under idle,
+  busy UI and UART traffic. Roll ten transitions/chords; verify ordering,
+  releases, no missing notes and no stuck pads. Compare with INT disabled.
+- [ ] Disconnect INT only: safety polling still receives keys. Hold INT low:
+  no task spin or touch starvation. Reconnect without false presses.
+- [ ] Induce FIFO overflow and queue pressure. The diagnostic counters must
+  reflect loss; accepted held keys release, and new normal input recovers.
+- [ ] Disconnect the keypad I2C device during held input. Touch and audio must
+  continue; no reset/abort, stuck notes or leaked bus ownership. Reconnect and
+  verify recovery. Test orderly stop/start and missing-device boot as well.
+
+**Pass:** Correct mapping and transitions, bounded recovery, responsive shared
+touch, measured latency and zero audio underruns under the test workload.
+Host tests cover register setup, FIFO ordering/ACK race, backpressure, overflow,
+I2C failure and bounded draining; they do not establish physical correctness.

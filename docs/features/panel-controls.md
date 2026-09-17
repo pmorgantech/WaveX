@@ -1,7 +1,7 @@
 # Panel Controls — Buttons, LEDs, Endless Pots, and MIDI I/O
 
-**Status**: Design, 2026-09-05. Nothing below is built except where §1 says
-so. Pin numbers live only in `firmware/shared/config/pin_config.h`; feature
+**Status**: Design with stages 0–2 implemented; keypad INT added 2026-09-17.
+Physical panel validation remains open. Pin numbers live only in `firmware/shared/config/pin_config.h`; feature
 flags and table sizes only in `hardware_config.h`. This document names the
 functions those pins carry and the rules that produced the allocation — never
 the numbers.
@@ -23,7 +23,7 @@ references are the audit trail; re-verify before trusting):
 |---|---|
 | Touch (GT911) | The only `lv_indev` fed by hardware. Bus is the BSP's I2C (`bsp_i2c_get_handle()`), shared with the keypad. |
 | Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled at 2 ms (`main/pcnt_task.cpp`). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1 counts negative on clockwise as wired; direction is now one per-encoder setting in `hardware_config.h` (`WAVEX_*_DIRECTION`) applied in the PCNT task, and the three pages that had compensated were reverted to the shared `steps()` contract (2026-09-05). No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
-| Keypad (TCA8418) | Driver present and started (`components/ui/src/tca8418_keypad.cpp`), polled at 10 ms, INT pin configured but not used. **Only four keycodes are mapped** (Select, Back, EncoderClick, Shift); every other key is dropped. Matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`) has never been verified against the wiring. |
+| Keypad (TCA8418) | INT wakes a bounded FIFO task; 100 ms safety poll, 10 ms fallback without INT. Logical key map and diagnostics exist. Geometry and wiring remain unverified; see HV-011. |
 | Softkeys | Six on-screen buttons, touch only. `SoftkeyBar::focusNext()` / `pressFocused()` exist with no callers — the documented "encoder scrolls softkeys" interaction is not in the binary. |
 | Shift | Latched-and-sticky global modifier in `InputDispatcher::processAll()` with a header chip. Works, driven by keycode 4 today. |
 | LEDs (TLC5947), pot ADC (MCP3008) | **No driver, no SPI2 bus init, nothing.** Only config constants. |
@@ -40,7 +40,7 @@ LED namespace, and (c) the page contract for pots — not a UI rewrite.
 | Part | Verdict | Why |
 |---|---|---|
 | **TCA8418** keypad controller (I2C) | **Keep.** | Up to 80 keys on two wires plus INT, hardware debounce, 10-event FIFO; already on the touch I2C bus and already driven. Every panel key, both encoder push switches and the 16 Phase-2 pads fit in one part with rows to spare. Two caveats: the vendored driver hard-codes 100 kHz for its device (fine — events are tiny), and it cannot do velocity. Pads are on/off switches in this design; velocity comes from touch position or a fixed level, as required by the panel's switch-only hardware. |
-| **TLC5947** 24-ch 12-bit constant-current LED driver | **Keep, two chained (48 ch).** | Sinks up to 30 mA per channel with one IREF resistor, 12-bit PWM so dim states read as dim, chainable, three signals beyond the shared SPI clock/data. It has no chip select — it is a shift register — which is the one rule the SPI2 driver has to respect (§3.3). If per-pad **RGB** is ever wanted, 16 pads alone need 48 channels; switch to an I2C matrix driver (IS31FL37xx class) then rather than chaining four TLC5947s. Not a v1 concern. |
+| **TLC5947** 24-ch 12-bit constant-current LED driver | **Temporary backend, two chained (48 ch).** | User decision 2026-09-17: use TLC5947 for bring-up, then replace it with PCA9956B. Keep policy and logical brightness independent of chip registers and bus. It has no chip select — it is a shift register — which is the one rule the SPI2 driver has to respect (§3.3). If per-pad **RGB** is ever wanted, 16 pads alone need 48 channels; switch to an I2C matrix driver (IS31FL37xx class) then rather than chaining four TLC5947s. Not a v1 concern. |
 | **MCP3008** 8-ch 10-bit SPI ADC | **Keep.** | Eight channels is exactly four endless pots. 10 bits over a wiper's ~180° linear span is ~0.2°/count before noise, more than the UI can use. If finer control is ever wanted the **MCP3208** is the same footprint and protocol with 12 bits — a one-constant change (`WAVEX_POT_ADC_RESOLUTION`). The chip's own on-board ADC was considered and rejected: the P4's ADC-capable header pins are all spoken for (I2C, inter-MCU UART, the SPI-slave reserve), and it would cost eight GPIO where the MCP3008 costs four. |
 | **PEC11R** detented quadrature encoders (x2, PCNT) | **Keep both** as navigation encoders. | Already working through the hardware pulse counter, glitch-filtered, no CPU cost. Detents suit list navigation and value stepping; the push switch gives Select. The endless pots are a different tool (§2.1). |
 | **CD74HC4067** analog mux | **Dropped** (removed from `hardware_config.h` 2026-09-05). | Predated the MCP3008; its plan used the chip's single ADC through a mux on address pins that are not on this board's header. |
@@ -184,8 +184,7 @@ panel_task (new, prio 5, 2 ms)        keypad_task (existing → INT-driven)
   and it is the **sole SPI2 user**. It never touches LVGL.
 - The keypad task switches to the INT line (the TCA8418 `CFG` register's
   `KE_IEN` bit is written, INT falling edge → task notification), keeping a
-  slow poll as a safety net. Latency drops from ≤10 ms to sub-millisecond,
-  which matters once pads and transport keys exist.
+  slow poll as a safety net. Physical latency remains unmeasured in HV-011; no sub-millisecond claim is made.
 - The UI task owns all *meaning*: which key does what, what the LEDs show.
   It publishes the LED frame into a double buffer; `panel_task` flushes it.
   The UI task never blocks on SPI.
@@ -288,7 +287,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 |---|---|---|---|
 | 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; per-encoder direction flags. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
 | 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. The dead `focusNext/pressFocused` deleted. *Done 2026-09-05.* | HIL: jumps, softkeys via key, Shift row (`test_panel_keys.py`) | keycode → key on the Diagnostics ▸ Panel tab |
-| 2 | **Keypad INT** — `CFG.KE_IEN`, ISR → notification, fallback poll. | — | latency, no missed keys under a 10-key roll |
+| 2 | **Keypad INT** — implemented 2026-09-17: CFG, ISR notification, fallback, error recovery. | FIFO/configuration/race/backpressure tests | HV-011: latency, key rolls, shared-bus recovery |
 | 3 | **`panel_task` + SPI2 + TLC5947** — absorb `pcnt_task`; LED frame, BLANK, `PanelLeds`, LED policy §4.5, `LEDS` in `STATE`. | HIL: LED state follows navigation | walk test, dark at power-on, no flicker with pot reads |
 | 4 | **MCP3008 + endless pots** — decoder (host tests), calibration store, Settings → Calibrate flow, `EncoderBinding` page contract, strip widget, Shift = fine. First consumers: Instrument page (Filter/Amp), Play page live strip. | decoder tests; HIL `POT n` | feel, drift, noise floor; measure the strip's cost on the 30 FPS budget |
 | 5 | **MIDI** — DIN on, TX ring, USB out, latency measured (closes the roadmap's "MIDI latency" row). | — | DIN in → sound, USB in → sound, both < 5 ms |
@@ -333,3 +332,31 @@ Recorded in `roadmap.md` § Outstanding hardware verification:
   bench (roadmap "MIDI latency" row).
 - Endless-pot part and its wiper waveform (triangle vs sinusoid) — the
   decoder is written for triangle; verify on a scope before calibrating.
+
+
+## Keypad INT implementation (stage 2, 2026-09-17)
+
+`KeypadFifo` owns FIFO decoding and accepted-key state; the target adapter owns
+one BSP I2C device and its task/interrupt lifetime. The old managed wrapper has
+no non-destructive interrupt ACK or error-return API and aborts on bus errors;
+the adapter therefore uses ESP-IDF's existing I2C driver directly. No new
+production dependency is introduced.
+
+The GPIO ISR only notifies the keypad task. Its endpoint is withdrawn under an
+ISR-safe lock before task deletion; the task removes only its own handler,
+never the BSP's shared ISR service. The handler and endpoint are in internal
+IRAM/DRAM because the BSP may already have installed an IRAM interrupt service.
+The task remains priority/stack-configured, pinned to core 1, and performs all
+I2C with bounded transaction timeouts. It handles at most 16 FIFO events per
+pass; busy/error paths yield. Missing hardware returns an initialization error
+without aborting or removing the shared touch bus.
+
+FIFO reads precede write-one-to-clear ACK, followed by a count recheck for an
+event racing the ACK. A full input queue retains the undelivered event. Overflow
+or bus failure releases accepted held keys and discards ambiguous FIFO history;
+no fabricated new presses are emitted. Overflow mode and its interrupt enable
+are both configured per the [TI erratum](https://www.ti.com/lit/ds/symlink/tca8418.pdf).
+Shutdown retries outstanding releases before freeing the device, returning a
+timeout if it cannot finish safely. Diagnostics → Panel shows INT/POLL, I2C
+errors and overflow observations. [HV-011](../hardware-validation.md#hv-011--keypad-interrupt-and-recovery)
+owns the unrun electrical, latency and shared-touch checks.
