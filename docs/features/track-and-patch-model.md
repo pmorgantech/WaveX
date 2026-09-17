@@ -425,16 +425,19 @@ the oldest note, and can steal two mono notes to admit one stereo note. Two
 oscillators share one voice's mono/stereo reservation; a silent oscillator
 still reserves capacity because live level edits can make it audible.
 Mono changes affect new notes, and never expand a held voice's reservation.
-The following per-Track polyphony policy remains a target beyond this global
-channel allocator:
+The user requested saved Instrument/Kit allocation defaults on 2026-09-17:
+Mono, 1–8-note limits and own-versus-global stealing. The newer
+[allocation proposal](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
+owns the semantics and supersedes this section's earlier Track-only algorithm.
+Tracks may override those defaults without changing the saved sound.
 
-Allocation policy, one shared pool (per-track reservations waste voices on a small machine):
-
-1. A free voice, if any.
-2. Else, if the requesting track is at its `poly_limit`, steal **its own** oldest voice (a mono bass track retriggers itself; a 4-voice pad track cycles its own chord). This is how a drum track never cuts a pad and vice versa.
-3. Else steal globally: a voice in its release tail first, then the oldest voice on the **lowest-priority** track, then the oldest overall. (Today: release-tail first, then oldest — `FindVoiceToSteal()`; this adds the two track-aware steps in front of it.)
-
-Choke groups stay per-Instrument (drum mode). All of this is `VoiceManager` logic, host-testable, no protocol change beyond `MSG_TRACK_OP`.
+Keep one shared physical pool. Enforce local limits before using a free slot,
+then plan whole-note/layer-group victims within the permitted steal scope.
+Own-only behavior does not reserve capacity or protect a sound from incoming
+steals. Choke groups remain Track-local. Stored Track limit/priority fields and
+Instrument poly mode are preparation, not implemented admission behavior;
+Instrument/Kit persistence and the centralized wire contract also need explicit
+updates and compatibility tests before UI/engine implementation.
 
 ---
 

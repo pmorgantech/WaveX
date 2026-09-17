@@ -4,7 +4,8 @@
 host/compile verified, with ten focused two-board checks passing. Listening,
 physical controls and the complete soak gate remain open. Scene, session
 persistence, effects and drift retain their target/proposal status.
-Updated 2026-09-16.
+Updated 2026-09-17. Instrument allocation hints below are a requested proposal,
+not implemented allocator behavior.
 This document consolidates the terminology and menu discussion so the remaining
 work can be scheduled. It distinguishes current behavior, requested changes and
 proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
@@ -16,6 +17,7 @@ proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
 - [Scenes and Songs](#scenes-and-songs)
 - [Track and Instrument mixing](#track-and-instrument-mixing)
 - [Stereo, Mono and channel capacity](#stereo-mono-and-channel-capacity)
+- [Instrument and Kit allocation policy](#instrument-and-kit-allocation-policy)
 - [Oscillator drift backlog](#oscillator-drift-backlog)
 - [Implementation boundaries](#implementation-boundaries)
 - [Related](#related)
@@ -25,8 +27,8 @@ proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
 | Entity | Owns or describes | Relationship |
 |---|---|---|
 | Project | The working session: Track setup, mixer, Patterns, Songs, settings and asset references; Scenes when implemented | Top-level save/load unit |
-| Track | Instrument assignment, MIDI routing, mix strip and future polyphony policy | 16 per Project; shared selection across pages |
-| Instrument | A reusable sound: two oscillators, their maps, filter, amp, envelopes, LFOs and modulation | Loaded into a Track; saved as WXI; a Kit is a drum-mode Instrument |
+| Track | Instrument assignment, MIDI routing, mix strip and proposed allocation-policy overrides | 16 per Project; shared selection across pages |
+| Instrument | A reusable sound: two oscillators, their maps, filter, amp, envelopes, LFOs and modulation; proposed saved allocation defaults | Loaded into a Track; saved as WXI; a Kit is a drum-mode Instrument |
 | Oscillator | One sound source and its source settings | Two per Instrument; sampled stereo can use one oscillator |
 | Sample / Zone | Sample is PCM plus metadata; Zone maps a Sample to key/velocity ranges | Zones reference Sample Pool entries; files persist asset references |
 | Pattern | Musical events and parameter locks addressing Tracks | Project codec supports 128 named slots; Pattern changes preserve Track assignments |
@@ -179,6 +181,135 @@ Sample metadata `channel_mode` controls and RAM-path reconciliation remain
 separate Sample Edit work. The channel
 budget describes Instrument rendering, not the number of codec outputs or a
 promise that audition, FX and other callback work have no cost.
+
+## Instrument and Kit allocation policy
+
+**Requested 2026-09-17; proposal, not implemented.** Instruments and drum Kits
+should carry useful allocation defaults: monophonic behavior, a 1–8 note limit,
+and whether stealing is restricted to their own sounding notes or can take
+from other sounds. This extends the existing planned Track polyphony policy;
+it does not increase the configured physical render budget.
+
+### Settings and ownership
+
+| Setting | Proposed values | Meaning |
+|---|---|---|
+| Play mode | Poly / Mono | Mono permits one musical note at a time; independent of the oscillator's stereo-to-Mono downmix switch |
+| Polyphony | Auto / 1–8 initially | Maximum simultaneous note groups, including release tails; Auto adds no local cap |
+| Steal from | Own only / Own first / Any | Eligible victim scope and preference when capacity is exhausted |
+| Kit pad override | Inherit / explicit pad cap and steal policy | Proposed optional per-pad refinement, alongside the overall Kit cap |
+
+The user requested Instrument/Kit controls. Kit-wide plus per-pad limits are
+the suggested extension; that finer scope remains a proposal pending user
+preference. A one-voice kick and a four-voice cymbal should be possible without
+making the whole Kit monophonic. Choke groups still express deliberate
+interactions such as a closed hat stopping an open hat.
+
+Save sound defaults in the Instrument's WXI definition, including Kit pad
+overrides if adopted. A Project may override the loaded sound's allocation
+settings per Track, with explicit **Use Instrument** inheritance. Track setup
+must not silently rewrite the saved Instrument. Reconcile existing stored
+`Track::poly_limit`/`priority` and `Instrument::poly_mode` with that inheritance
+in a versioned persistence design; do not reinterpret legacy zero fields
+without an explicit old-file rule.
+
+At runtime, "own" means the requesting Track's loaded Instrument instance,
+with a binding generation. Two Tracks loading the same WXI remain independent.
+For a pad override, own means that pad in that Track instance; **Own first**
+can search other pads of the same Kit next, then other Tracks. The aggregate
+Kit cap remains an upper bound over all pads. Never key ownership by shared
+Sample Pool ID or file path.
+
+Limits are ceilings, not reserved capacity or guaranteed minimum polyphony.
+Eight stereo notes may require sixteen render channels; the configured engine
+still decides whether those resources exist. A future MCU may expose larger
+limits without changing their meaning. Own-only controls what this sound may
+steal; it does not prevent other sounds from stealing it. Victim protection,
+priority and guaranteed reservations are separate policy questions, not
+implicit consequences of a cap.
+
+### Note identity and mono behavior
+
+Use a stable trigger-group identity for every admitted musical note/hit. One
+group contains all resolved layer voices and their channel costs. Two
+oscillators already submix inside one voice; stereo L/R remain inseparable.
+Count the musical group once for the user-facing polyphony limit, while
+accounting for every layer slot and render channel against global capacity.
+The existing per-layer trigger path needs group admission before this rule can
+be implemented; merely counting Track voices would truncate layered sounds.
+
+Mono implies a cap of one group. The proposed first keyboard behavior is
+last-note priority with envelope retrigger, including a defined fallback to
+the last still-held note. Releasing an older key must not stop the replacement
+note. Keep held-key bookkeeping separate from render-slot identity; ordinary
+stealing must not make a later note-off release an unrelated replacement.
+One-shot drum hits use retrigger/replacement rather than held-key fallback.
+Legato, portamento and envelope continuation require their own defined behavior;
+polyphony one alone does not implement those features.
+
+### Admission and stealing
+
+Resolve the entire incoming group and its effective policy before mutating
+the allocator. Plan a bounded set of whole-group victims, then commit only if
+both local caps and the physical slot/channel budgets can be satisfied:
+
+1. Enforce a pad cap, if present, by replacing that pad's own group(s).
+2. Enforce the Instrument/Kit cap using groups in that Track instance. These
+   cap checks happen **even when there are globally free slots**.
+3. Use free global capacity for any remaining resources needed.
+4. Under global pressure, apply **Own only** (no external victims), **Own
+   first** (local victims before external candidates), or **Any** (global
+   candidates using the normal victim ranking).
+5. Within an eligible scope, prefer groups entirely in release, then oldest
+   onset, with a stable tie-breaker. If none of the permitted victims can free
+   enough capacity, reject the new group without partially stealing others.
+
+At a local cap, stealing another Track cannot substitute for removing one of
+the capped sound's own groups. Conversely, an own-only sound with no current
+notes may be unable to start when other sounds fill the pool. This is expected
+policy behavior, not an allocator fault.
+
+Whole-group planning matters when a stereo or layered note needs several mono
+victims. Keep selection bounded by configured voice/group capacities; no heap,
+locks, filesystem work or partially published policies in the callback. M7
+remains the sole runtime allocator if the proposed M4 I/O split is adopted.
+
+Choke release still occupies channels until it ends or is explicitly reclaimed.
+Define whether a rejected trigger applies its choke before implementation;
+the proposed transactional rule applies choke only for an admitted trigger.
+Steal/retrigger transitions need an audible click check and a bounded
+transition strategy that includes any temporary tail processing in the global
+budget. Do not promise click-free stealing from a metadata-only policy change.
+
+Policy edits apply at a callback boundary. Existing notes can finish; a lowered
+cap is enforced on the next attempted admission rather than cutting notes as
+the control moves. Legacy files with no allocation settings retain current
+Poly / Auto / Any behavior. Explicit old Track settings require the persistence
+mapping noted above.
+
+### Examples and acceptance
+
+| Sound | Example setting | Result |
+|---|---|---|
+| Bass | Mono, Own only | Replaces its own note; cannot displace another Track to get started |
+| Pad Instrument | Poly 4, Own only | Fifth note replaces one of its own; does not steal drums |
+| Drum Kit | Poly 8, Own first | Recycles Kit notes before considering another Track under global pressure |
+| Kick pad | Pad limit 1, Own only | Repeated kicks replace each other, not a cymbal |
+| Cymbal pad | Pad limit 4, Own only | Allows overlapping hits, subject to the aggregate Kit/global budgets |
+
+Instrument editors expose defaults; Project/Track setup exposes inheritance
+and overrides; Pad Map exposes adopted pad refinements. Labels must distinguish
+**Mono play mode** from **Mono output**. Persist and round-trip policy before
+adding UI behavior, and include allocation settings in the appropriate
+Apply/Revert snapshot.
+
+Required host cases include local caps with spare global capacity, own-only
+refusal without side effects, independent instances of one WXI on two Tracks,
+pad/Kit cap interaction, stereo/multilayer whole-group admission, release/choke
+accounting, Mono held-key/repeated-note identity, policy changes and old-file
+defaults. Hardware gates cover audible stealing/retrigger and worst-case DWT
+cost during bursts at full capacity, with sequencer, modulation and audition.
+This remains the roadmap's polyphony-policy work, not an implemented feature.
 
 ## Oscillator drift backlog
 

@@ -60,6 +60,15 @@ while (job.active) {                       // one call per main-loop iteration
 | 4 — heavy DSP | time-stretch & pitch-shift (phase vocoder or WSOLA — recommend **WSOLA** first: integer math friendly, no FFT memory pressure), granular freeze/scatter, spectral gate | needs overlap state carried across chunks; design each as a streaming processor with explicit carry buffer |
 | 5 — analysis | transient detection for auto-slice, loudness scan, silence trim | feeds the slicer UI; runs as a render job that outputs markers (sidecar), not audio |
 
+The requested [vintage sampler grit](../architecture-notes.md#vintage-sampler-grit)
+extends the character tier: 27.7/22.05 kHz rate reduction, companded 8-bit
+quantization, explicit pre/post filtering and optional post-filter saturation.
+After the basic render pipeline, prepare reduced-rate decoded PCM16 assets for
+the requested [virtual-clock playback at fixed 48 kHz](vintage-sampler-math.md).
+Live reconstruction and post-filter saturation require their own measured
+runtime gate. Complete offline prints remain optional; linear bit-crushing
+alone does not satisfy this request.
+
 ## 5. Waveform editor UI (ESP32 side)
 
 - **Preview tiers**: Daisy measures min/max envelopes per window (the `MSG_ENVELOPE_REQ`/`MSG_ENVELOPE_CHUNK` path; the `EnvelopeCache` already keeps runs per tier). ESP32 caches tiers in PSRAM keyed by (sample_id, generation); zoom switches tiers, scroll pans within one.

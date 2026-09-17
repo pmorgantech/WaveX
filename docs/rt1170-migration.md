@@ -3,6 +3,7 @@
 **Status**: Activated planning checkpoint, linked from Phase 2's callback-capacity section. No implementation, board port, or purchase is authorized by this planning update.
 **Activation gate**: The 2026-09-07 DaisySP comparison measured 89.6635% worst callback utilization with callback-resident work still outstanding, so the recurring gate is **UPGRADE**. The WaveX 24 dB path measured 65.8029% and remains the fallback. The measured workload and limits are recorded in `docs/callback-performance-log.md`.
 **Scope decision (recorded)**: **Like-for-like.** The phyCORE-RT1170 replaces the Daisy Seed's role only — real-time audio engine, SD sample streaming, SDRAM sample RAM, CV/Gate output. The ESP32-P4 keeps the UI, display, touch, and MIDI I/O exactly as today. The inter-MCU UART link is ported, not redesigned.
+**Core split direction (2026-09-17)**: The user wants the M4 to own the ESP32 link and SD-card I/O where feasible, leaving audio processing on the M7. This supersedes the earlier M7-only end-state assumption; retain a simple M7-only bring-up baseline, then implement the bounded I/O service proposed in §11. No dual-core implementation or performance result exists yet. The board/module and user-reported external memory capacities still need reconciliation with the older PHYTEC assumptions below before a board port.
 **Software stack decision (recorded)**: **Bare-metal, no RTOS**, built directly against NXP's MCUXpresso SDK drivers (not PHYTEC's Zephyr BSP). This preserves `architecture.md` §4.2's documented rationale — the audio timebase is the DMA clock, not a scheduler — which an RTOS would reintroduce jitter risk against.
 **Research basis**: hardware/ecosystem findings below come from a web-research pass (2026-08-30) against NXP and PHYTEC primary docs plus community sources; items marked *(unconfirmed)* should be re-checked against the RT1170 reference manual and PHYTEC schematics before implementation, not treated as settled.
 
@@ -16,7 +17,7 @@ There is **no libDaisy equivalent** for the RT1170 — no focused, audio-callbac
 
 | Property | Daisy Seed (STM32H750) | phyCORE-i.MX RT1170 (RT1176) | Notes |
 |---|---|---|---|
-| Core | Cortex-M7 @ 480 MHz | Cortex-M7 @ up to 1 GHz + Cortex-M4 @ 400 MHz | Plan uses M7 only; M4 is a future option (§8), not part of this migration |
+| Core | Cortex-M7 @ 480 MHz | Cortex-M7 @ up to 1 GHz + Cortex-M4 @ 400 MHz | M7 audio with proposed M4 link/storage service (§11), following an M7-only bring-up baseline |
 | L1 cache | 16 KB I / 16 KB D | 32 KB I / 32 KB D | Cache line 32 B on both — existing §7 DMA alignment rules carry over unchanged |
 | Tightly-coupled RAM | 64 KB ITCM / 128 KB DTCM (fixed) | 512 KB FlexRAM, software-configurable into ITCM/DTCM/OCRAM in 32 KB blocks, plus fixed OCRAM1/OCRAM2 *(sizes unconfirmed — verify against RM)* | RT1170's split is a build-time config decision we own, not a silicon constant |
 | External RAM | 64 MB SDRAM (Daisy Seed) | **64 MB SDRAM on the SOM itself** (matches current allocator design almost exactly) | `memory.h`'s 60 MB arena + 4 MB render-scratch split needs no size change, only address/controller retargeting (SEMC instead of STM32 FMC) |
@@ -33,7 +34,7 @@ There is **no libDaisy equivalent** for the RT1170 — no focused, audio-callbac
 
 - Replacing the ESP32-P4 UI/display/touch stack. (All-in-one was considered and rejected — see the research findings: it would bolt a second full migration, LVGL/MIPI-DSI on unproven RT1170 tooling, onto the audio-engine port.)
 - Adopting Zephyr or any RTOS on the audio-engine core.
-- Using the RT1176's M4 core in the first pass.
+- Using the RT1176's M4 core during the initial audio timebase proof. The requested subsequent I/O split is covered by §11.
 - Redesigning the inter-MCU wire protocol. `protocol.h` and the UART framing are reused unchanged; only the transport-layer driver underneath is rewritten.
 - Changing the 48 kHz / 48-sample-block / 1 kHz control-tick invariant (`timebase.hpp`'s `static_assert`), the SDRAM sample-arena size, or the CV backend architecture (`CvGroupRouter`, Stage A/B split).
 
@@ -132,7 +133,185 @@ Matches this project's usual one-commit-per-verified-stage workflow. Each stage 
 ---
 
 This document is a planning artifact linked from the Phase 2 callback-capacity
-checkpoint, not an approved implementation phase. The next step is to resolve
-the measured DaisySP blocker and confirm scope with the user before iterating
-on Stage 1 (or earlier stages of §10); board port and purchase decisions remain
-out of scope.
+checkpoint. The user's requested M4 I/O direction is recorded below; board
+bring-up and a dual-core firmware implementation have not been performed.
+
+## 11. Proposed M4 link and storage service
+
+**Requested 2026-09-17; design direction, not implemented.** Keep the M7's
+48 kHz audio callback, sequencer clock, modulation, voice state and Sample Pool
+authority together. Move link framing, storage work and their peripheral
+interrupts to the M4. This removes CPU/interrupt work from the M7; it does not
+give either core exclusive bandwidth to shared external RAM.
+
+### Access and resource ownership
+
+The M4 can use shared OCRAM, system-mapped external memory and permitted system
+peripherals. Core-local addresses/aliases are not a portable shared-pointer
+contract. Both images must agree on the shared region and buffer-offset ABI;
+verify each peripheral, DMA master and memory region against the selected
+device's access map. Keep each core's TCM private by design.
+
+| Resource | Owner and boundary |
+|---|---|
+| Audio SAI, audio DMA, voices, sequencer and control timebase | M7; M4 forwards commands but never mutates live engine state |
+| ESP32 UART, or subsequently validated SPI transport, and assigned DMA channels | M4; existing external framing/payload definitions remain authoritative |
+| USDHC, SD card, FatFs volume and open file handles | M4 only; M7 submits bounded asynchronous requests |
+| Sample Pool allocation and published sample identity | M7; grants M4 bounded writable leases on unowned buffers/assets |
+| Shared command/completion queues | One producer and one consumer per direction; fixed capacity and explicit overflow policy |
+| Shared clocks, pin mux and memory-controller initialization | One boot owner; no independent runtime reconfiguration by both cores |
+
+NXP's [M4 USB/SD example port](https://mcuxpresso.nxp.com/mcuxsdk/latest/html/middleware/usb/docs/AN13690/topics/mcuxpresso_ide.html)
+explicitly moves the USDHC and SDMMC drivers to an RT1170 M4 project, providing
+evidence that the storage assignment is feasible. This does not verify our
+board wiring, controller instance, DMA destinations or sustained throughput.
+
+### Contention, notification and cache visibility
+
+Hardware bus arbitration serializes competing memory transactions. Resource
+domain controllers enforce access permissions; they are not a bandwidth
+reservation or a guarantee that M7 requests always win. Interrupt priority on
+one core does not prioritize that core's external-memory traffic. Use bounded
+bulk transfers, prefetch, admission control and hot TCM state to limit exposure;
+verify any QoS/arbitration tuning against the reference manual before using it.
+
+M7 may play immutable samples in SDRAM while M4 fills a different SDRAM region.
+No whole-SDRAM mutex is needed: the controller interleaves transactions. Distinct
+regions prevent logical overwrite, but do not provide separate bandwidth or
+eliminate row/bus contention. Keep loading extents and published assets disjoint
+and aligned to cache lines. Complete cache visibility for just the new extent
+before publishing it; unrelated live samples do not need global invalidation.
+Reusing a formerly audible extent still requires released voice references and
+the complete cache/DMA handoff, even when its numeric address is unchanged.
+
+Use the Messaging Unit (MU) for notifications and shared memory for payloads.
+Evaluate NXP's bare-metal [RPMsg-Lite example](https://docs.mcuxpresso.nxp.com/mcuxsdk/latest/html/examples/multicore_examples/rpmsg_lite_pingpong/readme.html)
+before inventing an inter-core transport. The MU ISR should acknowledge/latch
+work, not perform bulk cache maintenance or application mutation. Software
+queues remain the authority when notifications coalesce. SEMA4 may protect
+rare setup operations; never spin or wait on it in the audio callback.
+
+There is no automatic coherent shared-data contract between the M7 cache, M4
+LMEM cache and DMA. Reserve a small shared non-cacheable OCRAM region using each
+core's appropriate cache/memory configuration for queue metadata and initial
+I/O staging. Use properly ordered publication and cache-line-isolated records;
+`volatile` alone is insufficient. Verify the distinct M7 and M4 cache APIs.
+
+Keep large sample data cacheable only with a defined handoff: the producer
+completes CPU/DMA writes and required cache operations before publishing; the
+consumer invalidates stale data before accepting ownership. Prepare destinations
+before DMA as required so dirty lines cannot later overwrite incoming data.
+Perform bulk maintenance in M7 foreground work before a buffer becomes audible,
+not in the callback. Do not concurrently access an active DMA destination.
+[NXP's cache guidance](https://www.nxp.com/docs/en/application-note/AN12042.pdf)
+explains DMA visibility and the non-cacheable-buffer alternative; exact M4
+LMEM configuration remains a port-specific verification item.
+
+### Buffer and request lifecycle
+
+Represent storage work with request ID, service epoch, asset/stream generation,
+file offset, buffer ID/offset, capacity and requested length. Completion carries
+actual length and status. M4 file handles and C++ object pointers stay local.
+
+```text
+Free → M4 filling / DMA active → completed → M7 prepared and reading → Free
+```
+
+M4 cannot recycle a buffer until M7 releases it. Loaded assets publish only
+after complete preparation; cancellation or either-core restart rejects stale
+generations and prevents reuse until DMA is stopped and ownership reconciled.
+Sample unload must wait for all voice references to be released.
+
+For streaming, fill a multi-block read-ahead pool before playback and replenish
+ahead of a low-water mark. The callback consumes ready data only, never waits
+for an RPC/SD completion. Define bounded fade/silence behavior and underrun
+telemetry when storage fails. Resident samples may continue during an I/O-core
+failure. SD-card latency and shared-bus traffic remain even with M4 ownership.
+
+M4 scheduling must preserve prompt note/control forwarding while SD is busy.
+A long blocking FatFs/SD call can otherwise move the responsiveness problem
+onto the M4. Use bounded driver waits/state machines or a separately bounded
+forwarding path, prioritize stream refills over bulk browsing/preview work,
+and coalesce low-priority meters. DMA alone does not establish this guarantee.
+
+### Audition workload and comparison with Daisy
+
+The 400 MHz M4 is not a compute-equivalent replacement for the 480 MHz M7.
+Matching I/O service is nevertheless plausible because peripheral clocks/DMA
+and card latency determine much of transfer performance, and the M4 no longer
+shares its execution time with the audio renderer. No RT1176 throughput or
+latency result has been measured for WaveX.
+
+The current `PumpWavIO()` in
+[`audio_engine.cpp`](../firmware/daisy/src/audio/audio_engine.cpp) performs
+prebuffering, SD-slot refill, PCM format conversion, gain/fades and optional
+streaming linear sample-rate conversion before publishing to the audio ring.
+The callback consumes prepared samples. Preserve this producer/consumer
+boundary; do not move filesystem operations into an M7 callback or make an
+inter-core request for each output block.
+
+For one browser audition, evaluate an M4-owned bounded producer that converts
+the supported WAV formats to the fixed 48 kHz interleaved PCM16 preview stream.
+The M7 consumes ready blocks and owns final mixing, live preview level,
+start/stop fades and the audio timebase. Keep Instrument playback pitch and
+voice processing on M7. Moving the existing simple audition SRC to the M4 is a
+candidate to benchmark, not evidence that high-quality SRC, timestretch or
+arbitrary codecs fit that service budget.
+
+| Example workload | Sustained payload, excluding framing/filesystem overhead |
+|---|---:|
+| Stereo PCM16 at 48 kHz from SD | 192,000 bytes/s |
+| Stereo PCM24 at 48 kHz from SD | 288,000 bytes/s |
+| Prepared stereo PCM16 at 48 kHz between cores | 192,000 bytes/s |
+| Current 2 Mbaud UART, assuming 8N1 | At most 200,000 bytes/s per direction before protocol overhead |
+
+Sample audio stays in shared RAM; it does not pass over the ESP32 link. Notify
+per published chunk or queue transition, not per sample. The table describes
+one preview at normal speed, not admission for multiple streamed voices or a
+future faster SPI link.
+
+At 192,000 bytes/s, a fully occupied 64 KiB PCM ring represents about 341 ms
+of audio and 128 KiB about 683 ms. These are candidate capacities, not chosen
+defaults or an SD-stall guarantee. Available protection is current occupancy
+divided by consumption rate. Set the refill threshold so remaining audio
+exceeds the measured service latency plus scheduling margin; enough average
+throughput alone does not avoid underruns. Separate startup prefill from full
+ring capacity so browsing need not wait for the entire ring to fill.
+
+Rapid preview changes need a stream generation on every command and block.
+M7 can fade/stop the old generation immediately and reject late blocks while
+M4 finishes/cancels its read safely. Do not drain hundreds of milliseconds of
+old queued audio before honoring Stop. The next preview becomes audible only
+after its own prefill and visibility handoff. Explicitly acknowledge applied
+Start/Stop on M7 rather than treating a completed SD read as audible playback.
+
+MCUXpresso provides an asynchronous
+[`USDHC_TransferNonBlocking` API](https://mcuxpresso.nxp.com/api_doc/dev/4784/a00094.html)
+with ADMA configuration. This is a driver building block: FatFs and higher
+SDMMC calls can still wait synchronously. Audit that entire wait chain so SD
+busy time cannot block urgent link forwarding. Refill, urgent controls and
+bulk browse/preview analysis need separate service priorities; a waveform scan
+must not consume the preview's read-ahead margin.
+
+Compare the actual migration against Daisy using time to first sound, applied
+Stop latency, MIDI/control latency during forced SD delays, lowest ring fill,
+SD read latency distribution and M7 maximum callback cycles. Include rapid
+file switching, sample-rate conversion, SD writes and active resident voices.
+The existing storage policy stops streamed audition for some save operations;
+preserve that policy initially. Supporting simultaneous save and audition is a
+separate measured expansion, not an automatic benefit of dual-core execution.
+
+### Incremental validation
+
+After the M7-only audio baseline, prove shared-memory visibility and epoch
+recovery; move the link first, then grant the M4 exclusive SD ownership.
+Compare M7 worst-case callback cycles, command latency, stream low-water marks
+and underruns against the baseline while loading/saving/browsing concurrently.
+Exercise SD stalls/removal, queue exhaustion and either-core reset. Add the
+specific bench procedures to `hardware-validation.md` when implementation
+reaches these gates; no gate is claimed passed by this proposal.
+
+The [NXP RT1170 data sheet](https://www.nxp.com/docs/en/data-sheet/IMXRT1170BCEC.pdf)
+describes MU, SEMA4 and resource-domain protection. Exact memory aliases,
+peripheral grants, DMA routing and arbitration registers must be verified
+against the board and reference manual during port design.

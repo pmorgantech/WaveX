@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-16.
+**Last updated:** 2026-09-17.
 
 This document is the single planning list: scheduled phases, next steps,
 unscheduled backlog and open decisions. Completed work belongs in `CHANGELOG.md`
@@ -217,6 +217,12 @@ This activates planning in the [RT1170 migration plan](rt1170-migration.md)
 under the Phase 2 capacity checkpoint. It does not authorize a board port or
 purchase, and the WaveX path remains the fallback.
 
+Requested 2026-09-17: evaluate the [M4 link/storage service](rt1170-migration.md#11-proposed-m4-link-and-storage-service)
+as the RT1176 target core split after an M7-only audio baseline. M4 owns link
+I/O and SD/FatFs; M7 retains audio state and timing. Resolve shared-memory/cache
+handoffs, bounded command latency during SD stalls and measured bus contention
+before implementation; this proposal does not close a hardware gate.
+
 DaisySP is default-disabled; comparison builds require an explicit opt-in
 and do not pass the capacity gate. Re-enabling it requires attribution,
 scope reduction or a backend port. Re-run the checkpoint before adding
@@ -345,6 +351,15 @@ Build a bounded Daisy-main-loop render-job scheduler, destructive editing and
 crossfade-loop rendering, editor integration, slicing, and offline mangling.
 Use the reserved 0xA0–0xA3 messages and CMSIS-DSP where appropriate.
 
+Requested character operation: [vintage sampler grit](architecture-notes.md#vintage-sampler-grit)
+for layered one-shots — 27.7/22.05 kHz, companded 8-bit quantization,
+rate-based pitch, pre/post filtering and gentle saturation after the filter.
+Follow the basic render pipeline to prepare reduced-rate assets. The requested
+[playback model keeps the engine at 48 kHz](features/vintage-sampler-math.md)
+and simulates per-voice sample clocks; complete offline prints are optional.
+Runtime reconstruction remains unscheduled pending a separate callback-capacity
+gate; the numerical reference does not establish device performance.
+
 **Gate:** record, edit, slice, assign, and sequence entirely on-device while
 playback remains uninterrupted.
 
@@ -439,6 +454,21 @@ it owns that setup without needing a separate saved Performance object.
   with streaming audition and modulation. Sample Edit `channel_mode` UI
   remains separate. WXI recall fixtures must meet Instrument import admission;
   direct-loaded large samples can exceed that limit (see below).
+- [ ] **Phase 2 / Waveform playback head:** add a moving vertical line to
+  waveform views while their sound plays, including browser audition and Sample
+  editing. Follow the [playback-head requirements](architecture-notes.md#playback-head-in-waveform-views)
+  for source-frame position, zoom, stereo, loop/reverse/rate behavior and
+  overlapping voices. Use bounded, coalesced telemetry and clear stale heads on
+  stop/steal/context changes. Validate panel tracking and link load with zero
+  audio underruns; this remains unimplemented.
+- [ ] **Instrument/Kit polyphony policy (Phase 2.5 follow-up, measure first):**
+  implement the requested [saved allocation defaults](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
+  for Mono, Auto/1–8-note caps and Own only / Own first / Any stealing, with
+  explicit Track inheritance/overrides. Kit-wide plus per-pad refinements remain
+  proposed. Define note-group identity, transactional multi-layer/stereo
+  admission, note-off/retrigger behavior and old-file defaults before changing
+  the allocator. Complete persistence/protocol tests, Apply/Revert and UI, then
+  audible-steal and DWT gates; this does not raise the global channel budget.
 - [ ] **Phase 2 / Instrument save admission bench check:** runnable checks are in
   [HV-003](hardware-validation.md#hv-003--instrument-save-and-recall-admission).
   Save copy preflights both oscillator maps' on-card WAV dependencies under recall's
@@ -460,6 +490,28 @@ it owns that setup without needing a separate saved Performance object.
   and optional Scene references on Song entries. Resolve automation, stop/seek,
   deletion and Pattern authority before versioned storage and atomic recall.
   Macros and effect sends follow their own available runtime controls.
+
+### Sampler and synth architecture references
+
+- [ ] Evaluate the [ASR-10 and E4/EOS architecture notes](architecture-notes.md) when
+  revisiting Instrument navigation and performance workflows: visible edit
+  scope, optional select-by-playing, resident sound variations and
+  velocity-shaped articulation; E4 adds group edit scope, shared multisample
+  sound definitions, resource-aware loading and bounded control processors.
+  The [Cord follow-up](architecture-notes.md#eos-cords-further-modulation-lessons)
+  captures route-depth control, reusable mixes, source lifetimes and distinct
+  trigger/evaluation rules. These are exploratory ideas, not accepted engine
+  or menu changes. Apply context/navigation lessons within existing
+  Phase 2/2.5 work; recall and offline commands retain their Phase 5 and Phase 4
+  placement. New voice features remain unscheduled and require an ownership
+  design plus the callback capacity gate before implementation.
+
+- [ ] Resolve the [workflow coverage gaps](architecture-notes.md#workflow-coverage-and-remaining-design-gaps)
+  alongside their existing phase tasks: device/Project settings ownership,
+  sample-versus-Zone edit scope, reference-aware sample actions, portable
+  collection/missing-asset repair, bounded undo and record/arrangement behavior.
+  The notes distinguish existing plans from new candidates; they do not expand
+  the current phase gate or replace the sample-operation and persistence tasks.
 
 ### Oscillator drift — unscheduled
 

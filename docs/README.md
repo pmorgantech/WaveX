@@ -53,6 +53,7 @@ implementation.
 | [midi-sync-tempo-follower.md](features/midi-sync-tempo-follower.md) | Target design | MIDI clock in/out and tempo follower; required for the Phase 2 gate |
 | [analog-voice-board.md](features/analog-voice-board.md) | Target design, Stage A buildable | PCM1690 TDM-8, per-voice VCF/VCA, CV calibration (Phase 3) |
 | [offline-sample-editing.md](features/offline-sample-editing.md) | Target design | Offline render-job model for destructive editing and mangling DSP (Phase 4) |
+| [vintage-sampler-math.md](features/vintage-sampler-math.md) | Research proposal | Fixed-48 kHz engine with virtual sample clocks, companding and reconstruction; numerical reference only |
 | [scenes-and-performance.md](features/scenes-and-performance.md) | Target design | Song mode/pattern chaining, performance macros, scenes with morph (Phase 5) |
 | [tuning-and-scales.md](features/tuning-and-scales.md) | Target design | Master tune, 12-degree tables, scale-constrained input surfaces (Phase 5) |
 
@@ -60,6 +61,7 @@ implementation.
 
 | Document | Contents |
 |---|---|
+| [architecture-notes.md](architecture-notes.md) | Exploratory ASR-10 and E4/EOS comparisons: navigation, edit scope, multisample synthesis, modulation and loading; promotion stays in the roadmap backlog |
 | [ui-architecture.md](ui-architecture.md) | ESP32 UI framework and navigation map: page lifecycle, softkeys, synchronized updates and page registration |
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes — display, fonts, palette, rendering budget, widget inventory, each claim cited to code |
 | [logging.md](logging.md) | Per-module log levels with compile-time ceilings and runtime control, on both consoles |
