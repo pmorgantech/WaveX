@@ -130,6 +130,7 @@ correction) before adding logic on top. Do not paper over a bad shape with more 
 
 ## Testing
 
+- Whenever implemented work reaches a physical validation gate, add or update an entry in [`docs/hardware-validation.md`](docs/hardware-validation.md) in the same change. Include a stable ID, roadmap/design link, setup, actionable steps, pass criteria and any blocker; record hardware results with date, tested image identities and evidence. Leave deferred/unrun checks open, preserve partial results, and update the corresponding roadmap gate only when its complete acceptance criteria pass. This checklist owns bench procedures/results; the roadmap still owns implementation order and phase gates.
 - Host tests run via GoogleTest (`make test`); see `docs/testing_guide.md`. Every roadmap phase ends with a stated test gate (`docs/roadmap.md`) — don't consider a phase's work done until its gate is green.
 - New wire-protocol messages require round-trip tests in `firmware/shared/tests/protocol/` before UI or engine work that depends on them.
 - For hardware-dependent behavior that can't be host-tested (SD soak tests, CV calibration, scope-verified timing), state explicitly what was and wasn't verified rather than claiming untested behavior works.

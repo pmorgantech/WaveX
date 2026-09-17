@@ -161,6 +161,12 @@ do not duplicate their task status here.
 
 ## Hardware verification
 
+Use [hardware-validation.md](hardware-validation.md) for the pending bench
+checklist and per-case results. Add or update an entry whenever implemented
+work reaches a physical gate; record setup, pass criteria and blockers in the
+same change. After a run, record image identities and evidence there, then
+update the corresponding roadmap gate if all of its criteria passed.
+
 `make test-hil` drives the boards' acknowledged debug consoles, with
 `make logs-start` providing serial logs. See
 [debug-harness-and-hil.md](features/debug-harness-and-hil.md) for setup,

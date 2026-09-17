@@ -64,6 +64,7 @@ implementation.
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes — display, fonts, palette, rendering budget, widget inventory, each claim cited to code |
 | [logging.md](logging.md) | Per-module log levels with compile-time ceilings and runtime control, on both consoles |
 | [testing_guide.md](testing_guide.md) | Host tests, meaningful regressions, production coverage boundaries and open test work |
+| [hardware-validation.md](hardware-validation.md) | Periodic bench checklist: pending/deferred physical checks, setup, pass criteria and recorded results |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed from the devcontainer, plus SWD/GDB debug-probe workflows |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
 | [firmware-size-log.md](firmware-size-log.md) | Measured firmware size by build and memory region |

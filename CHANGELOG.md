@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added a hardware-validation checklist with stable case IDs, setup, pass
+  criteria and result records, seeded with storage and remaining stereo/Phase 2
+  checks. Project instructions now require an entry as each physical gate is
+  reached; SD formatting remains deferred for a later user bench session.
+
 - Settings > Storage now offers a confirmed SD-card format flow that warns
   **ALL CARD DATA WILL BE LOST**, stops playback, formats FAT/FAT32 and creates
   the WaveX directory layout. Confirmation expires and is invalidated by card

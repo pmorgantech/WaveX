@@ -8,6 +8,12 @@ unscheduled backlog and open decisions. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
 [Outstanding hardware verification](#outstanding-hardware-verification).
 
+Runnable bench procedures and per-case results live in
+[hardware-validation.md](hardware-validation.md). Add or update an entry there
+in the same change whenever implemented work reaches a physical gate. This
+roadmap retains implementation priority and phase acceptance; the checklist
+does not replace or relax those gates.
+
 Phases are ordered by dependency, not date. Read `architecture.md` before
 changing system behavior. Promote backlog items into a phase when its gate
 requires them; keep one task here rather than parallel lists in separate files.
@@ -393,6 +399,9 @@ The following code paths are open until observed on the target:
   callback features remaining activates the backend chip-upgrade path.
 - Every phase gate includes `make test`, `make test-hil` on the bench, reboot
   recovery, and an appropriate zero-underrun soak.
+- Track physical checks and their evidence in
+  [hardware-validation.md](hardware-validation.md); leave deferred checks open
+  and link them from their owning gate here.
 - New subsystems need a focused feature design before implementation.
 - Delete superseded docs after moving remaining open work into this document;
   git history is the archive.
@@ -412,8 +421,10 @@ stereo/Mono changes and the proposed Project navigation and Scene workflow.
 Project exposes Track assignment, MIDI input, level, pan/balance and mute;
 it owns that setup without needing a separate saved Performance object.
 
-- [ ] **Stereo/Mono hardware verification:** stereo preservation, saved
-  per-oscillator Mono (default Off) and the configurable render-channel budget
+- [ ] **Stereo/Mono hardware verification:** remaining physical checks are in
+  [HV-004](hardware-validation.md#hv-004--stereo-and-mono-physical-checks) and
+  [HV-005](hardware-validation.md#hv-005--phase-2-timing-and-soak-gate). Stereo
+  preservation, saved per-oscillator Mono (default Off) and the render-channel budget
   are implemented. Host tests cover mixed-cost stealing, release tails,
   independent stereo filters, next-note/undo behavior, old WXI headers and a
   larger configured capacity. Ten stereo/Project HIL cases now pass (2026-09-16):
@@ -428,22 +439,18 @@ it owns that setup without needing a separate saved Performance object.
   with streaming audition and modulation. Sample Edit `channel_mode` UI
   remains separate. WXI recall fixtures must meet Instrument import admission;
   direct-loaded large samples can exceed that limit (see below).
-- [ ] **Phase 2 / Instrument save admission bench check:** Save copy now
-  preflights both oscillator maps' on-card WAV dependencies under recall's
+- [ ] **Phase 2 / Instrument save admission bench check:** runnable checks are in
+  [HV-003](hardware-validation.md#hv-003--instrument-save-and-recall-admission).
+  Save copy preflights both oscillator maps' on-card WAV dependencies under recall's
   format and per-sample size policy before creating a WXI. Host regressions
-  cover rejection and preserved ownership/undo state. Repeat the stereo
-  bench's 49,250,304-byte direct-loaded PCM case: save must report unsupported
-  sample, create no WXI, and preserve the playable Track and Revert point.
-  Also verify an admitted save/reload. Include this preflight in Project
+  cover rejection and preserved ownership/undo state. Include this preflight in Project
   snapshot transactions; session-wide memory admission remains separate.
 - [ ] **Phase 2 / Card storage bench check:** all implemented saves now
-  preflight free space; Settings > Storage provides explicit, expiring format
-  confirmation and creates the expected directories. Verify near-full-card
-  Instrument/Pattern/CV saves, query failure, cancel, card replacement during
-  confirmation, format/remount on a disposable card, directory creation and
-  save/reload after reboot. Confirm panel warning/layout and audio/link recovery
-  after the blocking maintenance operation. Host tests and both firmware builds
-  cover this change; no card was formatted during development.
+  preflight free space; Settings > Storage provides confirmed formatting and
+  creates the expected directories. Procedures/results are tracked in
+  [HV-001](hardware-validation.md#hv-001--sd-card-formatting) (formatting deferred
+  by user) and [HV-002](hardware-validation.md#hv-002--save-free-space-checks).
+  Host/compile verification does not close this bench gate.
 - [ ] **Phase 2 / Mixer v1:** Project now exposes Track assignment, MIDI, level,
   pan/balance and mute. Add session Save/Load; preserve selected-Track continuity and keep Pattern/
   Song editing in Sequencer. Complete Project transactions and mixer readback/
