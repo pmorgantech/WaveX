@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added a paged Mixer with eight Track strips plus master, touch faders,
+  encoder level/pan adjustment, manual mute and shared Sequencer Solo.
+  Correlated engine readback guards edits; link loss disables controls.
+  Per-Track peak meters remain pending; physical checks are tracked in HV-006.
+
 - Added Project-owned Instrument snapshot export, sharing WXI sample and
   free-space admission while preserving the live Instrument's name, editor
   revision and Revert point. Session orchestration remains the next layer.

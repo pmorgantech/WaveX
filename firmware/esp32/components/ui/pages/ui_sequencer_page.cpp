@@ -4,6 +4,7 @@
 #include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
+#include "ui/mixer_solo.h"
 #include "ui/parameter_lock_model.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_pattern_files_page.h"
@@ -19,13 +20,6 @@
 namespace wavex_ui {
 using namespace WaveX::Protocol;
 namespace {
-// Solo survives the page being re-created (each open makes a new page
-// object) and is the one source of truth for the temporary solo selection the UI sends.
-// 0xFF = no solo.
-uint8_t s_solo_track = 0xFF;
-uint16_t SoloMask(uint8_t track) {
-    return track < 16 ? static_cast<uint16_t>(1u << track) : 0u;
-}
 constexpr int kGridX = UI_MARGIN_X + UI_SEQ_TRACK_WIDTH + UI_GUTTER;
 constexpr int kGridW = UI_CONTENT_WIDTH - UI_MARGIN_X - kGridX;
 constexpr int kCellW = (kGridW - 15 * UI_GUTTER) / 16;
@@ -214,9 +208,9 @@ void UISequencerPage::service() {
         settings_.valid = 0;
         if (alive) {
             requestRow(0);
-            // Either board may have rebooted: make the engine's mute mask
-            // match what this UI shows (a solo, or nothing muted).
-            inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, SoloMask(s_solo_track));
+            // Either board may have rebooted: restore the shared temporary Solo
+            // selection without touching manual mute targets.
+            inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, mixerSolo.Mask());
         }
         UINavigator::instance().refreshSoftkeys();
     }
@@ -787,23 +781,23 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
     return keys;
 }
 bool UISequencerPage::soloed(uint8_t track) const {
-    return s_solo_track == track;
+    return mixerSolo.Contains(track);
 }
 bool UISequencerPage::soloActive() const {
-    return s_solo_track < 16;
+    return mixerSolo.Active();
 }
 void UISequencerPage::solo(uint8_t track) {
-    if (inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, SoloMask(track)) != ESP_OK)
+    if (inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, MixerSolo::Mask(track)) != ESP_OK)
         return;
-    s_solo_track = track < 16 ? track : 0xFF;
+    mixerSolo.Select(track);
     render();
     UINavigator::instance().refreshSoftkeys();
 }
 size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     len = AppendKvInt(out, cap, len, "seqlocks", locks_mode_);
-    len =
-        AppendKvInt(out, cap, len, "seqsolo", soloActive() ? trackDisplayNumber(s_solo_track) : 0);
+    len = AppendKvInt(
+        out, cap, len, "seqsolo", soloActive() ? trackDisplayNumber(mixerSolo.Track()) : 0);
     len = AppendKvInt(out, cap, len, "lockslot", lock_slot_ + 1);
     SequencerGridModel::Step selected;
     if (valueStep(selected)) {

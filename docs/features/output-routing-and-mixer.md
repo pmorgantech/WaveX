@@ -4,7 +4,7 @@
 protocol exist. Project (the former Performance/Track root) now exposes selected-Track
 level, pan/balance and mute with authoritative readback, alongside Instrument assignment and
 MIDI routing. The master now applies to the final stereo sum with a 5 ms ramp; its
-accepted target has correlated readback. The full strip view and meter UI remain open; sections below retain their target-design
+accepted target has correlated readback. The paged strip view is implemented; per-Track meters remain open; sections below retain their target-design
 role. See [UI architecture](../ui-architecture.md#project-page). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
 **Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.4, done), Stage B TDM path (Phase 3) for physical multi-out.
 **Lineage**: E-mu presets routed to main/sub outputs per preset — the studio workflow was stems-per-instrument. Stage B's per-voice analog outs recreate that physically; the mixer here is the digital control layer over both stages.
@@ -64,7 +64,11 @@ Accumulation cost: per-voice |peak| max-tracking into its track's cell during re
 
 ## 5. UI
 
-**Mixer page**: 16 narrow channel strips (gain fader via touch drag + encoder fine, pan, mute/solo), master strip with existing stereo meters; per-track peak bars from 0x79. Follows `ui-architecture.md` deferred-update rules — meters land via the queued-update path, never direct LVGL writes from the comm task.
+**Mixer page (as built)**: eight Track strips per page plus master, with a
+page switch covering all 16 Tracks. Faders commit on touch release; encoder
+fine adjustment, pan/balance, manual mute and single-Track Solo are available.
+Solo is shared with Sequencer and independent of manual mutes. Master stereo
+meters remain in the header; per-Track peak bars from 0x79 remain open. Follows `ui-architecture.md` deferred-update rules — meters land via the queued-update path, never direct LVGL writes from the comm task.
 
 ## 6. Tests & stages
 

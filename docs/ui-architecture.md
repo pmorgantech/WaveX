@@ -69,13 +69,13 @@ state across tab changes, such as Instrument and Diagnostics. Reuse the
 shared chrome rather than duplicating styles. Diagnostics builds tab bodies
 lazily to bound entry work.
 
-Bank, Instrument Browser and Mixer belong to the target
+Bank and Instrument Browser belong to the target
 [Track/Instrument model](features/track-and-patch-model.md). A logical panel
 jump key or a protocol operation does not prove the corresponding page exists.
 
 Project replaces the Performance root label and owns the existing Track/mixer setup.
 Track setup remains globally accessible; it is not nested under Sequencer.
-The existing logical Track panel jump opens Project. Further Mixer,
+The existing logical Track panel jump opens Project; Mixer opens its own strip view. Further
 Bank, Scene and Song work is tracked in the
 [roadmap](roadmap.md#composition-and-performance-workflows).
 
@@ -260,6 +260,26 @@ saves. Both pages consume synchronized backend snapshots on UI timers.
 Their touch workflows do not require physical panel wiring.
 
 <a id="performance-page"></a>
+
+## Mixer page
+
+Mixer is available from the main menu and the logical Mixer jump key. It shows
+eight Track strips plus master, with a page switch for the other eight Tracks.
+Track selection shares Project/Instrument/Sequencer's current Track; selecting
+master leaves that Track intact. Faders commit on release, encoder rotation
+and +/- softkeys adjust level by 0.5 dB or pan by 1%, and encoder click switches
+level/pan focus. Mute and Solo have separate buttons. Master affects the final
+stereo output; its stereo meters remain in the header.
+
+Visible strips use one outstanding correlated request at a time, at most one
+new read per 50 ms. Edits prioritize readback and block another change to that
+strip until its reply; timed-out, stale and disconnected state cannot authorize
+edits. Widget setters run on the UI timer and skip unchanged values. Page exit
+deletes that timer and every widget. Solo has one UI-domain selection shared
+with Sequencer, survives navigation, and never replaces stored manual mutes.
+Per-Track peak telemetry remains the next increment; no placeholder meters are
+shown. Rendering/touch and callback timing need
+[HV-006](hardware-validation.md#hv-006--mixer-controls-and-master).
 
 ## Project page
 

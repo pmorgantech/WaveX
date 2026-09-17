@@ -1548,7 +1548,8 @@ esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message) 
     return send_link_message(MSG_MIX_OP, &message, sizeof(message)) >= 0 ? ESP_OK : ESP_FAIL;
 }
 esp_err_t inter_mcu_request_mix_state(const WaveX::Protocol::MixStateRequest& request) {
-    if (!request.request_id || request.track >= 16)
+    if (!request.request_id ||
+        (request.track >= 16 && request.track != WaveX::Protocol::MIX_MASTER_TRACK))
         return ESP_ERR_INVALID_ARG;
     return send_link_message(WaveX::Protocol::MSG_MIX_STATE_REQ, &request, sizeof(request)) >= 0
                ? ESP_OK

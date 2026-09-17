@@ -192,3 +192,14 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 #define UI_SEQ_TRACK_WIDTH 192
 #define UI_SEQ_DETAIL_TOP 440
 #define UI_SEQ_DETAIL_HEIGHT 100
+
+// Mixer: eight Track strips plus master, with >=48 px touch targets.
+#define UI_MIX_STRIPS 9
+#define UI_MIX_BUTTON_HEIGHT 48
+#define UI_MIX_FADER_WIDTH 48
+#define UI_MIX_FADER_TOP 128
+#define UI_MIX_FADER_HEIGHT 152
+#define UI_MIX_LEVEL_TOP 312
+#define UI_MIX_PAN_TOP 352
+#define UI_MIX_MUTE_TOP 408
+#define UI_MIX_SOLO_TOP 464

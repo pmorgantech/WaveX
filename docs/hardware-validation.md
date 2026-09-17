@@ -184,6 +184,15 @@ does not close it; add their runnable entries as those implementations arrive.
 **Setup:** Matching ESP32/Daisy images, stereo sustained sample, mono sample,
 headphones and scope/audio capture; DWT and underrun telemetry available.
 
+- [ ] Open Mixer from the menu and panel jump key. Check all eight strips plus
+  master fit without overlap, fader and mute/solo targets work at panel edges,
+  Tracks 9–16 page correctly, and encoder focus matches touch selection.
+  Switching to/from Project and Sequencer preserves the selected Track and
+  Solo. Manual mute remains set after Solo moves or clears.
+- [ ] Confirm controls show external edits, are disabled after link loss/stale
+  replies, and recover on reconnect. Reopen repeatedly during playback; record
+  UI stack/heap headroom and redraw cost. Steady targets cause no continuous
+  strip redraw. Per-Track meters are still pending implementation.
 - [ ] While voices and browser audition play, sweep master from silence to
   unity to +6 dB. Both sides follow; unity preserves the prior level and zero
   becomes silent after 5 ms. Meter levels follow the post-master output.

@@ -107,6 +107,21 @@ foreach(test_source IN LISTS widget_tests)
             ${PARAMETER_WIDGET_FONTS})
     endif()
 
+    if(test_name STREQUAL "mixer_page_test")
+        file(GLOB MIXER_FONTS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/pages/ui_mixer_page.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_navigator.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_softkey_bar.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/current_track.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/styles/ui_theme.cpp
+            ${MIXER_FONTS})
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
+    endif()
+
     target_link_libraries(${test_name} PRIVATE
         lvgl_host
         Threads::Threads

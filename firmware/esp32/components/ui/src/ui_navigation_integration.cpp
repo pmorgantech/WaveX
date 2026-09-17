@@ -6,6 +6,7 @@
 #include "ui/ui_diagnostics_page.h"
 #include "ui/ui_instrument_page.h"
 #include "ui/ui_main_menu.h"
+#include "ui/ui_mixer_page.h"
 #include "ui/ui_play_page.h"
 #include "ui/ui_sequencer_page.h"
 #include "ui/ui_track_page.h"
@@ -17,14 +18,12 @@ namespace wavex_ui {
 void initNavigationSystem() {
     ESP_LOGI(TAG, "Initializing navigation system");
 
-    // What a jump to each root group pushes - from the main menu or from the
-    // panel's jump keys. Mixer has a key before it has a page (Phase 2.5),
-    // and jumpToRoot() refuses unregistered groups
-    // until a page is registered here.
+    // Root factories serve both menu entries and panel jump keys.
     auto& nav = UINavigator::instance();
     nav.setRootGroupFactory(RootGroup::Sample, createSampleGroup);
     nav.setRootGroupFactory(RootGroup::Instrument, createInstrumentPage);
     nav.setRootGroupFactory(RootGroup::Track, createTrackPage);
+    nav.setRootGroupFactory(RootGroup::Mixer, createMixerPage);
     nav.setRootGroupFactory(RootGroup::Play, createPlayPage);
     nav.setRootGroupFactory(RootGroup::Sequencer, createSequencerPage);
     nav.setRootGroupFactory(RootGroup::Settings, createSettingsGroup);
