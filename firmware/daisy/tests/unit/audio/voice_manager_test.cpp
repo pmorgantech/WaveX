@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "audio/mix_meter_window.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -2449,4 +2450,65 @@ TEST(VoiceChannels, FractionalStereoPlaybackInterpolatesBothChannelsAcrossLoopSe
         EXPECT_FLOAT_EQ(l[i], expected_l[i]);
         EXPECT_FLOAT_EQ(r[i], expected_r[i]);
     }
+}
+
+TEST(VoiceTrackMeters, ReportsPostStripVoicePeakAndKeepsTransientUntilWindowEnds) {
+    std::vector<int16_t> pcm(512, 0);
+    pcm[1] = -16384;  // right-only transient; mono/left-only metering would miss it
+    VoiceManager vm;
+    vm.Init(48000);
+    WaveX::Mix::TrackMixer mixer;
+    mixer.SetGain(15, 0.5f);
+    vm.SetTrackMixer(&mixer);
+    auto p = FlatParams(pcm.data(), 256, 60, 127, .5f);
+    p.channels = 2;
+    p.track = 15;
+    vm.Trigger(p);
+    WaveX::AudioEngine::MixMeterWindow window;
+    window.Init(48000);
+    float left[48], right[48];
+    vm.Render(left, right, 48, window.Peaks());
+    EXPECT_FLOAT_EQ(window.Values()[15], .25f);
+    for (uint8_t i = 0; i < 15; ++i)
+        EXPECT_FLOAT_EQ(window.Values()[i], 0);
+    for (int block = 0; block < 39; ++block) {
+        EXPECT_FALSE(window.Advance(48));
+        vm.Render(left, right, 48, window.Peaks());
+    }
+    EXPECT_TRUE(window.Advance(48));
+    EXPECT_FLOAT_EQ(window.Values()[15], .25f);
+    window.Reset();
+    vm.Render(left, right, 48, window.Peaks());
+    EXPECT_FLOAT_EQ(window.Values()[15], 0);
+}
+TEST(VoiceTrackMeters, MeteredRenderLeavesAudioUnchanged) {
+    const auto data = DcSample(512, 16000);
+    VoiceManager metered, plain;
+    metered.Init(48000);
+    plain.Init(48000);
+    for (uint8_t track: {0, 1, 15}) {
+        metered.Trigger(DcTrigger(data, track));
+        plain.Trigger(DcTrigger(data, track));
+    }
+    float peaks[16]{}, ml[48], mr[48], pl[48], pr[48];
+    metered.Render(ml, mr, 48, peaks);
+    plain.Render(pl, pr, 48);
+    for (int i = 0; i < 48; ++i) {
+        EXPECT_FLOAT_EQ(ml[i], pl[i]);
+        EXPECT_FLOAT_EQ(mr[i], pr[i]);
+    }
+    EXPECT_GT(peaks[0], 0);
+    EXPECT_EQ(peaks[0], peaks[15]);
+    EXPECT_FLOAT_EQ(peaks[7], 0);
+}
+TEST(MixMeterSubscriptionTest, ExpiresRenewsAndHandlesClockWrap) {
+    WaveX::AudioEngine::MixMeterSubscription lease;
+    EXPECT_FALSE(lease.Enabled(100));
+    lease.Subscribe(UINT32_MAX - 1000);
+    EXPECT_TRUE(lease.Enabled(1998));
+    EXPECT_FALSE(lease.Enabled(1999));
+    lease.Subscribe(2000);
+    EXPECT_TRUE(lease.Enabled(2001));
+    lease.Unsubscribe();
+    EXPECT_FALSE(lease.Enabled(2002));
 }

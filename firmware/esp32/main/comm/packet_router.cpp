@@ -140,6 +140,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "SEQ_PATTERN_SYNC"))
                 inter_mcu_store_seq_page(message);
         } break;
+        case WaveX::Protocol::MSG_MIX_METERS: {
+            WaveX::Protocol::MixMetersMessage message;
+            if (CopyMessage(payload, payload_len, message, "MIX_METERS"))
+                inter_mcu_store_mix_meters(message);
+        } break;
         case WaveX::Protocol::MSG_MIX_STATE: {
             WaveX::Protocol::MixStateMessage message;
             if (CopyMessage(payload, payload_len, message, "MIX_STATE"))

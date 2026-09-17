@@ -670,7 +670,9 @@ class VoiceManager {
     // playback reaches end_frame with the envelope not yet started
     // releasing (treated as an implicit release-from-here).
     WAVEX_ITCM_CODE_NAMED("voice.Render")
-    void Render(float* out_l, float* out_r, size_t block_size) {
+    // Optional caller-owned peak hold, one cell per Track. Records the maximum
+    // individual voice contribution, not a phase-dependent sum/clip meter.
+    void Render(float* out_l, float* out_r, size_t block_size, float* track_peaks = nullptr) {
         for (size_t i = 0; i < block_size; ++i) {
             out_l[i] = 0.0f;
             out_r[i] = 0.0f;
@@ -758,6 +760,8 @@ class VoiceManager {
                                           v.secondary.fade_out_frames)
                     : RegionFade{};
 
+            float* peak =
+                track_peaks && v.track < WaveX::Mix::kNumTracks ? &track_peaks[v.track] : nullptr;
             for (size_t i = 0; i < block_size; ++i) {
                 if (i < start_offset)
                     continue;
@@ -805,8 +809,14 @@ class VoiceManager {
                 const float left = v.filter.Process(s.left);
                 const float right = stereo ? v.right_filter.Process(s.right) : left;
                 const float env = v.envelope.Process();
-                out_l[i] += left * env * left_gain;
-                out_r[i] += right * env * right_gain;
+                const float contribution_l = left * env * left_gain;
+                const float contribution_r = right * env * right_gain;
+                out_l[i] += contribution_l;
+                out_r[i] += contribution_r;
+                if (peak) {
+                    *peak = std::max(
+                        *peak, std::max(std::fabs(contribution_l), std::fabs(contribution_r)));
+                }
 
                 if (v.envelope.IsIdle()) {
                     v.state = VoiceState::Idle;

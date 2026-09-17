@@ -23,6 +23,9 @@ bool alive = true, respond = true;
 WaveX::Protocol::MixStateRequest request;
 std::array<WaveX::Protocol::MixStateMessage, 17> targets;
 uint16_t solo_mask = 0;
+bool meters_fresh = false;
+unsigned subscriptions = 0, unsubscriptions = 0;
+WaveX::Protocol::MixMetersMessage meters;
 uint32_t Tick() {
     return tick;
 }
@@ -63,6 +66,8 @@ class MixerPageTest : public ::testing::Test {
             initialized = true;
         }
         alive = respond = true;
+        meters_fresh = false;
+        subscriptions = unsubscriptions = 0;
         targets = {};
         request = {};
         wavex_ui::mixerSolo.Select(0xff);
@@ -103,7 +108,11 @@ bool inter_mcu_get_mix_state(WaveX::Protocol::MixStateMessage* out) {
 }
 esp_err_t inter_mcu_send_mix_op(uint8_t op, uint8_t track, uint16_t value) {
     using namespace WaveX::Protocol;
-    if (op == MIX_OP_SET_SOLO_MASK)
+    if (op == MIX_OP_SUB_METERS)
+        ++subscriptions;
+    else if (op == MIX_OP_UNSUB_METERS)
+        ++unsubscriptions;
+    else if (op == MIX_OP_SET_SOLO_MASK)
         solo_mask = value;
     else if (op == MIX_OP_SET_GAIN || op == MIX_OP_SET_MASTER)
         targets[Index(track)].gain = value;
@@ -187,4 +196,29 @@ TEST_F(MixerPageTest, UnchangedMixerSnapshotsDoNotRedrawAndExitDeletesTimer) {
     request = {};
     Advance(20);
     EXPECT_EQ(request.request_id, 0u);
+}
+
+bool inter_mcu_get_mix_meters(WaveX::Protocol::MixMetersMessage* out) {
+    *out = meters;
+    return meters_fresh;
+}
+TEST_F(MixerPageTest, MetersRenewWhileVisibleAndClearStaleLevels) {
+    meters_fresh = true;
+    meters = {};
+    meters.peak[0] = 100;
+    Advance(30);
+    EXPECT_GE(subscriptions, 2u);
+    std::vector<lv_obj_t*> bars;
+    Collect(page_->root(), &lv_bar_class, bars);
+    ASSERT_EQ(bars.size(), 8u);
+    EXPECT_EQ(lv_bar_get_value(bars[0]), 100);
+    EXPECT_EQ(lv_bar_get_value(bars[7]), 0);
+    meters_fresh = false;
+    Advance();
+    EXPECT_EQ(lv_bar_get_value(bars[0]), 0);
+    wavex_ui::UINavigator::instance().pop();
+    EXPECT_EQ(unsubscriptions, 1u);
+    const auto previous = subscriptions;
+    Advance(30);
+    EXPECT_EQ(subscriptions, previous);
 }

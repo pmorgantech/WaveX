@@ -133,3 +133,9 @@ void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage&
     ++cap.instrument_edit_calls;
     cap.instrument_edit = state;
 }
+
+void inter_mcu_store_mix_meters(const WaveX::Protocol::MixMetersMessage& message) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.mix_meter_calls;
+    cap.mix_meters = message;
+}

@@ -2,6 +2,7 @@
 
 #include "../config.hpp"
 #include "audio/master_gain.hpp"
+#include "audio/mix_meter_window.hpp"
 #include "audio/parameter_locks.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
@@ -160,11 +161,15 @@ static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 static WaveX::Mix::TrackMixer s_track_mixer;
 static MixerControlHandoff s_mixer_controls;
 
-// Meter subscription (MSG_MIX_OP SUB/UNSUB_METERS). Honoured as a flag now;
-// the MSG_MIX_METERS sender is stage 4 of output-routing-and-mixer.md §6, so
-// subscribing currently records intent and sends nothing.
 static MasterGain s_master_gain;
-static bool s_mix_meters_subscribed = false;
+// Foreground owns the lease, callback owns the window; snapshots cross back.
+static MixMeterSubscription s_mix_meter_subscription;
+static std::atomic<bool> s_mix_meters_active{false};
+static MixMeterWindow s_mix_meter_window;
+static bool s_callback_metering = false;
+static uint32_t s_mix_meter_sequence = 0, s_mix_meter_sent = 0;
+static SnapshotMailbox<MixMeterSnapshot> s_mix_meter_mailbox;
+static MixMeterSnapshot s_mix_meter_main;
 
 // Main-loop instrument/extras edits publish complete per-Track values. The
 // callback alone applies them to sounding voices; different Tracks retain
@@ -1875,6 +1880,13 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_track_mixer.Reset();
     s_mixer_controls.Init();
     s_master_gain.Init(sample_rate);
+    s_mix_meter_subscription.Unsubscribe();
+    s_mix_meters_active.store(false, std::memory_order_relaxed);
+    s_mix_meter_window.Init(static_cast<uint32_t>(sample_rate));
+    s_callback_metering = false;
+    s_mix_meter_sequence = s_mix_meter_sent = 0;
+    s_mix_meter_main = {};
+    s_mix_meter_mailbox.Init(s_mix_meter_main);
     s_track_mixer.SetSampleRate(sample_rate);
     s_voice_manager.SetTrackMixer(&s_track_mixer);
 
@@ -2129,6 +2141,11 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
             mod_slot_resolver, mod_global_sources, static_cast<uint32_t>(size));
     }
 
+    const bool metering = s_mix_meters_active.load(std::memory_order_relaxed);
+    if (metering != s_callback_metering) {
+        s_mix_meter_window.Reset();
+        s_callback_metering = metering;
+    }
     const uint8_t active_voices = s_voice_manager.ActiveVoiceCount();
 #if WAVEX_DEBUG_HARNESS_ENABLED
     // One relaxed store per block for the console's STATE verb; the main
@@ -2142,7 +2159,8 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         s_track_mixer.Tick(static_cast<uint32_t>(size));
         {
             PROFILE_SCOPE(voice_render);
-            s_voice_manager.Render(vm_l, vm_r, size);
+            s_voice_manager.Render(
+                vm_l, vm_r, size, metering ? s_mix_meter_window.Peaks() : nullptr);
         }
         for (size_t i = 0; i < size; ++i) {
             out[0][i] += vm_l[i];
@@ -2150,6 +2168,13 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         }
     }
 
+    if (metering && s_mix_meter_window.Advance(static_cast<uint32_t>(size))) {
+        MixMeterSnapshot snapshot;
+        snapshot.peaks = s_mix_meter_window.Values();
+        snapshot.sequence = ++s_mix_meter_sequence;
+        s_mix_meter_mailbox.Publish(snapshot);
+        s_mix_meter_window.Reset();
+    }
     s_master_gain.SetTarget(s_track_mixer.MasterGain());
 
     // Compute post-master per-block meters
@@ -2234,7 +2259,11 @@ void OnMixStateRequest(const MixStateRequest& request) {
 
 void OnMixOp(const MixOpMessage& m) {
     if (m.op == MIX_OP_SUB_METERS || m.op == MIX_OP_UNSUB_METERS) {
-        s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);
+        if (m.op == MIX_OP_SUB_METERS)
+            s_mix_meter_subscription.Subscribe(System::GetNow());
+        else
+            s_mix_meter_subscription.Unsubscribe();
+        s_mix_meters_active.store(m.op == MIX_OP_SUB_METERS, std::memory_order_relaxed);
         return;
     }
     s_mixer_controls.Update(m);
@@ -2553,6 +2582,23 @@ void FinishCardFormat() {
     // Resident PCM remains owned by its Tracks, just as on card removal.
     // Save admission will reject the now-missing on-card dependencies.
     PublishSequencerVoiceMap();
+}
+
+void PumpMixMeters() {
+    const bool enabled = s_mix_meter_subscription.Enabled(System::GetNow());
+    s_mix_meters_active.store(enabled, std::memory_order_relaxed);
+    s_mix_meter_mailbox.ConsumeLatest(s_mix_meter_main);
+    if (!enabled) {
+        s_mix_meter_sent = s_mix_meter_main.sequence;
+        return;
+    }
+    if (s_mix_meter_main.sequence == s_mix_meter_sent)
+        return;
+    MixMetersMessage message;
+    for (uint8_t track = 0; track < Mix::kNumTracks; ++track)
+        message.peak[track] = Mix::PeakToMeterByte(s_mix_meter_main.peaks[track]);
+    if (WaveX::Comm::LinkSend(MSG_MIX_METERS, &message, sizeof(message)) >= 0)
+        s_mix_meter_sent = s_mix_meter_main.sequence;
 }
 
 void PumpSequencerState() {

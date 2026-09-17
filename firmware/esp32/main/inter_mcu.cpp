@@ -1530,6 +1530,10 @@ bool inter_mcu_get_pad_sound(WaveX::Protocol::InstPadSoundSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_mix_meters_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::MixMetersMessage s_mix_meters;
+int64_t s_mix_meters_at = 0;
+bool s_mix_meters_valid = false;
 portMUX_TYPE s_mix_state_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::MixStateMessage s_mix_state;
 bool s_mix_state_valid = false;
@@ -1546,6 +1550,25 @@ esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message) 
         (message.op == MIX_OP_SET_MUTE && message.value > 1))
         return ESP_ERR_INVALID_ARG;
     return send_link_message(MSG_MIX_OP, &message, sizeof(message)) >= 0 ? ESP_OK : ESP_FAIL;
+}
+void inter_mcu_store_mix_meters(const WaveX::Protocol::MixMetersMessage& meters) {
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_mix_meters_lock);
+    s_mix_meters = meters;
+    s_mix_meters_at = now;
+    s_mix_meters_valid = true;
+    taskEXIT_CRITICAL(&s_mix_meters_lock);
+}
+bool inter_mcu_get_mix_meters(WaveX::Protocol::MixMetersMessage* out) {
+    if (!out)
+        return false;
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_mix_meters_lock);
+    const bool valid = s_mix_meters_valid && now - s_mix_meters_at < 200000;
+    if (valid)
+        *out = s_mix_meters;
+    taskEXIT_CRITICAL(&s_mix_meters_lock);
+    return valid;
 }
 esp_err_t inter_mcu_request_mix_state(const WaveX::Protocol::MixStateRequest& request) {
     if (!request.request_id ||

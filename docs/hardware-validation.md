@@ -192,7 +192,15 @@ headphones and scope/audio capture; DWT and underrun telemetry available.
 - [ ] Confirm controls show external edits, are disabled after link loss/stale
   replies, and recover on reconnect. Reopen repeatedly during playback; record
   UI stack/heap headroom and redraw cost. Steady targets cause no continuous
-  strip redraw. Per-Track meters are still pending implementation.
+  strip redraw.
+- [ ] Play a short transient on Tracks 1 and 16 and a right-only stereo sample.
+  Check the matching peak bars, gain/pan/mute effects and page switching.
+  Master gain changes the master meters while Track activity remains pre-master.
+  Open/close Mixer while counting 0x79 packets: approximately 25 Hz when open,
+  zero after exit; unplug/reboot the frontend and verify the lease stops sends
+  within three seconds. Stale UI bars clear rather than freezing.
+- [ ] Repeat the DWT comparison below with meter capture both on and off.
+  Record the added cost at the supported maximum mono/stereo voice workload.
 - [ ] While voices and browser audition play, sweep master from silence to
   unity to +6 dB. Both sides follow; unity preserves the prior level and zero
   becomes silent after 5 ms. Meter levels follow the post-master output.

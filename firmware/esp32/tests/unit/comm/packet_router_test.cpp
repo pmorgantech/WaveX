@@ -771,3 +771,17 @@ TEST_F(PacketRouterTest, LfoSnapshotsAcceptPaddedFramesAndRejectTruncatedUart) {
     router_->route_uart_message(MSG_INST_LFO_SYNC, bytes, sizeof(state), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().instrument_lfo_calls, 2);
 }
+
+TEST_F(PacketRouterTest, MixerMetersRequireTheCompletePayload) {
+    MixMetersMessage meters;
+    meters.peak[0] = 17;
+    meters.peak[15] = 255;
+    router_->route_uart_message(
+        MSG_MIX_METERS, reinterpret_cast<uint8_t*>(&meters), sizeof(meters) - 1, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().mix_meter_calls, 0);
+    router_->route_uart_message(
+        MSG_MIX_METERS, reinterpret_cast<uint8_t*>(&meters), sizeof(meters), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().mix_meter_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().mix_meters.peak[0], 17);
+    EXPECT_EQ(GetInterMcuCapture().mix_meters.peak[15], 255);
+}

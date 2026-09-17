@@ -1,11 +1,12 @@
 # Output Routing & Mixer — Design
 
-**Status**: Partially implemented. The engine Track mix/handoff and control
-protocol exist. Project (the former Performance/Track root) now exposes selected-Track
-level, pan/balance and mute with authoritative readback, alongside Instrument assignment and
-MIDI routing. The master now applies to the final stereo sum with a 5 ms ramp; its
-accepted target has correlated readback. The paged strip view is implemented; per-Track meters remain open; sections below retain their target-design
-role. See [UI architecture](../ui-architecture.md#project-page). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
+**Status:** Mixer v1 controls and subscribed meters are implemented and
+host/compile tested. Project retains selected-Track controls; Mixer provides
+eight strips per page plus master, authoritative gain/pan/mute readback and
+shared Sequencer Solo. Hardware touch, click, DWT and soak checks remain open
+in [HV-006](../hardware-validation.md#hv-006--mixer-controls-and-master).
+Stage B routing and send effects below remain target design. Mixer is Phase
+2/2.5; routing follows the Phase 3/5 hardware and effects gates.
 **Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.4, done), Stage B TDM path (Phase 3) for physical multi-out.
 **Lineage**: E-mu presets routed to main/sub outputs per preset — the studio workflow was stems-per-instrument. Stage B's per-voice analog outs recreate that physically; the mixer here is the digital control layer over both stages.
 
@@ -13,17 +14,11 @@ role. See [UI architecture](../ui-architecture.md#project-page). Mixer v1 is Pha
 
 ## 1. Mixer v1 (Stage A — everything sums to SAI1 stereo)
 
-Per instrument slot (= track), engine-side state applied as block-rate multipliers in the voice render sum:
-
-```cpp
-struct TrackMix {           // ×16, engine-global, control-tick applied
-    float   gain = 1.0f;    // post-voice, pre-master; UI in dB (−inf..+6)
-    float   pan_offset = 0.0f;  // −1..+1 added onto voice pan
-    uint8_t mute = 0;       // soft mute: 5 ms gain ramp, not a hard cut (no clicks)
-    uint8_t solo = 0;       // solo bus logic on the ESP32 side → emitted as mutes
-};
-+ master: float master_gain; (PARAM_VOLUME aliases the same target)
-```
+Each Track has gain, pan/balance and manual mute targets in
+[`TrackMix`](../../firmware/shared/audio/track_mix.hpp). The Daisy foreground
+owns accepted targets; an immutable handoff updates the callback-owned mixer.
+Solo remains a separate, temporary UI selection. The same handoff owns master
+gain; `PARAM_VOLUME` aliases that target.
 
 - Stereo-aware placement: Instrument and Track gains multiply. Instrument/zone
   pan, modulation and Track offset form one clamped position; mono uses linear
@@ -35,7 +30,8 @@ struct TrackMix {           // ×16, engine-global, control-tick applied
   Solo exclusion with user mutes; manual mute wins. Clearing Solo restores
   current user mute targets, including edits made while soloed. Readback and
   Project storage use user mutes, never the temporary Solo exclusions.
-- Mute ramps ride the slew engine (`scenes-and-performance.md` §3) — one mechanism.
+- Track mute uses the existing 5 ms block-rate ramp in `TrackMixer`;
+  Scene morphing remains future work.
 
 Master gain is callback-owned and applied after audition and voice summation,
 before the existing stereo meters. Both channels use the same sample gain.
@@ -48,9 +44,23 @@ Hardware click checks and DWT timing remain open in
 
 ## 2. Metering per track
 
-Extend meter flow, not cadence: `MSG_MIX_METERS` (0x79, D→E) `{uint8_t peak[16]}` — per-track peak, log-mapped to a byte, coalesced at the existing 20–50 ms meter cadence, sent only while the mixer page is open (`MSG_MIX_OP` subscribe/unsubscribe op — don't burn link bandwidth for a hidden page). Master stereo meters stay on `MSG_METER_PUSH` unchanged.
+`MSG_MIX_METERS` reports the strongest post-Track-gain/pan/mute voice
+contribution on either stereo side, before master gain. This is a Track
+activity peak, not the phase-dependent sum of polyphonic voices or a bus clip
+meter. The existing master stereo meters measure the actual final sum.
 
-Accumulation cost: per-voice |peak| max-tracking into its track's cell during render — one compare per block per voice, negligible.
+While subscribed, the callback holds each Track's peak across 40 ms windows,
+so a short transient is retained until publication. Fixed-size snapshots cross
+to the foreground, which performs the logarithmic byte mapping and sends at
+most one packet per window. Queue pressure coalesces to the newest window;
+no link or logarithmic work enters the callback. The per-sample peak update is
+fused into the existing voice traversal; its DWT cost remains unmeasured.
+
+The Mixer page renews its subscription once per second and unsubscribes on
+exit. A three-second backend lease stops capture/sending after a lost exit
+message or frontend reboot. The comm task caches whole meter snapshots under
+a short lock; only the UI timer changes bars. Stale data clears after 200 ms,
+and equal values do not invalidate the display.
 
 ## 3. Routing (Stage B and beyond)
 
@@ -60,7 +70,11 @@ Accumulation cost: per-voice |peak| max-tracking into its track's cell during re
 
 ## 4. Protocol & persistence
 
-`MSG_MIX_OP` (0x78, E→D): `{uint8_t op; uint8_t track; uint16_t value}` — ops SET_GAIN, SET_PAN, SET_MUTE, SET_MASTER, SUB_METERS, UNSUB_METERS. Small, idempotent, no bulk state (project load replays them). Round-trip + dispatch tests + doc rows, same commit. Mixer state persists in the project file (WXCF chunk, ESP-owned like scenes).
+The centralized [wire contract](inter-mcu-protocol.md) defines idempotent
+controls, separate mute/Solo masks, subscription and correlated Track/master
+readback. [Project persistence](project-persistence.md) includes Track mix and
+master targets in its codec; device session capture/restore remains open.
+Solo is transient and is not persisted as a mute set.
 
 ## 5. UI
 
@@ -68,7 +82,7 @@ Accumulation cost: per-voice |peak| max-tracking into its track's cell during re
 page switch covering all 16 Tracks. Faders commit on touch release; encoder
 fine adjustment, pan/balance, manual mute and single-Track Solo are available.
 Solo is shared with Sequencer and independent of manual mutes. Master stereo
-meters remain in the header; per-Track peak bars from 0x79 remain open. Follows `ui-architecture.md` deferred-update rules — meters land via the queued-update path, never direct LVGL writes from the comm task.
+meters remain in the header; each Track has a subscribed peak bar. Follows `ui-architecture.md` deferred-update rules — meters land via the queued-update path, never direct LVGL writes from the comm task.
 
 ## 6. Tests & stages
 

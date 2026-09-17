@@ -354,6 +354,8 @@ bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out);
 
 // Selected-Track gain/pan/manual mute; master and temporary Solo are separate.
 esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message);
+void inter_mcu_store_mix_meters(const WaveX::Protocol::MixMetersMessage& meters);
+bool inter_mcu_get_mix_meters(WaveX::Protocol::MixMetersMessage* out);
 esp_err_t inter_mcu_request_mix_state(const WaveX::Protocol::MixStateRequest& request);
 void inter_mcu_store_mix_state(const WaveX::Protocol::MixStateMessage& state);
 bool inter_mcu_get_mix_state(WaveX::Protocol::MixStateMessage* out);

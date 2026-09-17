@@ -24,6 +24,7 @@ class UIMixerPage : public UIPage {
         lv_obj_t* title = nullptr;
         lv_obj_t* slider = nullptr;
         lv_obj_t* level = nullptr;
+        lv_obj_t* meter = nullptr;
         lv_obj_t* pan = nullptr;
         lv_obj_t* pan_label = nullptr;
         lv_obj_t* mute = nullptr;
@@ -34,7 +35,7 @@ class UIMixerPage : public UIPage {
     lv_timer_t* timer_ = nullptr;
     uint8_t first_ = 0, selected_ = 0, poll_ = 0;
     bool pan_focus_ = false, alive_ = false, pending_ = false, solo_sync_ = false;
-    uint32_t sent_at_ = 0, soft_state_ = UINT32_MAX;
+    uint32_t sent_at_ = 0, meter_sub_at_ = 0, soft_state_ = UINT32_MAX;
     uint8_t track(uint8_t index) const;
     void reset();
     void service();

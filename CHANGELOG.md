@@ -13,10 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Mixer Track peak bars now use 40 ms peak-hold snapshots with a renewable
+  subscription, three-second backend timeout and stale-display clearing.
+  Meter capture and UI lifecycle are host-tested; DWT/link/soak checks remain
+  open in HV-006.
+
 - Added a paged Mixer with eight Track strips plus master, touch faders,
   encoder level/pan adjustment, manual mute and shared Sequencer Solo.
   Correlated engine readback guards edits; link loss disables controls.
-  Per-Track peak meters remain pending; physical checks are tracked in HV-006.
+  Physical checks are tracked in HV-006.
 
 - Added Project-owned Instrument snapshot export, sharing WXI sample and
   free-space admission while preserving the live Instrument's name, editor

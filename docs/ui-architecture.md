@@ -259,8 +259,6 @@ resident-sample assignment, audition, choke, a name keyboard and new-copy
 saves. Both pages consume synchronized backend snapshots on UI timers.
 Their touch workflows do not require physical panel wiring.
 
-<a id="performance-page"></a>
-
 ## Mixer page
 
 Mixer is available from the main menu and the logical Mixer jump key. It shows
@@ -277,9 +275,12 @@ strip until its reply; timed-out, stale and disconnected state cannot authorize
 edits. Widget setters run on the UI timer and skip unchanged values. Page exit
 deletes that timer and every widget. Solo has one UI-domain selection shared
 with Sequencer, survives navigation, and never replaces stored manual mutes.
-Per-Track peak telemetry remains the next increment; no placeholder meters are
-shown. Rendering/touch and callback timing need
+Per-Track peak bars consume whole cached snapshots at the UI timer cadence.
+The page renews a meter lease every second and unsubscribes on exit; stale
+data clears, and unchanged levels do not redraw. Rendering/touch and callback timing need
 [HV-006](hardware-validation.md#hv-006--mixer-controls-and-master).
+
+<a id="performance-page"></a>
 
 ## Project page
 

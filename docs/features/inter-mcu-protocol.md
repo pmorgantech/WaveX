@@ -119,7 +119,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` changes user mutes; `SET_SOLO_MASK` (op 0x08) selects audible Tracks without changing those mutes, with zero disabling Solo. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_STATE_REQ | 0x7B | E→D | `MixStateRequest` | correlated mixer read; nonzero request id and Track 0–15, or 0xFF for master gain |
 | MSG_MIX_STATE | 0x7C | D→E | `MixStateMessage` | matching identity, validity, gain/pan in existing mixer wire units and mute target; foreground accepted state, applied through the existing block-boundary handoff; no ramp telemetry; master replies use pan=32768 and mute=0 |
-| MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
+| MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | strongest post-strip voice peak on either side (pre-master), log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. 40 ms peak-hold windows; only while subscribed. `SUB_METERS` renews a three-second lease, `UNSUB_METERS` ends it; master stereo meters stay on MSG_METER_PUSH |
 | MSG_ERROR | 0xFF | both | `ErrorMessage{code, msg[48]}` | error report |
 
 ## 4. Conventions & invariants

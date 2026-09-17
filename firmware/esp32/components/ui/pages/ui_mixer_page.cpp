@@ -100,6 +100,14 @@ void UIMixerPage::onEnter(lv_obj_t* parent) {
         lv_obj_set_style_text_align(strip.level, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_pos(strip.level, 0, UI_MIX_LEVEL_TOP - UI_MIX_BUTTON_HEIGHT);
         if (i != 8) {
+            strip.meter = lv_bar_create(strip.card);
+            lv_obj_set_pos(strip.meter,
+                           width - UI_PADDING_LARGE - UI_GUTTER,
+                           UI_MIX_FADER_TOP - UI_MIX_BUTTON_HEIGHT);
+            lv_obj_set_size(strip.meter, UI_GUTTER, UI_MIX_FADER_HEIGHT);
+            lv_bar_set_range(strip.meter, 0, 255);
+            lv_obj_set_style_bg_color(strip.meter, UI_COLOR_CARD_ALT, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(strip.meter, UI_COLOR_OK, LV_PART_INDICATOR);
             strip.pan = button(UI_MIX_PAN_TOP, "Center", &strip.pan_label);
             strip.mute = button(UI_MIX_MUTE_TOP, "Mute", nullptr);
             strip.solo = button(UI_MIX_SOLO_TOP, "Solo", nullptr);
@@ -110,11 +118,13 @@ void UIMixerPage::onEnter(lv_obj_t* parent) {
     pan_focus_ = false;
     alive_ = inter_mcu_backend_link_alive();
     solo_sync_ = true;
+    meter_sub_at_ = lv_tick_get() - 1000;
     reset();
     timer_ = lv_timer_create(tick, 50, this);
     service();
 }
 void UIMixerPage::onExit() {
+    inter_mcu_send_mix_op(MIX_OP_UNSUB_METERS, 0, 0);
     if (timer_)
         lv_timer_delete(timer_);
     timer_ = nullptr;
@@ -147,11 +157,15 @@ void UIMixerPage::service() {
     if (alive_ != alive) {
         alive_ = alive;
         solo_sync_ = true;
+        meter_sub_at_ = lv_tick_get() - 1000;
         reset();
     }
     if (alive_ && solo_sync_ &&
         inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, mixerSolo.Mask()) == ESP_OK)
         solo_sync_ = false;
+    if (alive_ && lv_tick_elaps(meter_sub_at_) >= 1000 &&
+        inter_mcu_send_mix_op(MIX_OP_SUB_METERS, 0, 0) == ESP_OK)
+        meter_sub_at_ = lv_tick_get();
     MixStateMessage reply;
     if (pending_ && inter_mcu_get_mix_state(&reply) && strips_[poll_].model.Accept(reply)) {
         strips_[poll_].accepted_at = lv_tick_get();
@@ -268,6 +282,8 @@ void UIMixerPage::render() {
     if (!root_)
         return;
     char value[48];
+    MixMetersMessage meters;
+    const bool have_meters = alive_ && inter_mcu_get_mix_meters(&meters);
     for (uint8_t i = 0; i < strips_.size(); ++i) {
         auto& strip = strips_[i];
         const auto& model = strip.model;
@@ -296,6 +312,9 @@ void UIMixerPage::render() {
             lv_obj_set_style_border_color(strip.card, border, 0);
         if (i == 8)
             continue;
+        const int peak = have_meters ? meters.peak[track(i)] : 0;
+        if (lv_bar_get_value(strip.meter) != peak)
+            lv_bar_set_value(strip.meter, peak, LV_ANIM_OFF);
         if (!valid)
             std::snprintf(value, sizeof(value), "--");
         else {
