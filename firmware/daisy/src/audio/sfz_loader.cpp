@@ -126,6 +126,9 @@ static Sfz::SampleProbe s_probes[kMaxInstrumentZones];
 static char s_line[Sfz::kMaxLine];
 static FIL s_file;
 static bool s_file_open = false;
+static bool s_project_snapshot = false;
+static uint8_t s_snapshot_error = INST_ERROR_NONE;
+static char s_snapshot_path[Protocol::BROWSE_PATH_MAX]{};
 static uint32_t s_line_number = 0;
 static uint8_t s_index = 0;
 static uint8_t s_allocated = 0;
@@ -238,6 +241,12 @@ void AbandonLoad(SamplePool* pool, SampleMemMgr* memory) {
 void Fail(SamplePool* pool, SampleMemMgr* memory, uint8_t error) {
     CloseFile();
     AbandonLoad(pool, memory);
+    if (s_project_snapshot) {
+        s_snapshot_error = error;
+        s_project_snapshot = false;
+        s_phase = Phase::Idle;
+        return;
+    }
     SendStatus(INST_STATUS_FAILED, error);
     s_phase = Phase::Idle;
 }
@@ -651,6 +660,12 @@ void FinishKey(uint8_t error = INST_ERROR_NONE) {
     QueueKeyReply(s_key_request.request_id, s_key_request.track, 0, s_key_request.oscillator);
 }
 void FinishEdit(uint8_t error = INST_ERROR_NONE) {
+    if (s_project_snapshot) {
+        s_snapshot_error = error;
+        s_project_snapshot = false;
+        s_phase = Phase::Idle;
+        return;
+    }
     s_edit_completed[s_request.slot] = s_request.request_id;
     s_edit_error[s_request.slot] = error;
     s_phase = Phase::Idle;
@@ -675,13 +690,15 @@ bool WxiWriteCb(void* user, const void* source, size_t bytes) {
 }
 uint8_t PrepareSave(SamplePool& pool) {
     auto& ins = s_bank->At(s_request.slot).instrument;
-    if (ins.origin == InstrumentOrigin::None || !IsValidInstrumentName(s_request.path))
+    if (ins.origin == InstrumentOrigin::None ||
+        (!s_project_snapshot && !IsValidInstrumentName(s_request.path)))
         return INST_ERROR_BAD_FILE;
     s_doc_storage.Reconstruct();
     auto& doc = s_doc_storage.Get();
     if (!InstrumentMap::ToFile(ins, {&pool, SaveSamplePath}, doc))
         return INST_ERROR_MISSING_SAMPLES;
-    Protocol::detail::CopyWireString(doc.name, sizeof(doc.name), s_request.path);
+    if (!s_project_snapshot)
+        Protocol::detail::CopyWireString(doc.name, sizeof(doc.name), s_request.path);
     s_index = 0;
     s_phase = Phase::ProbeSaveSample;
     return INST_ERROR_NONE;
@@ -725,20 +742,25 @@ uint8_t SaveCopy() {
     const auto space = Storage::CheckSaveSpace(Wxi::detail::TotalFileSize(doc));
     if (space != Storage::SaveSpace::Ready)
         return space == Storage::SaveSpace::Full ? INST_ERROR_NO_SPACE : INST_ERROR_IO;
-    const FRESULT root = f_mkdir("0:/wavex");
-    if (root != FR_OK && root != FR_EXIST)
-        return INST_ERROR_IO;
-    const FRESULT dir = f_mkdir("0:/wavex/instruments");
-    if (dir != FR_OK && dir != FR_EXIST)
-        return INST_ERROR_IO;
-    char destination[96], temporary[112];
-    std::snprintf(destination, sizeof(destination), "0:/wavex/instruments/%s.wxi", doc.name);
-    // A per-request temp avoids truncating an earlier incomplete save.
-    std::snprintf(temporary,
-                  sizeof(temporary),
-                  "0:/wavex/instruments/.%s-%08lx.tmp",
-                  doc.name,
-                  static_cast<unsigned long>(s_request.request_id));
+    char destination[Protocol::BROWSE_PATH_MAX], temporary[Protocol::BROWSE_PATH_MAX + 16];
+    if (s_project_snapshot) {
+        Protocol::detail::CopyWireString(destination, sizeof(destination), s_snapshot_path);
+        std::snprintf(temporary, sizeof(temporary), "%s.tmp", destination);
+    } else {
+        const FRESULT root = f_mkdir("0:/wavex");
+        if (root != FR_OK && root != FR_EXIST)
+            return INST_ERROR_IO;
+        const FRESULT dir = f_mkdir("0:/wavex/instruments");
+        if (dir != FR_OK && dir != FR_EXIST)
+            return INST_ERROR_IO;
+        std::snprintf(destination, sizeof(destination), "0:/wavex/instruments/%s.wxi", doc.name);
+        // A per-request temp avoids truncating an earlier incomplete save.
+        std::snprintf(temporary,
+                      sizeof(temporary),
+                      "0:/wavex/instruments/.%s-%08lx.tmp",
+                      doc.name,
+                      static_cast<unsigned long>(s_request.request_id));
+    }
     FILINFO info{};
     const FRESULT found = f_stat(destination, &info);
     if (found == FR_OK)
@@ -762,15 +784,19 @@ uint8_t SaveCopy() {
         f_unlink(temporary);
         return renamed == FR_EXIST ? INST_ERROR_EXISTS : INST_ERROR_IO;
     }
-    Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), doc.name);
-    s_sound_undo[s_request.slot].Apply();
-    BumpKeyRevision(s_request.slot);
+    if (!s_project_snapshot) {
+        Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), doc.name);
+        s_sound_undo[s_request.slot].Apply();
+        BumpKeyRevision(s_request.slot);
+    }
     return INST_ERROR_NONE;
 }
 
 }  // namespace
 
 void Reset() {
+    s_project_snapshot = false;
+    s_snapshot_error = INST_ERROR_NONE;
     CloseFile();
     s_zone_pending = false;
     s_sound_pending = false;
@@ -800,6 +826,26 @@ void Reset() {
         ls = LoadedSample{};
     }
     s_phase = Phase::Idle;
+}
+
+bool BeginProjectSnapshot(uint8_t track, const char* destination) {
+    if (Busy() || track >= kNumTracks || !destination || !TrackLoaded(track))
+        return false;
+    constexpr char prefix[] = "0:/wavex/projects/";
+    const size_t length = strnlen(destination, sizeof(s_snapshot_path));
+    if (length == sizeof(s_snapshot_path) || length <= sizeof(prefix) ||
+        std::strncmp(destination, prefix, sizeof(prefix) - 1) || std::strstr(destination, "..") ||
+        std::strchr(destination, '\\'))
+        return false;
+    Protocol::detail::CopyWireString(s_snapshot_path, sizeof(s_snapshot_path), destination);
+    s_request = InstOpMessage(0, track, INST_OP_SAVE, "");
+    s_snapshot_error = INST_ERROR_NONE;
+    s_project_snapshot = true;
+    s_phase = Phase::PrepareSave;
+    return true;
+}
+uint8_t ProjectSnapshotError() {
+    return s_snapshot_error;
 }
 
 bool Begin(const InstOpMessage& request) {

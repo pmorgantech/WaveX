@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added Project-owned Instrument snapshot export, sharing WXI sample and
+  free-space admission while preserving the live Instrument's name, editor
+  revision and Revert point. Session orchestration remains the next layer.
+
 - Added a cooperative Project SD file job with complete pre-write validation,
   exact free-space admission, checked new-copy publication, cancellation and
   private-scratch loading. This is the storage adapter for upcoming session

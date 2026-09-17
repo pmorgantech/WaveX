@@ -81,8 +81,13 @@ Instruments or provide a user-visible Project save/load operation.
 
 1. Reserve scratch and coordinate Pattern capture, Track edits and Instrument
    export under one foreground transaction owner.
-2. Snapshot unsaved Instrument edits to Project-owned WXI copies; references
-   alone do not preserve an edited live Instrument. Apply the same on-card WAV
+2. Connect Instrument snapshots to the session transaction. The loader's
+   `BeginProjectSnapshot` now exports a Project-owned WXI without renaming the
+   live Instrument, changing its editor revision, or consuming its Revert
+   point. Its parent directory must be owned/created by the session job. It
+   checks free space and on-card WAV dependencies, preserves existing files,
+   and returns an internal result without an unrelated editor completion.
+   References alone do not preserve an edited live Instrument. Apply the same on-card WAV
    format and per-sample admission preflight as
    [Instrument Save copy](instrument-model.md#5-persistence) before publishing
    snapshots; direct-load Pool residency does not prove recall admission.
@@ -99,6 +104,10 @@ Track mix/routing, Song references, bounded I/O, malformed/truncated files,
 unknown chunks, duplicate chunks, future major versions and write failures.
 They do not establish SD durability, atomic session replacement, audible
 continuity or power-loss recovery.
+
+Loader host tests also verify Project snapshots retain the live name, undo,
+revision and Sample Pool ownership, restore the edited sound into another
+Track, and reject full cards and samples outside recall admission.
 
 ## Related
 

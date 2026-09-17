@@ -343,6 +343,60 @@ TEST_F(SfzLoaderTest, FailedSaveNeverReplacesAnExistingCopy) {
     EXPECT_EQ(*fs.GetFile("0:/wavex/instruments/Saved.wxi"), original);
 }
 
+TEST_F(SfzLoaderTest, ProjectSnapshotPreservesLiveNameUndoAndEditorRevision) {
+    ASSERT_TRUE(Load(0));
+    const auto before = SfzLoader::ReadEditState(0);
+    InstEditOpMessage edit;
+    edit.request_id = 7000;
+    edit.revision = before.revision;
+    edit.op = INST_EDIT_FILTER;
+    edit.sound.cutoff_hz = 1234;
+    ASSERT_TRUE(SfzLoader::OnEditOp(edit));
+    const auto changed = SfzLoader::ReadEditState(0);
+    ASSERT_TRUE(changed.dirty);
+    const auto sample = SampleId("/kits/a.wav");
+    const auto mask = pool_.Find(sample)->used_by;
+    const char* path = "0:/wavex/projects/Session/track01.wxi";
+    ASSERT_TRUE(SfzLoader::BeginProjectSnapshot(0, path));
+    for (int i = 0; i < 1000 && SfzLoader::Busy(); ++i)
+        SfzLoader::Pump(pool_, memory_, io_.data(), io_.size());
+    ASSERT_FALSE(SfzLoader::Busy());
+    EXPECT_EQ(SfzLoader::ProjectSnapshotError(), INST_ERROR_NONE);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "kit.sfz");
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, changed.revision);
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    EXPECT_EQ(pool_.Find(sample)->used_by, mask);
+    ASSERT_TRUE(SfzLoader::Load(path, 1, pool_, memory_, io_.data(), io_.size()));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(1).sound.cutoff_hz, 1234);
+    EXPECT_STREQ(SfzLoader::TrackName(1), "kit.sfz");
+    edit.request_id++;
+    edit.revision = changed.revision;
+    edit.op = INST_EDIT_REVERT;
+    EXPECT_TRUE(SfzLoader::OnEditOp(edit));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.cutoff_hz, before.sound.cutoff_hz);
+}
+
+TEST_F(SfzLoaderTest, ProjectSnapshotRefusesFullCardAndUnadmittedDependencies) {
+    ASSERT_TRUE(Load(0));
+    auto& fs = MockFatFS::Instance();
+    const char* path = "0:/wavex/projects/Session/track01.wxi";
+    fs.free_clusters = 0;
+    ASSERT_TRUE(SfzLoader::BeginProjectSnapshot(0, path));
+    for (int i = 0; i < 1000 && SfzLoader::Busy(); ++i)
+        SfzLoader::Pump(pool_, memory_, io_.data(), io_.size());
+    EXPECT_EQ(SfzLoader::ProjectSnapshotError(), INST_ERROR_NO_SPACE);
+    EXPECT_EQ(fs.GetFile(path), nullptr);
+    fs.free_clusters = 1024 * 1024;
+    fs.AddFile("/kits/a.wav", PcmWave(WAVEX_INST_MAX_RAM_SAMPLE_BYTES + 2));
+    ASSERT_TRUE(SfzLoader::BeginProjectSnapshot(0, path));
+    for (int i = 0; i < 1000 && SfzLoader::Busy(); ++i)
+        SfzLoader::Pump(pool_, memory_, io_.data(), io_.size());
+    EXPECT_EQ(SfzLoader::ProjectSnapshotError(), INST_ERROR_UNSUPPORTED_SAMPLE);
+    EXPECT_EQ(fs.GetFile(path), nullptr);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    EXPECT_FALSE(SfzLoader::BeginProjectSnapshot(0, "0:/wavex/projects/../escape.wxi"));
+}
+
 TEST_F(SfzLoaderTest, SaveRejectsOversizedResidentDependencyAndPreservesTrackAndUndo) {
     AddResidentWave("/kits/large.wav", WAVEX_INST_MAX_RAM_SAMPLE_BYTES + 2);
     const auto sample = SampleId("/kits/large.wav");

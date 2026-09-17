@@ -31,6 +31,11 @@ void Reset();
 bool Begin(const WaveX::Protocol::InstOpMessage& request);
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
+// Project-owned WXI copy. Uses normal sample admission, but does not rename
+// the live Instrument, apply its undo point, or emit an editor completion.
+// Parent directory must already exist; destination is never overwritten.
+bool BeginProjectSnapshot(uint8_t track, const char* destination);
+uint8_t ProjectSnapshotError();  // meaningful after Busy() becomes false
 // Returns true only for a newly applied edit; caller republishes that Track.
 WaveX::Protocol::InstOscSyncMessage ReadOscState(uint8_t track, uint8_t oscillator);
 WaveX::Protocol::InstEditSyncMessage ReadEditState(uint8_t track);
