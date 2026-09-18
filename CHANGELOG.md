@@ -14,7 +14,7 @@ versioning and release process.
 ### Added
 
 - ESP32 display bring-up for Waveshare 8-DSI-TOUCH-A using the existing
-  JD9365/GT911 BSP stack: RGB888, PPA-rotated 1280×800 landscape, PSRAM draw
+  JD9365/GT911 BSP stack: RGB565, PPA-rotated 1280×800 landscape, PSRAM draw
   buffers and updated UI geometry. The current partial-flush path is not
   tear-free; panel/touch/brightness verification and ten-contact support
   remain open in the roadmap.
@@ -495,6 +495,10 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Use RGB565 for the 8-inch display after RGB888 produced a stable scrambled
+  physical image despite a clean UI snapshot. The same panel geometry, PPA
+  rotation and timing rendered correctly in the RGB565 hardware comparison.
 
 - Opening the Instrument LFO tab no longer accesses a missing unit widget;
   Rate updates the tile description used for its Hz/note label. Found by the

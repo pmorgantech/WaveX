@@ -20,13 +20,13 @@ override them.
 
 ## The concrete facts worth holding in your head
 
-- **LVGL 9.5.0**, ESP-IDF 5.5, RGB888 (`CONFIG_LV_COLOR_DEPTH=24`), pinned via
+- **LVGL 9.5.0**, ESP-IDF 5.5, RGB565 (`CONFIG_LV_COLOR_DEPTH=16`), pinned via
   `main/idf_component.yml` (`>=9.4,<10`) and resolved in
   `firmware/esp32/dependencies.lock`.
 - 8-DSI-TOUCH-A, JD9365 800×1280 MIPI-DSI panel, PPA-rotated 90° to 1280×800 landscape
   (`lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` +
   `.flags.sw_rotate = true`, `display_manager.cpp`). The port uses two partial PSRAM draw buffers (`buffer_size = BSP_LCD_H_RES * 20`)
-  and PPA scratch. Two RGB888 DPI buffers are allocated, but the current partial
+  and PPA scratch. Two RGB565 DPI buffers are allocated, but the current partial
   flush path does not page-flip or guarantee tear-free output. The BSP disables
   rotation when tear avoidance is enabled; do not combine those modes.
 - Fixed chrome: 64 px header + 3 px rule + 96 px, 6-button softkey bar → **1280×637 px**

@@ -86,7 +86,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
 | HV-016 | Bank SD transactions and Track recall | Partial | Sparse Bank HIL passed 2026-09-18; full-Bank, DWT, MIDI timing and failure/recovery gates remain open |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
-| HV-018 | 8-inch display bring-up | Failed (startup) | Flash verified 2026-09-18; blank panel, CPU waiting for DSI read completion |
+| HV-018 | 8-inch display bring-up | Partial | RGB565 restored visible UI, confirmed by user 2026-09-18; touch/brightness/load checks remain open |
 
 ## HV-001 — SD card formatting
 
@@ -912,7 +912,7 @@ No hardware result is claimed by the host tests.
 **Setup:** ESP32-P4 with the attached 8-DSI-TOUCH-A panel, USB flash and
 console connections; paired Daisy for playback/load checks.
 
-- [ ] **018a — Flash and boot:** Build and flash the ESP32 debug image using
+- [x] **018a — Flash and boot:** Build and flash the ESP32 debug image using
   [flashing.md](flashing.md). Capture the console and a UI screenshot.
   **Pass:** Flash verification succeeds, panel/touch initialization succeeds,
   the UI starts without a panic, and the screenshot is 1280×800.
@@ -931,7 +931,7 @@ console connections; paired Daisy for playback/load checks.
   audio underruns; record any tearing separately. Partial flushes do not
   establish tear-free scanout or close the full phase gate.
 
-**Latest run:** 2026-09-18, ESP32 debug build from `f63e590` (display code
+**Initial run:** 2026-09-18, ESP32 debug build from `f63e590` (display code
 unchanged by the subsequent documentation reconciliation in `1d5834b`),
 firmware version 0.5.0. App SHA-256:
 `25882810257a453cf78563a9cd0bc2d7e04141ec72513b0baa8087484fd5f7bc`;
@@ -958,6 +958,38 @@ no audio result is claimed.
   **Follow-up:** Confirm separate panel power and ribbon seating/orientation,
   power-cycle, then repeat startup. Investigate reset/read behavior if the DSI
   wait persists. Touch, brightness, rendering and audio/load cases remain open.
+
+**Same-day follow-up:** The user found the ribbon connected to the camera
+connector. Moving it to the display connector restored startup without a
+firmware change: JD9365 ID `93 65 04`, GT9271 identification and UI initialization
+all succeeded. This resolves the original read-busy blocker. **018a passed**:
+`logs/display-correct-port-20260918.png` is a clean 1280×800 Main Menu snapshot.
+The user reports a stable scrambled physical image that changes slightly with
+touch; **018b remains failed**. A blue screen during debugger/reset diagnostics
+returned to scrambling after a normal restart.
+
+Live driver inspection confirmed native 800×1280, 24-bit RGB888 input/output,
+two framebuffers and 90-degree rotation. A full framebuffer debugger dump timed
+out and is not usable pixel evidence; the board was reset to restore execution.
+An isolated RGB565 diagnostic build retained the same geometry, rotation and
+timing. Neither the clean RGB888 snapshot nor touch response validated physical
+rendering or touch accuracy.
+
+**RGB565 result, 2026-09-18:** The diagnostic build and USB-JTAG app flash
+passed; the user confirmed the physical display now works. The image was built
+from `a123f96` with an external RGB565 SDK configuration (16-bit LVGL and BSP
+colour format), app SHA-256
+`5f3ef236d41adfa9bee0db280865331215afe7ce9e6ba8fb3f2a570d1160d5a7`.
+RGB565 is now selected in both tracked SDK configuration files. The comparison
+isolates the failure to the RGB888 path but does not establish the specific
+driver, PPA or scanout cause. **018b is partial:** readable physical output is
+confirmed; corner accuracy, colours/edges and multi-contact release tests remain
+open, as do brightness/wake and load/soak checks.
+
+Local evidence: `logs/display-rgb565-build.log`,
+`logs/display-rgb565-flash.log`, `logs/display-rgb565-boot-20260918.log`,
+`logs/display-rgb565-working-20260918.png`. The original RGB888 image is retained
+in `logs/display-rgb888-baseline/` for a controlled future comparison.
 
 ## Recording a validation session
 

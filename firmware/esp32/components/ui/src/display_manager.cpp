@@ -266,8 +266,8 @@ esp_err_t DisplayManager::initLvglDisplay() {
              esp_get_minimum_free_heap_size());
     log_dma_heap("before display init");
 
-    // RGB888 is supported by the port with buff_dma=false; the flag selects
-    // LVGL allocation capabilities, not whether DPI/DMA2D uses DMA. Keep the
+    // Keep RGB565 draw buffers in PSRAM; buff_dma selects LVGL allocation
+    // capabilities, not whether DPI/DMA2D uses DMA. Keep the
     // two partial draw buffers and aligned PPA scratch in PSRAM. The BSP owns
     // the separate DPI framebuffers; these partial flushes do not page-flip.
     ESP_LOGI(TAG,

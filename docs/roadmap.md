@@ -328,7 +328,7 @@ choice and measure ring low-water and service latency.
   The display adds 80 pixels of height. Evaluate content space below the
   title/status bar, page tabs and soft-buttons on the real panel.
 
-The 8-DSI-TOUCH-A migration selects the JD9365 BSP profile, RGB888, PPA
+The 8-DSI-TOUCH-A migration selects the JD9365 BSP profile, RGB565, PPA
 rotation and 1280×800 landscape geometry. It retains partial flushes and five
 touch pointers. Hardware acceptance remains open; compilation and host widget
 tests do not close the phase gate. Resolve tear-free landscape scanout and
