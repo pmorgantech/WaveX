@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Bank Manager → Shift → Slot tools copies or moves an occupied slot into a
+  new named Bank, with explicit source/destination and replacement confirmation.
+  Serialized Instrument extensions are preserved, every save checks free space,
+  and the original Bank, Tracks and Pool remain intact. Host checks cover slot
+  identity, cancellation and failure isolation. The two-board HIL extension is
+  ready but unrun with boards disconnected; physical validation remains HV-016.
+
 - MIDI Program Change recalls active-Bank slots into every enabled matching or
   Omni Track using one staged transaction and target-mask audio fence. Track
   mix/routing and non-target sounds remain unchanged; failed staging rolls back.

@@ -1840,6 +1840,13 @@ bool s_bank_valid = false;
 uint32_t s_bank_pool_changed = 0;
 uint8_t s_bank_pool_op = 0;
 }  // namespace
+esp_err_t inter_mcu_send_bank_slot_op(const WaveX::Protocol::BankSlotOpMessage& request) {
+    if (!WaveX::Protocol::IsValidBankSlotOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_BANK_SLOT_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage& request) {
     if (!WaveX::Protocol::IsValidBankOp(request))
         return ESP_ERR_INVALID_ARG;

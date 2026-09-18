@@ -417,6 +417,7 @@ void inter_mcu_store_sample_playhead(const WaveX::Protocol::SamplePlayheadMessag
 bool inter_mcu_get_sample_playhead(WaveX::Protocol::SamplePlayheadMessage* out);
 
 // Bank snapshots cross from the link task as one locked value.
+esp_err_t inter_mcu_send_bank_slot_op(const WaveX::Protocol::BankSlotOpMessage&);
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage&);
 void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage&);
 bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);

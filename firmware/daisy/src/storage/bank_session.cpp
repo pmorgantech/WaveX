@@ -8,6 +8,9 @@ using namespace Protocol;
 using namespace AudioEngine;
 using R = BankFileJob::Result;
 namespace {
+bool IsSlotTransfer(uint8_t op) {
+    return op == BANK_COPY_SLOT || op == BANK_MOVE_SLOT;
+}
 bool IsRecall(uint8_t op) {
     return op == BANK_RECALL || op == BANK_PROGRAM_RECALL;
 }
@@ -42,6 +45,18 @@ bool BankSession::Request(const BankOpMessage& request, bool external_busy) {
         return false;
     return BeginRequest(request, external_busy, static_cast<uint16_t>(1u << request.track));
 }
+bool BankSession::RequestSlotOperation(const BankSlotOpMessage& message, bool external_busy) {
+    if (!IsValidBankSlotOp(message))
+        return false;
+    BankOpMessage request;
+    request.request_id = message.request_id;
+    request.revision = message.revision;
+    request.op = message.op;
+    request.slot = message.destination_slot;
+    request.flags = message.flags;
+    std::memcpy(request.name, message.name, sizeof(request.name));
+    return BeginRequest(request, external_busy, 0, message.source_slot);
+}
 bool BankSession::ProgramChange(const MidiProgramMessage& message, bool external_busy) {
     if (!IsValidMidiProgram(message) || Busy() || external_busy)
         return false;  // never defer an event across storage/routing changes
@@ -69,7 +84,10 @@ bool BankSession::ProgramChange(const MidiProgramMessage& message, bool external
     request.track = source;
     return BeginRequest(request, false, targets);
 }
-bool BankSession::BeginRequest(const BankOpMessage& request, bool external_busy, uint16_t targets) {
+bool BankSession::BeginRequest(const BankOpMessage& request,
+                               bool external_busy,
+                               uint16_t targets,
+                               int source_slot) {
     status_.request_id = request.request_id;
     status_.slot = request.slot;
     status_.blocked = external_busy;
@@ -95,11 +113,19 @@ bool BankSession::BeginRequest(const BankOpMessage& request, bool external_busy,
         return reject(BANK_NO_BANK);
     if ((IsRecall(request.op) || request.op == BANK_CLEAR_COPY) && !status_.occupied)
         return reject(BANK_EMPTY_SLOT);
-    if ((request.op == BANK_RECALL || request.op == BANK_CLEAR_COPY ||
+    if (IsSlotTransfer(request.op)) {
+        if (source_slot == request.slot)
+            return reject(BANK_BAD_SLOT);
+        if (source_slot < 0 || !index_.slots[source_slot].used())
+            return reject(BANK_EMPTY_SLOT);
+    }
+    if ((request.op == BANK_MOVE_SLOT || (request.op == BANK_COPY_SLOT && status_.occupied) ||
+         request.op == BANK_RECALL || request.op == BANK_CLEAR_COPY ||
          (request.op == BANK_STORE_COPY && status_.occupied)) &&
         !(request.flags & BANK_CONFIRM_REPLACE))
         return reject(BANK_CONFIRM_REQUIRED);
     request_ = request;
+    source_slot_ = source_slot;
     recall_targets_ = targets;
     status_.busy = 1;
     status_.active_request_id = request.request_id;
@@ -176,6 +202,17 @@ void BankSession::Pump() {
                     break;
                 }
                 if (!file_.ReadInstrument(status_.name, request_.slot, candidate_->document)) {
+                    Finish(FileError());
+                    break;
+                }
+                phase_ = Phase::File;
+            } else if (IsSlotTransfer(request_.op)) {
+                if (!file_.TransferCopy(request_.name,
+                                        request_.request_id,
+                                        status_.name,
+                                        static_cast<uint8_t>(source_slot_),
+                                        request_.slot,
+                                        request_.op == BANK_MOVE_SLOT)) {
                     Finish(FileError());
                     break;
                 }

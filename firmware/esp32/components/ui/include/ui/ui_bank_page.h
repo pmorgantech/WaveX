@@ -29,6 +29,9 @@ class UIBankPage : public UIPage {
     void move(int delta);
     void send(uint8_t op);
     void cancel();
+    void markSource();
+    void slotTools(bool enabled);
+    bool canTransfer() const;
     lv_obj_t* input_ = nullptr;
     lv_obj_t* keyboard_ = nullptr;
     lv_obj_t* hint_ = nullptr;
@@ -37,7 +40,11 @@ class UIBankPage : public UIPage {
     WaveX::Protocol::BankStatusMessage status_{};
     uint32_t read_id_ = 0, pending_id_ = 0, requested_at_ = 0, pending_at_ = 0, received_at_ = 0,
              seen_read_id_ = 0;
-    bool alive_ = false, valid_ = false;
+    bool alive_ = false, valid_ = false, slot_tools_ = false;
+    int source_slot_ = -1;
+    uint32_t source_revision_ = 0;
+    char source_name_[24]{};
+    WaveX::Protocol::BankSlotOpMessage transfer_draft_;
     uint8_t confirm_ = 0, slot_ = 0;
     WaveX::Protocol::BankOpMessage draft_;
     char message_[192]{};

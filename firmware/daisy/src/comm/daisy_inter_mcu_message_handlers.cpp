@@ -139,6 +139,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 #endif
         return;
     }
+    if (msg_type == MSG_BANK_SLOT_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        BankSlotOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidBankSlotOp(request))
+                AudioEngine::OnBankSlotOp(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_BANK_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         BankOpMessage request;

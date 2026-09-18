@@ -1015,3 +1015,21 @@ TEST_F(MessageDispatchTest, MidiProgramValidatesAndReachesForegroundAdmission) {
     EXPECT_EQ(GetDispatchRecord().midi_programs[0].program, 127);
     EXPECT_EQ(GetDispatchRecord().midi_programs[0].channel, 15);
 }
+
+TEST_F(MessageDispatchTest, SlotTransferValidatesAndReachesBusyAdmission) {
+    BankSlotOpMessage request;
+    request.request_id = 1;
+    request.source_slot = 127;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&request);
+    for (size_t size = 0; size < sizeof(request); ++size)
+        ProcessInterMcuMessage(MSG_BANK_SLOT_OP, 1, bytes, size);
+    EXPECT_TRUE(GetDispatchRecord().bank_slot_ops.empty());
+    request.destination_slot = 128;
+    Dispatch(MSG_BANK_SLOT_OP, request);
+    EXPECT_TRUE(GetDispatchRecord().bank_slot_ops.empty());
+    request.destination_slot = 0;
+    GetDispatchRecord().bank_busy = true;
+    Dispatch(MSG_BANK_SLOT_OP, request);
+    ASSERT_EQ(GetDispatchRecord().bank_slot_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().bank_slot_ops[0].source_slot, 127);
+}

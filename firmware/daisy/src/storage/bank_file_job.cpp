@@ -26,7 +26,8 @@ bool BankFileJob::Begin(const char* name) {
     scratch_ = nullptr;
     bytes_ = 0;
     slot_ = 0;
-    edit_slot_ = -1;
+    edit_slot_ = source_slot_ = destination_slot_ = -1;
+    move_slot_ = false;
     io_failed_ = saving_ = false;
     result_ = Result::Working;
     return true;
@@ -67,6 +68,33 @@ bool BankFileJob::SaveCopy(const char* name,
     } else
         phase_ = Phase::Prepare;
     return true;
+}
+bool BankFileJob::TransferCopy(const char* name,
+                               uint32_t request_id,
+                               const char* source,
+                               uint8_t source_slot,
+                               uint8_t destination_slot,
+                               bool move) {
+    if (Busy())
+        return false;
+    if (!source || source_slot >= BankFile::kSlots || destination_slot >= BankFile::kSlots ||
+        source_slot == destination_slot) {
+        result_ = Result::Invalid;
+        return false;
+    }
+    if (!SaveCopy(name, request_id, source))
+        return false;
+    source_slot_ = source_slot;
+    destination_slot_ = destination_slot;
+    move_slot_ = move;
+    return true;
+}
+int BankFileJob::SourceSlot(uint8_t output_slot) const {
+    if (output_slot == destination_slot_)
+        return source_slot_;
+    if (move_slot_ && output_slot == source_slot_)
+        return -1;
+    return output_slot;
 }
 bool BankFileJob::LoadIndex(const char* name) {
     if (!Begin(name))
@@ -173,11 +201,16 @@ void BankFileJob::Pump() {
             break;
         }
         case Phase::Prepare: {
+            if (source_slot_ >= 0 && !index_.slots[source_slot_].used()) {
+                Finish(Result::EmptySlot);
+                return;
+            }
             bytes_ = 12 + 8 + sizeof(index_.name);
             for (uint16_t slot = 0; slot < BankFile::kSlots; ++slot) {
+                const int source = SourceSlot(static_cast<uint8_t>(slot));
                 const auto size = slot == edit_slot_
                                       ? (document_ ? Wxi::detail::TotalFileSize(*document_) : 0)
-                                      : index_.slots[slot].bytes;
+                                      : (source >= 0 ? index_.slots[source].bytes : 0);
                 if (!size)
                     continue;
                 if (size > BankFile::kMaxDocumentBytes ||
@@ -230,11 +263,12 @@ void BankFileJob::Pump() {
                 break;
             }
             const auto slot = static_cast<uint8_t>(slot_++);
+            const int source = SourceSlot(slot);
             if (slot == edit_slot_) {
                 if (document_ && encoder_->Append(slot, *document_) != Codec::More)
                     Finish(Result::IoError);
-            } else if (index_.slots[slot].used()) {
-                const auto& metadata = index_.slots[slot];
+            } else if (source >= 0 && index_.slots[source].used()) {
+                const auto& metadata = index_.slots[source];
                 if (f_lseek(&input_, metadata.offset) != FR_OK ||
                     f_tell(&input_) != metadata.offset ||
                     encoder_->BeginCopy(slot, metadata) != Codec::More)

@@ -118,6 +118,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
 | MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy, confirmed Track recall and explicit sample preload |
 | MSG_MIDI_PROGRAM | 0x84 | E→D | `MidiProgramMessage` | raw channel/program; Daisy resolves enabled matching Tracks against the active Bank |
+| MSG_BANK_SLOT_OP | 0x85 | E→D | `BankSlotOpMessage` | copy/move an explicit source slot into a destination in a new named Bank |
 | MSG_BANK_STATUS | 0x83 | D→E | `BankStatusMessage` | revisioned stable slot, storage availability and retained completion |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
@@ -140,7 +141,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, 0x82–0x84 for Bank operations and Program Change, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
@@ -602,6 +603,19 @@ preserves the original Pool. Payload sizes and existing operation values stay
 unchanged. Upgrade both images to expose the new action; older backends reject
 it as an unknown operation.
 See [Bank persistence](bank-persistence.md) for ownership and SD semantics.
+
+### Slot copy and move
+
+`BankSlotOpMessage` (36 bytes) carries request ID, expected revision, operation,
+source slot, destination slot, flags and a 24-byte new Bank name. Only COPY_SLOT
+(9) and MOVE_SLOT (10) are valid here; `BankOpMessage` still accepts only 0–7.
+Both slots use stable 0–127 indices. Zero request IDs, unknown flags and invalid
+operation/slot bounds are rejected. Identical slots return BAD_SLOT (15); an
+empty source returns EMPTY_SLOT. Move always requires CONFIRM_REPLACE; copy
+requires it for an occupied destination. Both publish a new Bank copy, retaining
+the source file and leaving Tracks/Pool untouched. Status identifies the
+**destination** slot and retains the operation/request pair. Existing Bank
+busy, revision, name, free-space and publication rules apply.
 
 ### MIDI Program Change
 

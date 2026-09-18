@@ -220,7 +220,10 @@ another Track holds a note. Repeated preload must reuse resident IDs and leave
 Track state/editor revision unchanged. Program Change coverage injects through
 the frontend parser/forwarder, verifies channel and Omni targets, the Project
 page opt-out toggle, repeated recall, empty-slot refusal and a retained voice on
-an opted-out Track. This does not replace DIN/USB cable, DAW or jitter checks.
+an opted-out Track. Slot tools copies slot 128 into empty slot 2, then moves
+that copy over occupied slot 1, checking cancellation, unchanged Tracks/Pool,
+preserved source files, source clearing and moved sound recall with a held voice.
+This does not replace DIN/USB cable, DAW or jitter checks.
 
 JUnit properties retain each accepted job's `BANKSTATS` counters and UI wall
 completion time. Preserve the JUnit report, `logs/hil-*.log`, image hashes and

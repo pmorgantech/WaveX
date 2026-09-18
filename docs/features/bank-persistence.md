@@ -13,6 +13,7 @@ implemented. Electrical MIDI and full-load timing remain hardware gates.
 - [Foreground transactions](#foreground-transactions)
 - [SD transaction adapter](#sd-transaction-adapter)
 - [Bank Manager and Track recall](#bank-manager-and-track-recall)
+- [Slot copy and move](#slot-copy-and-move)
 - [Sample preload](#sample-preload)
 - [MIDI Program Change recall](#midi-program-change-recall)
 - [Validation and remaining work](#validation-and-remaining-work)
@@ -64,7 +65,7 @@ belongs in the callback.
 
 [`BankFileJob`](../../firmware/daisy/src/storage/bank_file_job.hpp) supports
 creating an empty named `.wxb`, copying an existing Bank to a new name with
-an optional stored/cleared slot, scanning its index, and decoding a selected
+an optional stored/cleared or copied/moved slot, scanning its index, and decoding a selected
 Instrument into private scratch. Slot numbers remain stable. It holds one
 index and two FatFs handles; it never allocates 128 Instrument documents.
 
@@ -95,7 +96,7 @@ with Project, Instrument, Pattern and card operations.
 
 Project → Shift → Banks opens the Manager. Previous/Next or encoder rotation
 selects one of 128 stable slots. Recall targets the globally selected Track.
-Shift exposes Open, New, Save copy and Clear copy. Preload loads Bank samples. Enter a saved Bank's
+Shift exposes Open, New, Save copy, Clear copy and Slot tools. Preload loads Bank samples. Enter a saved Bank's
 name to open it, or a new destination name to create/store/clear/save a copy.
 The initial UI opens files by name; it has no file-list or slot-grid browser.
 
@@ -129,6 +130,26 @@ Resident sequencing and MIDI clock continue while the foreground job runs.
 Sample audition closes and competing edits/new note requests are held off;
 note-off and clock/transport handling remain available. Worst-case foreground
 service latency and audible continuity require the physical checks below.
+
+## Slot copy and move
+
+Shift → Slot tools marks the selected occupied slot as the source. Previous/Next
+or the encoder then selects a destination without changing that source. Source
+marks another occupied slot; Back returns to the normal Bank actions. Enter a
+new Bank name, then Copy here or Move here. Both ask for confirmation, identify
+source/destination slots and warn when the destination will be replaced. Move
+also states that its source slot will be empty in the new Bank. Identical slots
+are disabled. A Bank revision change or link disconnect invalidates the marked
+source and any confirmation.
+
+Copy retains the source slot; Move clears it, only in the new named Bank. Both
+preserve the original file. The foreground writer maps each output slot to its
+source metadata, calculates the resulting size, checks free space and streams
+the embedded WXI bytes in 128-byte slices. Unknown embedded extensions survive;
+no Instrument decoding, sample admission, Track mutation or audio fence occurs.
+Only successful publication and index reload select the new Bank. Busy/stale
+requests, empty sources and identical slots are rejected. At the protocol layer,
+Move always requires confirmation; Copy requires it for an occupied destination.
 
 ## Sample preload
 
@@ -197,10 +218,12 @@ same program sent again is a new recall, allowing stored sound restoration.
 Eight codec tests cover sparse and full-capacity Banks, both oscillator maps,
 modulator persistence, slot boundaries, unknown chunks, malformed files,
 duplicate slots, terminal write errors, bounded serialized copies and empty-Bank
-index replacement. Seven SD-adapter tests cover sparse store/copy/clear and
+index replacement. Ten SD-adapter tests cover sparse store/copy/clear and
 selected-slot reads, source preservation, free-space/query failure, exclusive
 publication, short writes, close/rename failures, cancellation, malformed input
-and failed reads using the byte-backed FatFs mock.
+and failed reads using the byte-backed FatFs mock. Transfer cases cover both
+directions, occupied destinations, empty/identical sources, serialized future
+extensions, failure cleanup and source preservation.
 Host tests establish no SD durability, recall latency or MIDI behavior.
 The two-board Bank HIL case and its timing readback are described below.
 
@@ -221,6 +244,10 @@ Track routing/mix, shared and newly admitted samples, duplicate destinations and
 missing sources, plus preload with cold/shared dependencies and an unrelated
 held voice. It also injects Program Change through the frontend parser/forwarder,
 verifies matching and Omni targets, opt-out, empty slots and repeated recall.
+Slot tools copies slot 128 to empty slot 2 and moves it over occupied slot 1;
+cancel, preserved originals/Tracks/Pool, source clearing and moved sound recall
+are checked with another Track holding a note. This slot-transfer extension
+remains unrun on hardware because neither board was available at flash time.
 This injection does not validate DIN/USB electrical behavior. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
 See [the bench command](../testing_guide.md#bank-files-and-track-recall).
 
@@ -233,8 +260,8 @@ callback DWT, CPU utilization, analog continuity or MIDI wire-jitter results.
 Timing instrumentation compiles out when the debug harness is disabled.
 
 The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
-remains open. Next software work is slot-to-slot copy/move and a decision on deferred
-unsaved Bank working copies. Project save/load does not yet persist the selected
+remains open. Remaining Bank work is a decision on deferred unsaved Bank
+working copies and selected-Bank Project restoration. Project save/load does not yet persist the selected
 Bank path; reopen it by name after reboot. See the [roadmap](../roadmap.md).
 
 ## Related

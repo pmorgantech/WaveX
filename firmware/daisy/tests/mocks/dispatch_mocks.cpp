@@ -192,6 +192,9 @@ bool BankBusy() {
 void OnMidiProgram(const WaveX::Protocol::MidiProgramMessage& m) {
     WaveX::Test::GetDispatchRecord().midi_programs.push_back(m);
 }
+void OnBankSlotOp(const WaveX::Protocol::BankSlotOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().bank_slot_ops.push_back(m);
+}
 void OnBankOp(const WaveX::Protocol::BankOpMessage& m) {
     WaveX::Test::GetDispatchRecord().bank_ops.push_back(m);
 }

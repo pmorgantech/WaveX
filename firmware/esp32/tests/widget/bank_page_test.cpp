@@ -20,12 +20,28 @@ bool alive = true, respond = true;
 BankOpMessage query;
 BankStatusMessage status;
 std::vector<BankOpMessage> mutations;
+std::vector<BankSlotOpMessage> transfers;
 uint32_t Tick() {
     return ticks;
 }
 void Flush(lv_display_t* d, const lv_area_t*, uint8_t*) {
     ++flushes;
     lv_display_flush_ready(d);
+}
+void Preview(const char* variable) {
+    lv_refr_now(nullptr);
+    if (const char* path = std::getenv(variable)) {
+        FILE* out = std::fopen(path, "wb");
+        ASSERT_NE(out, nullptr);
+        std::fprintf(out, "P6\n1280 720\n255\n");
+        for (uint16_t p: pixels) {
+            unsigned char rgb[] = {static_cast<unsigned char>(((p >> 11) & 31) * 255 / 31),
+                                   static_cast<unsigned char>(((p >> 5) & 63) * 255 / 63),
+                                   static_cast<unsigned char>((p & 31) * 255 / 31)};
+            std::fwrite(rgb, 1, 3, out);
+        }
+        std::fclose(out);
+    }
 }
 class Root : public wavex_ui::UIPage {
    public:
@@ -56,6 +72,7 @@ class BankPageTest : public ::testing::Test {
         std::strcpy(status.name, "Studio kit");
         std::strcpy(status.instrument, "Drums");
         mutations.clear();
+        transfers.clear();
         query = {};
         wavex_ui::setCurrentTrack(3);
         page = std::make_shared<wavex_ui::UIBankPage>();
@@ -90,6 +107,15 @@ esp_err_t inter_mcu_send_bank_op(const BankOpMessage& request) {
         status.active_request_id = request.request_id;
         status.active_op = request.op;
     }
+    return ESP_OK;
+}
+esp_err_t inter_mcu_send_bank_slot_op(const BankSlotOpMessage& request) {
+    transfers.push_back(request);
+    query.request_id = request.request_id;
+    query.slot = request.destination_slot;
+    status.busy = 1;
+    status.active_request_id = request.request_id;
+    status.active_op = request.op;
     return ESP_OK;
 }
 bool inter_mcu_get_bank_status(BankStatusMessage* out) {
@@ -160,18 +186,7 @@ TEST_F(BankPageTest, StaleEmptyAndBusySnapshotsDisableRecall) {
 }
 TEST_F(BankPageTest, RenderLayoutAndIdleRefresh) {
     lv_refr_now(nullptr);
-    if (const char* path = std::getenv("WAVEX_BANK_PREVIEW")) {
-        FILE* out = std::fopen(path, "wb");
-        ASSERT_NE(out, nullptr);
-        std::fprintf(out, "P6\n1280 720\n255\n");
-        for (uint16_t p: pixels) {
-            unsigned char rgb[] = {static_cast<unsigned char>(((p >> 11) & 31) * 255 / 31),
-                                   static_cast<unsigned char>(((p >> 5) & 63) * 255 / 63),
-                                   static_cast<unsigned char>((p & 31) * 255 / 31)};
-            std::fwrite(rgb, 1, 3, out);
-        }
-        std::fclose(out);
-    }
+    Preview("WAVEX_BANK_PREVIEW");
     Advance(5);
     const auto settled = flushes;
     Advance(50);
@@ -221,4 +236,95 @@ TEST_F(BankPageTest, MidiCompletionCannotAcknowledgeAnUnrelatedUiRequest) {
     status.completed_op = BANK_RECALL;
     Advance(5);
     EXPECT_TRUE(page->getSoftkeys()[3].enabled);
+}
+
+TEST_F(BankPageTest, SlotToolsCaptureSourceAndConfirmStableDestinationWithoutReplay) {
+    Press(5, true);
+    EXPECT_EQ(page->getSoftkeys()[1].label, "Source");
+    EXPECT_FALSE(page->getSoftkeys()[4].enabled);  // same source/destination
+    Press(2);                                      // destination wraps to 128, source stays 1
+    Advance(4);
+    char reply[32];
+    ASSERT_TRUE(page->consoleCommand("NAME Reordered", reply, sizeof(reply)));
+    Press(4);
+    EXPECT_TRUE(transfers.empty());
+    Press(0);  // cancel
+    EXPECT_TRUE(transfers.empty());
+    Press(5);  // move requires its own confirmation
+    Press(1);
+    ASSERT_EQ(transfers.size(), 1u);
+    EXPECT_EQ(transfers[0].source_slot, 0);
+    EXPECT_EQ(transfers[0].destination_slot, 127);
+    EXPECT_EQ(transfers[0].op, BANK_MOVE_SLOT);
+    EXPECT_EQ(transfers[0].flags, BANK_CONFIRM_REPLACE);
+    EXPECT_STREQ(transfers[0].name, "Reordered");
+    EXPECT_TRUE(mutations.empty());
+    alive = false;
+    Advance(3);
+    alive = true;
+    Advance(20);
+    EXPECT_EQ(transfers.size(), 1u);
+}
+TEST_F(BankPageTest, SlotToolsInvalidateSourceAndConfirmationOnBankChange) {
+    Press(5, true);
+    Press(3);
+    Advance(4);
+    char reply[32];
+    ASSERT_TRUE(page->consoleCommand("NAME Copy", reply, sizeof(reply)));
+    Press(4);
+    ++status.revision;
+    Advance(5);
+    EXPECT_EQ(page->getSoftkeys()[1].label, "Source");
+    EXPECT_FALSE(page->getSoftkeys()[4].enabled);
+    EXPECT_TRUE(transfers.empty());
+    Press(1);  // explicitly mark a fresh source
+    Press(2);
+    Advance(4);
+    EXPECT_TRUE(page->getSoftkeys()[4].enabled);
+    alive = false;
+    Advance(3);
+    alive = true;
+    Advance(5);
+    EXPECT_FALSE(page->getSoftkeys()[4].enabled);
+    Press(0);
+    EXPECT_EQ(page->getSoftkeys()[1].label, "Previous");
+}
+TEST_F(BankPageTest, SlotCopyCanTargetEmptySlotButCannotMarkEmptySource) {
+    Press(5, true);
+    Press(3);
+    status.occupied = 0;
+    Advance(4);
+    EXPECT_FALSE(page->getSoftkeys()[1].enabled);
+    EXPECT_TRUE(page->getSoftkeys()[4].enabled);
+    char reply[32];
+    ASSERT_TRUE(page->consoleCommand("NAME Copy", reply, sizeof(reply)));
+    Press(4);
+    Press(1);
+    ASSERT_EQ(transfers.size(), 1u);
+    EXPECT_EQ(transfers[0].op, BANK_COPY_SLOT);
+    EXPECT_EQ(transfers[0].source_slot, 0);
+    EXPECT_EQ(transfers[0].destination_slot, 1);
+}
+
+TEST_F(BankPageTest, SlotToolsLongNamesFitAndIdlePollingDoesNotRepaint) {
+    std::strcpy(status.name, "WWWWWWWWWWWWWWWWWWWWWWW");
+    std::strcpy(status.instrument, "WWWWWWWWWWWWWWWWWWWWWWW");
+    Advance(5);
+    Press(5, true);
+    Press(3);
+    Advance(4);
+    lv_obj_update_layout(page->root());
+    auto* heading = lv_obj_get_child(page->root(), 0);
+    auto* input = lv_obj_get_child(page->root(), 1);
+    EXPECT_LT(lv_obj_get_y(heading) + lv_obj_get_height(heading), lv_obj_get_y(input));
+    Preview("WAVEX_BANK_TOOLS_PREVIEW");
+    Advance(5);
+    const auto settled = flushes;
+    Advance(50);
+    EXPECT_EQ(flushes, settled);
+    char reply[32];
+    ASSERT_TRUE(page->consoleCommand("NAME WWWWWWWWWWWWWWWWWWWWWWW", reply, sizeof(reply)));
+    Press(5);
+    Preview("WAVEX_BANK_CONFIRM_PREVIEW");
+    EXPECT_EQ(page->getSoftkeys()[1].label, "Confirm");
 }

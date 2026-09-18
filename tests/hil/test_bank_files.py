@@ -247,5 +247,61 @@ def test_bank_copy_recall_failure_isolation_and_service_timing(
     _track(esp, 2, trackloaded=1, midiin=3, program=0)
     _track(esp, 3, trackloaded=1, midiin=0, program=1)
     assert int(daisy.state()["underruns"]) == underruns
+    # Copy slot 128 into empty slot 2; move that copy over occupied slot 1.
+    before_tracks = daisy.tracks()
+    revisions = [daisy.cmd("EDIT", t)["revision"] for t in range(3)]
+    before_samples = set(daisy.samples())
+    _banks(esp)
+    esp.softkey("Previous")
+    esp.wait_state(bankready=1, bankslot=128, bankoccupied=1)
+    _files(esp, True)
+    esp.softkey("Slot tools")
+    esp.wait_state(banktools=1, banksource=128, shift=0)
+    for slot in (1, 2):
+        esp.softkey("Next")
+        esp.wait_state(bankready=1, bankslot=slot, banksource=128)
+    esp.wait_state(bankoccupied=0)
+    esp.page("NAME", prefix + "F")
+    _operation(esp, daisy, "Copy here", 9, record_property, confirm=True)
+    esp.wait_state(bankoccupied=1, banksource=0)
+    esp.softkey("Source")
+    esp.wait_state(banksource=2)
+    esp.softkey("Previous")
+    esp.wait_state(bankready=1, bankslot=1, bankoccupied=1, banksource=2)
+    esp.page("NAME", prefix + "G")
+    previous = daisy.cmd("BANKSTATS")["request"]
+    esp.softkey("Move here")
+    esp.wait_state(bankconfirm=10)
+    esp.softkey("Cancel")
+    esp.wait_state(bankconfirm=0, bankready=1, banksource=2)
+    assert daisy.cmd("BANKSTATS")["request"] == previous
+    _operation(esp, daisy, "Move here", 10, record_property, confirm=True)
+    esp.wait_state(bankoccupied=1, banksource=0)
+    assert daisy.tracks() == before_tracks
+    assert [daisy.cmd("EDIT", t)["revision"] for t in range(3)] == revisions
+    assert set(daisy.samples()) == before_samples
+    assert daisy.state()["voices"] == "1"
+    esp.softkey("Next")
+    esp.wait_state(bankready=1, bankslot=2, bankoccupied=0)
+    esp.softkey("Back")  # leave Slot tools, keeping destination selection
+    esp.wait_state(banktools=0)
+    esp.page("NAME", prefix + "F")
+    _operation(esp, daisy, "Open", 2, record_property)
+    esp.wait_state(bankslot=2, bankoccupied=1)
+    esp.page("NAME", prefix + "E")
+    _operation(esp, daisy, "Open", 2, record_property)
+    esp.wait_state(bankslot=2, bankoccupied=0)
+    esp.page("NAME", prefix + "G")
+    _operation(esp, daisy, "Open", 2, record_property)
+    _files(esp, False)
+    esp.softkey("Previous")
+    esp.wait_state(bankready=1, bankslot=1, bankoccupied=1)
+    state = daisy.cmd("LFO", 2, 0)
+    values = (0, 0, 1, 0, 100.0, 0.0, 0.0)
+    _lfo(daisy, 891003, int(state["revision"]), 2, values)
+    _operation(esp, daisy, "Recall", 6, record_property, confirm=True)
+    assert daisy.cmd("LFO", 2, 0)["rate"] == saved_lfo["rate"]
+    assert daisy.state()["voices"] == "1"
+    assert int(daisy.state()["underruns"]) == underruns
     daisy.note(1, 60, on=False)
     esp.home()

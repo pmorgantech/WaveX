@@ -349,7 +349,7 @@ Project (.wxp)
 ### 3.6 Bank: 128 Instruments in one file (`.wxb`)
 
 **Implementation, 2026-09-18:** the [Bank Manager/session](bank-persistence.md)
-implements named New/Open/Save copy, Store/Clear into new files and confirmed
+implements named New/Open/Save copy, Store/Clear and slot Copy/Move into new files, and confirmed
 selected-Track recall, atomic sample preload with explicit residency pins and
 channel-routed MIDI Program Change recall.
 The operation names and progress sketch below remain

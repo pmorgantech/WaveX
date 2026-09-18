@@ -187,6 +187,7 @@ enum MessageType : uint8_t {
     MSG_MIX_STATE_REQ = 0x7B,   // E->D: correlated selected Track mix read
     MSG_MIX_STATE = 0x7C,       // D->E: foreground-owned accepted mix settings
     MSG_INST_EDIT_OP = 0x80,    // E->D: sound undo/apply/filter/amp
+    MSG_BANK_SLOT_OP = 0x85,    // E->D: explicit source/destination slot copy or move
     MSG_BANK_OP = 0x82,         // E->D: named Bank copies, slot readback and Track recall
     MSG_MIDI_PROGRAM = 0x84,    // E->D: channel-routed MIDI Program Change
     MSG_BANK_STATUS = 0x83,     // D->E: stable slot and retained operation outcome
@@ -1731,7 +1732,9 @@ enum BankOpCode : uint8_t {
     BANK_CLEAR_COPY,
     BANK_RECALL,
     BANK_PRELOAD,
-    BANK_PROGRAM_RECALL  // status only; initiated by MSG_MIDI_PROGRAM
+    BANK_PROGRAM_RECALL,  // status only; initiated by MSG_MIDI_PROGRAM
+    BANK_COPY_SLOT,       // MSG_BANK_SLOT_OP only
+    BANK_MOVE_SLOT
 };
 enum BankError : uint8_t {
     BANK_OK = 0,
@@ -1748,7 +1751,8 @@ enum BankError : uint8_t {
     BANK_NO_BANK,
     BANK_EMPTY_SLOT,
     BANK_STALE,
-    BANK_CONFIRM_REQUIRED
+    BANK_CONFIRM_REQUIRED,
+    BANK_BAD_SLOT
 };
 constexpr uint8_t BANK_CONFIRM_REPLACE = 1;
 struct BankOpMessage {
@@ -1760,6 +1764,20 @@ struct BankOpMessage {
     uint8_t flags = 0;
     char name[24]{};  // Open source or new destination; never a path
 } __attribute__((packed));
+struct BankSlotOpMessage {
+    uint32_t request_id = 0;
+    uint32_t revision = 0;
+    uint8_t op = BANK_COPY_SLOT;
+    uint8_t source_slot = 0;
+    uint8_t destination_slot = 0;
+    uint8_t flags = 0;
+    char name[24]{};  // new Bank name; the source Bank is preserved
+} __attribute__((packed));
+static_assert(sizeof(BankSlotOpMessage) == 36, "Bank slot operation wire size");
+inline bool IsValidBankSlotOp(const BankSlotOpMessage& m) {
+    return m.request_id && (m.op == BANK_COPY_SLOT || m.op == BANK_MOVE_SLOT) &&
+           m.source_slot < 128 && m.destination_slot < 128 && !(m.flags & ~BANK_CONFIRM_REPLACE);
+}
 struct BankStatusMessage {
     uint32_t request_id = 0;
     uint32_t active_request_id = 0;
@@ -1788,9 +1806,9 @@ inline bool IsValidBankStatus(const BankStatusMessage& m) {
     for (char c: m.instrument)
         instrument_end |= c == 0;
     return m.request_id && m.revision && m.busy <= 1 && m.blocked <= 1 && m.loaded <= 1 &&
-           m.occupied <= m.loaded && m.slot < 128 && m.error <= BANK_CONFIRM_REQUIRED &&
-           m.active_op <= BANK_PROGRAM_RECALL && m.completed_op <= BANK_PROGRAM_RECALL &&
-           name_end && instrument_end &&
+           m.occupied <= m.loaded && m.slot < 128 && m.error <= BANK_BAD_SLOT &&
+           m.active_op <= BANK_MOVE_SLOT && m.completed_op <= BANK_MOVE_SLOT && name_end &&
+           instrument_end &&
            (m.busy ? m.active_request_id != 0 && m.active_op != BANK_GET
                    : m.active_request_id == 0);
 }
@@ -3124,6 +3142,8 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SEQ_SLOT_OP";
         case MSG_SEQ_SLOT_STATUS:
             return "SEQ_SLOT_STATUS";
+        case MSG_BANK_SLOT_OP:
+            return "BANK_SLOT_OP";
         case MSG_BANK_OP:
             return "BANK_OP";
         case MSG_BANK_STATUS:

@@ -34,6 +34,13 @@ class BankFileJob {
                   const char* source = nullptr,
                   int edit_slot = -1,
                   const Wxi::InstrumentFile* document = nullptr);
+    // Transfers the serialized document into a new Bank; never edits the source file.
+    bool TransferCopy(const char* name,
+                      uint32_t request_id,
+                      const char* source,
+                      uint8_t source_slot,
+                      uint8_t destination_slot,
+                      bool move);
     bool LoadIndex(const char* name);
     bool ReadInstrument(const char* name, uint8_t slot, Wxi::InstrumentFile& scratch);
     void Pump();
@@ -51,6 +58,7 @@ class BankFileJob {
    private:
     enum class Phase { OpenSource, Scan, Prepare, OpenSave, Write, Copy, Publish, ReadSlot };
     bool Begin(const char* name);
+    int SourceSlot(uint8_t output_slot) const;
     void Finish(Result result);
     bool CloseFiles();
     static bool Read(void*, void*, size_t);
@@ -64,7 +72,8 @@ class BankFileJob {
     Wxi::InstrumentFile* scratch_ = nullptr;
     char name_[24]{}, source_[96]{}, destination_[96]{}, temporary_[112]{};
     uint32_t bytes_ = 0;
-    int edit_slot_ = -1;
+    int edit_slot_ = -1, source_slot_ = -1, destination_slot_ = -1;
+    bool move_slot_ = false;
     uint16_t slot_ = 0;
     bool saving_ = false, input_open_ = false, output_open_ = false;
     bool owned_temp_ = false, io_failed_ = false;

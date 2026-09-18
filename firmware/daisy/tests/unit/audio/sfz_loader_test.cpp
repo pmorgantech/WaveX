@@ -2475,3 +2475,93 @@ TEST_F(SfzLoaderTest, MidiProgramCanPopulateAll16EmptyOmniTracks) {
     for (uint8_t track = 0; track < 16; ++track)
         EXPECT_STREQ(SfzLoader::TrackName(track), "Preload test");
 }
+
+TEST_F(SfzLoaderTest, BankSlotTransferAdmissionAndPublicationNeverTouchTracksOrPool) {
+    ASSERT_TRUE(Load(0));
+    SaveBankDependency("Source", nullptr, 127, "/kits/a.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Source")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    const auto original = *MockFatFS::Instance().GetFile("0:/wavex/banks/Source.wxb");
+    const auto sample = SampleId("/kits/a.wav");
+    bank_stopped_mask = 0;
+    bank_published = 0;
+    BankSlotOpMessage request;
+    request.request_id = 2;
+    request.revision = bank.Status().revision;
+    request.source_slot = 127;
+    std::strcpy(request.name, "Copied");
+    EXPECT_FALSE(bank.RequestSlotOperation(request, true));
+    EXPECT_EQ(bank.Status().error, BANK_BUSY);
+    ++request.request_id;
+    --request.revision;
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(bank.Status().error, BANK_STALE);
+    request.revision = bank.Status().revision;
+    ++request.request_id;
+    request.destination_slot = 127;
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(bank.Status().error, BANK_BAD_SLOT);
+    ++request.request_id;
+    request.source_slot = 1;
+    request.destination_slot = 0;
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(bank.Status().error, BANK_EMPTY_SLOT);
+    ++request.request_id;
+    request.source_slot = 127;
+    ASSERT_TRUE(bank.RequestSlotOperation(request));
+    EXPECT_FALSE(bank.RequestSlotOperation(request));  // retained ID cannot replay
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_STREQ(bank.Status().name, "Copied");
+    EXPECT_EQ(bank.Status().slot, 0);
+    EXPECT_TRUE(bank.Status().occupied);
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    ++request.request_id;
+    request.revision = bank.Status().revision;
+    std::strcpy(request.name, "Moved");
+    request.op = BANK_MOVE_SLOT;
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(bank.Status().error, BANK_CONFIRM_REQUIRED);
+    ++request.request_id;
+    request.op = BANK_COPY_SLOT;  // destination is now occupied
+    EXPECT_FALSE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(bank.Status().error, BANK_CONFIRM_REQUIRED);
+    ++request.request_id;
+    request.op = BANK_MOVE_SLOT;
+    request.flags = BANK_CONFIRM_REPLACE;
+    ASSERT_TRUE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_STREQ(bank.Status().name, "Moved");
+    ASSERT_FALSE(bank.Request(BankRequest(bank, 100, BANK_GET, "", 127)));
+    EXPECT_FALSE(bank.Status().occupied);
+    EXPECT_EQ(bank_stopped_mask, 0);
+    EXPECT_EQ(bank_published, 0u);
+    EXPECT_EQ(SampleId("/kits/a.wav"), sample);
+    EXPECT_EQ(*MockFatFS::Instance().GetFile("0:/wavex/banks/Source.wxb"), original);
+}
+TEST_F(SfzLoaderTest, BankSlotTransferWriteFailureKeepsActiveBankAndRevision) {
+    SaveBankDependency("Source", nullptr, 127, "/missing.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Source")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    BankSlotOpMessage request;
+    request.request_id = 2;
+    request.revision = bank.Status().revision;
+    request.source_slot = 127;
+    request.op = BANK_MOVE_SLOT;
+    request.flags = BANK_CONFIRM_REPLACE;
+    std::strcpy(request.name, "Failed");
+    MockFatFS::Instance().rename_result = FR_DISK_ERR;
+    ASSERT_TRUE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(RunBank(bank), BANK_IO);
+    EXPECT_EQ(bank.Status().revision, request.revision);
+    EXPECT_STREQ(bank.Status().name, "Source");
+    EXPECT_FALSE(bank.Status().occupied);
+    MockFatFS::Instance().rename_result = FR_OK;
+    ++request.request_id;
+    ASSERT_TRUE(bank.RequestSlotOperation(request));
+    EXPECT_EQ(RunBank(bank), BANK_OK);  // no PCM dependency reads
+    EXPECT_STREQ(bank.Status().name, "Failed");
+}

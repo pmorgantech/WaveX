@@ -15,6 +15,9 @@
 namespace wavex_ui {
 using namespace WaveX::Protocol;
 namespace {
+bool isTransfer(uint8_t op) {
+    return op == BANK_COPY_SLOT || op == BANK_MOVE_SLOT;
+}
 uint32_t nextId() {
     static uint32_t id = 0;
     if (!id)
@@ -54,6 +57,8 @@ const char* errorText(uint8_t error) {
             return "Open or create a Bank first.";
         case BANK_EMPTY_SLOT:
             return "This Bank slot is empty.";
+        case BANK_BAD_SLOT:
+            return "Choose different source and destination slots.";
         case BANK_STALE:
             return "The Bank changed. Review the current slot and try again.";
         case BANK_CONFIRM_REQUIRED:
@@ -114,10 +119,11 @@ void UIBankPage::onEnter(lv_obj_t* parent) {
     lv_obj_add_event_cb(keyboard_, keyboardEvent, LV_EVENT_CANCEL, this);
     lv_obj_add_event_cb(input_, inputEvent, LV_EVENT_CLICKED, this);
     lv_obj_add_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
-    std::snprintf(message_,
-                  sizeof(message_),
-                  "Shift: Open / New / Save copy / Clear copy. Store copy saves the selected Track "
-                  "in a new named Bank. Preload pins Bank samples until unloaded.");
+    std::snprintf(
+        message_,
+        sizeof(message_),
+        "Shift: Open / New / Save copy / Clear copy / Slot tools. Store copy saves the Track "
+        "in a new named Bank. Preload pins Bank samples until unloaded.");
     alive_ = inter_mcu_backend_link_alive();
     read();
     timer_ = lv_timer_create(tick, 100, this);
@@ -131,6 +137,8 @@ void UIBankPage::onExit() {
         lv_obj_delete(root_);
     root_ = input_ = keyboard_ = hint_ = last_ = nullptr;
     pending_id_ = 0;
+    slot_tools_ = false;
+    source_slot_ = -1;
     valid_ = false;
     confirm_ = 0;
 }
@@ -152,6 +160,7 @@ void UIBankPage::service() {
     const bool alive = inter_mcu_backend_link_alive();
     if (alive != alive_) {
         alive_ = alive;
+        source_slot_ = -1;
         valid_ = false;
         confirm_ = 0;
         std::snprintf(message_,
@@ -176,6 +185,8 @@ void UIBankPage::service() {
             confirm_ = 0;
             std::snprintf(message_, sizeof(message_), "%s", errorText(BANK_STALE));
         }
+        if (source_slot_ >= 0 && received.revision != source_revision_)
+            source_slot_ = -1;
         const bool midi_completion =
             received.completed_op == BANK_PROGRAM_RECALL && received.completed_request_id &&
             (received.completed_request_id != status_.completed_request_id ||
@@ -228,6 +239,16 @@ void UIBankPage::render() {
         slot_ + 1,
         valid_ && status_.occupied ? status_.instrument : (valid_ ? "empty" : "reading..."),
         trackDisplayNumber(getCurrentTrack()));
+    if (slot_tools_)
+        std::snprintf(
+            text,
+            sizeof(text),
+            "Source: %u %s    Destination: %u %s\nBank: %s",
+            source_slot_ >= 0 ? source_slot_ + 1 : 0,
+            source_slot_ >= 0 ? source_name_ : "choose an occupied slot",
+            slot_ + 1,
+            valid_ && status_.occupied ? status_.instrument : (valid_ ? "empty" : "reading..."),
+            valid_ && status_.loaded ? status_.name : "none");
     label(last_, text);
     label(hint_,
           !alive_                     ? "Audio engine disconnected"
@@ -249,6 +270,8 @@ void UIBankPage::choose(uint8_t op) {
         return;
     if ((op == BANK_RECALL || op == BANK_CLEAR_COPY) && !status_.occupied)
         return;
+    if (isTransfer(op) && !canTransfer())
+        return;
     draft_ = BankOpMessage{};
     draft_.request_id = nextId();
     draft_.revision = status_.revision;
@@ -265,9 +288,28 @@ void UIBankPage::choose(uint8_t op) {
         }
         detail::CopyWireString(draft_.name, sizeof(draft_.name), name);
     }
-    if (op == BANK_RECALL || op == BANK_STORE_COPY || op == BANK_CLEAR_COPY) {
+    if (isTransfer(op)) {
+        transfer_draft_ = BankSlotOpMessage{};
+        transfer_draft_.request_id = draft_.request_id;
+        transfer_draft_.revision = draft_.revision;
+        transfer_draft_.op = op;
+        transfer_draft_.source_slot = static_cast<uint8_t>(source_slot_);
+        transfer_draft_.destination_slot = slot_;
+        detail::CopyWireString(transfer_draft_.name, sizeof(transfer_draft_.name), draft_.name);
+    }
+    if (isTransfer(op) || op == BANK_RECALL || op == BANK_STORE_COPY || op == BANK_CLEAR_COPY) {
         confirm_ = op;
-        if (op == BANK_RECALL)
+        if (isTransfer(op))
+            std::snprintf(message_,
+                          sizeof(message_),
+                          "%s slot %u to %u in new Bank '%s'? %s%s Original Bank retained.",
+                          op == BANK_MOVE_SLOT ? "Move" : "Copy",
+                          source_slot_ + 1,
+                          slot_ + 1,
+                          draft_.name,
+                          status_.occupied ? "Destination replaced. " : "",
+                          op == BANK_MOVE_SLOT ? "Source cleared in new Bank." : "Source kept.");
+        else if (op == BANK_RECALL)
             std::snprintf(message_,
                           sizeof(message_),
                           "Recall slot %u to Track %u? Its current Instrument and unsaved sound "
@@ -294,7 +336,10 @@ void UIBankPage::send(uint8_t op) {
     if (confirm_)
         draft_.flags = BANK_CONFIRM_REPLACE;
     confirm_ = 0;
-    if (inter_mcu_send_bank_op(draft_) != ESP_OK)
+    transfer_draft_.flags = draft_.flags;
+    const auto result = isTransfer(op) ? inter_mcu_send_bank_slot_op(transfer_draft_)
+                                       : inter_mcu_send_bank_op(draft_);
+    if (result != ESP_OK)
         std::snprintf(message_, sizeof(message_), "Link busy. Try again.");
     else {
         pending_id_ = read_id_ = draft_.request_id;
@@ -332,6 +377,37 @@ void UIBankPage::move(int delta) {
     render();
     UINavigator::instance().refreshSoftkeys();
 }
+bool UIBankPage::canTransfer() const {
+    return ready() && status_.loaded && source_slot_ >= 0 && source_slot_ != slot_ &&
+           source_revision_ == status_.revision;
+}
+void UIBankPage::markSource() {
+    if (!ready() || !status_.occupied || confirm_)
+        return;
+    source_slot_ = slot_;
+    source_revision_ = status_.revision;
+    detail::CopyWireString(source_name_, sizeof(source_name_), status_.instrument);
+    std::snprintf(
+        message_,
+        sizeof(message_),
+        "Source marked. Choose a destination and a new Bank name, then Copy here or Move here.");
+    render();
+    UINavigator::instance().refreshSoftkeys();
+}
+void UIBankPage::slotTools(bool enabled) {
+    slot_tools_ = enabled;
+    lv_obj_set_style_text_font(last_, enabled ? UI_FONT_SMALL : UI_FONT_BODY, 0);
+    source_slot_ = -1;
+    std::snprintf(message_,
+                  sizeof(message_),
+                  "Mark an occupied Source, choose a destination and a new Bank name. Original "
+                  "Bank retained.");
+    if (enabled)
+        markSource();
+    UINavigator::instance().setShift(false);
+    render();
+    UINavigator::instance().refreshSoftkeys();
+}
 void UIBankPage::onTrackChanged() {
     confirm_ = 0;
     std::snprintf(message_,
@@ -344,13 +420,31 @@ void UIBankPage::onInput(const InputEvent& event) {
     if (event.steps())
         move(event.steps() > 0 ? 1 : -1);
     else if (event.type == InputType::EncoderClick)
-        choose(BANK_RECALL);
+        choose(slot_tools_ ? BANK_COPY_SLOT : BANK_RECALL);
 }
 std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     if (confirm_) {
         keys[0] = {"Cancel", [this] { cancel(); }};
         keys[1] = {"Confirm", [this] { send(confirm_); }, ready(), "Waiting for the audio engine"};
+        return keys;
+    }
+    if (slot_tools_) {
+        keys[0] = {"Back", [this] { slotTools(false); }};
+        keys[1] = {"Source",
+                   [this] { markSource(); },
+                   ready() && status_.occupied,
+                   "Select an occupied source slot"};
+        keys[2] = {"Previous", [this] { move(-1); }, ready(), "Reading Bank"};
+        keys[3] = {"Next", [this] { move(1); }, ready(), "Reading Bank"};
+        keys[4] = {"Copy here",
+                   [this] { choose(BANK_COPY_SLOT); },
+                   canTransfer(),
+                   "Mark a source and choose a different destination"};
+        keys[5] = {"Move here",
+                   [this] { choose(BANK_MOVE_SLOT); },
+                   canTransfer(),
+                   "Mark a source and choose a different destination"};
         return keys;
     }
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
@@ -371,7 +465,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getSoftkeys() {
     return keys;
 }
 std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getShiftedSoftkeys() {
-    if (confirm_)
+    if (confirm_ || slot_tools_)
         return getSoftkeys();
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
@@ -385,7 +479,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getShiftedSoftkeys() {
                [this] { choose(BANK_CLEAR_COPY); },
                ready() && status_.occupied,
                "Select an occupied slot"};
-    keys[5] = {"Slots", [] { UINavigator::instance().setShift(false); }};
+    keys[5] = {
+        "Slot tools", [this] { slotTools(true); }, ready() && status_.loaded, "Open a Bank first"};
     return keys;
 }
 size_t UIBankPage::consoleState(char* out, size_t cap, size_t len) {
@@ -396,6 +491,8 @@ size_t UIBankPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "bankerror", status_.error);
     len = AppendKvInt(out, cap, len, "bankconfirm", confirm_);
     len = AppendKvInt(out, cap, len, "bankslot", slot_ + 1);
+    len = AppendKvInt(out, cap, len, "banktools", slot_tools_);
+    len = AppendKvInt(out, cap, len, "banksource", source_slot_ + 1);
     len = AppendKvInt(out, cap, len, "bankoccupied", valid_ && status_.occupied);
     return AppendKvText(out, cap, len, "bankname", valid_ ? status_.name : "");
 }

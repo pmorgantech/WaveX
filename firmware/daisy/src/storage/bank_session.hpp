@@ -18,6 +18,7 @@ class BankSession {
     BankSession(const BankSession&) = delete;
     BankSession& operator=(const BankSession&) = delete;
     bool Request(const Protocol::BankOpMessage&, bool external_busy = false);
+    bool RequestSlotOperation(const Protocol::BankSlotOpMessage&, bool external_busy = false);
     // Foreground only. No queue: busy or unmatched events are ignored.
     bool ProgramChange(const Protocol::MidiProgramMessage&, bool external_busy = false);
     void Pump();
@@ -34,7 +35,10 @@ class BankSession {
         AudioEngine::SamplePool pool{records};
     };
     enum class Phase { Idle, Begin, File, Snapshot, Index, Stage, Load, Commit, PreloadNext };
-    bool BeginRequest(const Protocol::BankOpMessage&, bool external_busy, uint16_t targets);
+    bool BeginRequest(const Protocol::BankOpMessage&,
+                      bool external_busy,
+                      uint16_t targets,
+                      int source_slot = -1);
     void Finish(uint8_t);
     void RefreshSlot();
     void Cleanup();
@@ -54,6 +58,7 @@ class BankSession {
     Protocol::BankStatusMessage status_;
     uint16_t preload_slot_ = 0, recall_targets_ = 0;
     uint32_t program_id_ = 0;
+    int source_slot_ = -1;
     Phase phase_ = Phase::Idle;
     bool reply_ = false;
 };

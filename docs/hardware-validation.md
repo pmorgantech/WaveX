@@ -755,6 +755,29 @@ preserve the source Bank. Capture both image identities before starting.
   repeat with all 16 targets and the largest Instrument. Full-load/electrical
   tests and Project-setting persistence remain unrun for this entry.
 
+- [ ] **016i — Slot copy/move:** Use a Bank with distinct Instruments in slots
+  1/128 and empty slot 2. Shift → Slot tools marks an occupied source; choose
+  another destination and a new Bank name. Cancel and confirm Copy/Move into
+  both empty and occupied slots, in both directions. Reopen the original and
+  each new Bank; recall the transferred sound. Repeat with stale/disconnected
+  status, duplicate names, nearly-full/removed media and a full Bank while
+  resident sequencing/clock runs. Reboot and reopen successful copies.
+  **Pass:** Source/destination and replacement/source-clear warnings are clear;
+  identical slots/empty sources cannot transfer. Original files and embedded
+  Instrument settings/extensions remain intact. Copy keeps both slots, Move
+  clears only its source in the new Bank. Tracks/Pool are untouched, failed
+  writes retain the active Bank, reconnect never replays, and saves check space.
+  Record foreground timing, callback DWT, audible continuity and underruns.
+  Sparse automated UI/UART/SD checks do not close full-media/reboot/timing cases.
+
+**2026-09-18 slot copy/move validation:** Host wire, storage, session, dispatch
+and real-LVGL checks pass, including unknown embedded WXI bytes and failed
+publication. Both firmware images compile. The extended two-board HIL case is
+implemented but **unrun**: `make flash-all` could find neither the ESP32 UART
+nor Daisy CDC device in the privileged devcontainer (`logs/slot-flash.log`).
+No new images were flashed and no slot-transfer hardware result is claimed.
+016i, physical rendering/profile checks, and the broader HV-016 gate stay open.
+
 **2026-09-18 bench result:** `tests/hil/test_bank_files.py` passed (1 test,
 32.93 s), covering subsets of 016a/b/d. A sparse Bank with slot 128 populated
 survived Store/Save/Clear copies and reopening the original. Cancelled recall

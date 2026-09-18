@@ -46,6 +46,7 @@ struct DispatchRecord {
     bool project_busy = false;
     bool bank_busy = false;
     std::vector<WaveX::Protocol::BankOpMessage> bank_ops;
+    std::vector<WaveX::Protocol::BankSlotOpMessage> bank_slot_ops;
     std::vector<WaveX::Protocol::MidiProgramMessage> midi_programs;
     std::vector<WaveX::Protocol::SeqSlotEditMessage> seq_slot_edits;
     std::vector<WaveX::Protocol::SeqPatternRequestMessage> seq_slot_pages;

@@ -13,7 +13,8 @@ streaming, recording, platform maintenance and soak requirements are retained
 below; retiring the sections does not certify their hardware gates. Phase numbers
 remain stable, with deferred Phase 3 moved to the end.
 
-**Next software work:** Bank slot copy/move and the remaining Bank follow-ups, then the
+**Next software work:** Remaining Bank follow-ups (Project restoration policy and
+the deferred working-copy decision), then the
 remaining Phase 2.5 tasks in order. The authorized touchscreen/software work can continue
 while panel wiring is pending; the full Phase 2 gate remains open.
 
@@ -108,7 +109,8 @@ Apply/Revert and Mixer v1 are implemented. Continue from the
    and timing acceptance remains HV-016. Explicit sample preload is implemented
    with atomic Pool admission. Channel-routed MIDI Program Change recall also
    has a sparse two-board pass; full timing/electrical MIDI validation remains
-   open. Add slot-to-slot copy/move; decide whether a deferred unsaved Bank
+   open. Slot-to-slot copy/move into new named Banks is implemented; full
+   media/timing validation remains HV-016. Decide whether a deferred unsaved Bank
    working copy improves the current explicit named-copy workflow. Persist the
    selected Bank path with Projects once its restore/admission policy is defined.
 2. **Polyphony policy, after measurement.** Implement saved Mono/Auto/1–8-note

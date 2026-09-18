@@ -2772,6 +2772,21 @@ void OnMidiProgram(const MidiProgramMessage& message) {
     if (s_bank_session.Get() && s_bank_session.Get()->ProgramChange(message, BankExternalBusy()))
         BankAccepted();
 }
+void OnBankSlotOp(const BankSlotOpMessage& request) {
+    if (!IsValidBankSlotOp(request))
+        return;
+    if (!s_bank_session.Get()) {
+        BankStatusMessage status;
+        status.request_id = status.completed_request_id = request.request_id;
+        status.completed_op = request.op;
+        status.error = BANK_NO_MEMORY;
+        status.slot = request.destination_slot;
+        Comm::LinkSend(MSG_BANK_STATUS, &status, sizeof(status));
+        return;
+    }
+    if (s_bank_session.Get()->RequestSlotOperation(request, BankExternalBusy()))
+        BankAccepted();
+}
 void OnBankOp(const BankOpMessage& request) {
     if (!IsValidBankOp(request))
         return;
