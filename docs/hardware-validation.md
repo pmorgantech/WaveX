@@ -83,7 +83,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
-| HV-016 | Bank SD transactions and Track recall | Pending | Session/UI host-tested and compile-verified; physical SD, recall and service timing unrun |
+| HV-016 | Bank SD transactions and Track recall | Partial | Sparse Bank HIL passed 2026-09-18; full-Bank, DWT, MIDI timing and failure/recovery gates remain open |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 
 ## HV-001 — SD card formatting
@@ -683,8 +683,8 @@ mode behavior and wire/WXI retention; they do not close these physical gates.
 
 ## HV-016 — Bank SD transactions
 
-**Status:** Pending. Bank Manager/session/Track recall are integrated and
-host-tested; no physical results are recorded for this change.
+**Status:** Partial. Sparse Bank HIL passed on 2026-09-18; the full
+acceptance cases below remain open. See the dated evidence after the checklist.
 **Design / gate:** [Bank persistence](features/bank-persistence.md),
 [Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer).
 **Setup:** Both integrated images, a backed-up disposable card, a sparse Bank
@@ -728,6 +728,50 @@ preserve the source Bank. Capture both image identities before starting.
   transport state; non-target Tracks remain continuous, the target changes only
   after successful staging, and response/timing meet the performance policy.
   Preload and MIDI Program Change recall are not implemented in this gate.
+
+**2026-09-18 bench result:** `tests/hil/test_bank_files.py` passed (1 test,
+32.93 s), covering subsets of 016a/b/d. A sparse Bank with slot 128 populated
+survived Store/Save/Clear copies and reopening the original. Cancelled recall
+was inert; confirmed recall restored LFO settings and preserved target MIDI/mix.
+Both shared-sample and newly admitted PCM recall retained the other Track's
+voice. Duplicate destinations and missing Bank files preserved the active Bank.
+Reported underruns stayed at zero. This is digital/state evidence; no analog
+capture, callback DWT or MIDI timing was collected.
+
+- Daisy persistent QSPI image: SHA-256
+  `1ded47ac2cfc9b5ae6c83d1ff11c943a200a28c82fd9a8c6661a8f9547c9d1c9`,
+  debug harness on, callback profiling off, normal `-O2` build with storage
+  sources at their existing `-Os` settings.
+- ESP32 image: SHA-256
+  `91d8efad86c6f4cc9937b7bcbf8d4f1a272a6b02b165e9a76b765cb04f412880`.
+- Source base: `b540e8d` plus the Bank timing/HIL change. Card: attached bench
+  card, SDIO STANDARD/25 MHz; manufacturer/model/capacity not captured, so this
+  is not a qualified card-performance result. Fixtures were
+  `/Drums/Kicks/bassdr01.wav` and `bassdr02.wav` in the same directory.
+- Saved copies: `HILB 733797120592628A.wxb` through `...D.wxb` under
+  `/wavex/banks`. These remain available for inspection.
+- Evidence (local, gitignored): `logs/bank-hil.xml`,
+  `logs/hil-20260918-121631.log`, `logs/bank-hil-result.log`.
+
+| Operation | Pumps | Maximum foreground step | Summed foreground work |
+|---|---:|---:|---:|
+| New | 137 | 7,396 µs | 21,729 µs |
+| Store copy | 150 | 9,011 µs | 27,965 µs |
+| Recall, resident sample | 21 | 6,161 µs | 22,460 µs |
+| Save copy | 159 | 7,904 µs | 27,650 µs |
+| Clear copy | 147 | 7,914 µs | 25,222 µs |
+| Open | 11 | 1,933 µs | 2,746 µs |
+| Recall, sample unloaded | 24 | 5,988 µs | 29,287 µs |
+
+An earlier partial run observed a **74,021 µs New step** before a HIL Shift
+navigation error stopped that run. Preserve that outlier: evidence is
+`logs/hil-20260918-121339.log`, on Daisy image
+`dba23aa7702a2c340f175b1205a275bc90cb624069d0a2627d43b05485f8fe7a`
+and the same ESP32 image. Later results do not erase SD latency variation.
+Full 128-slot/worst-zone-count fixtures, card identification, callback DWT,
+clock jitter, nearly-full/removed media, missing-dependency/memory failures,
+reconnect, reboot and power interruption are still required. No full HV-016
+case or phase gate is marked passed by this sparse regression.
 
 ## HV-017 — Sample Edit selection
 

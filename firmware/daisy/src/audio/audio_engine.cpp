@@ -2745,6 +2745,12 @@ static void PublishProject() {
     PublishSequencerVoiceMap();
     PushTrackBinding(0xff);
 }
+#if WAVEX_DEBUG_HARNESS_ENABLED
+static BankJobMetrics s_bank_job_metrics;
+BankJobMetrics DebugBankJobMetrics() {
+    return s_bank_job_metrics;
+}
+#endif
 bool BankBusy() {
     return s_bank_session.Get() && s_bank_session.Get()->Busy();
 }
@@ -2765,6 +2771,12 @@ void OnBankOp(const BankOpMessage& request) {
                           PatternStore::Busy() || Storage::CardService::Busy() ||
                           (!BankBusy() && SfzLoader::Busy());
     if (s_bank_session.Get()->Request(request, external)) {
+#if WAVEX_DEBUG_HARNESS_ENABLED
+        s_bank_job_metrics = BankJobMetrics{};
+        s_bank_job_metrics.request_id = request.request_id;
+        s_bank_job_metrics.op = request.op;
+        s_bank_job_metrics.busy = true;
+#endif
         CancelEnvelopeJob();
         CloseWav();
     }
@@ -2776,7 +2788,23 @@ static bool StopBankTrack(uint8_t track) {
 }
 void PumpProjectSession() {
     if (auto& bank = s_bank_session.Get(); bank) {
+#if WAVEX_DEBUG_HARNESS_ENABLED
+        if (bank->Busy()) {
+            // TIM2 raw ticks wrap as uint32_t; GetUs() does not. Each bounded
+            // pump is far shorter than one timer wrap. No callback instrumentation.
+            static const uint32_t ticks_per_us = daisy::System::GetTickFreq() / 1000000u;
+            const uint32_t started = daisy::System::GetTick();
+            bank->Pump();
+            const uint32_t us = (daisy::System::GetTick() - started) / ticks_per_us;
+            ++s_bank_job_metrics.pumps;
+            s_bank_job_metrics.max_pump_us = std::max(s_bank_job_metrics.max_pump_us, us);
+            s_bank_job_metrics.work_us += std::min(us, UINT32_MAX - s_bank_job_metrics.work_us);
+            s_bank_job_metrics.busy = bank->Busy();
+            s_bank_job_metrics.error = bank->Status().error;
+        }
+#else
         bank->Pump();
+#endif
         if (bank->ReplyPending() &&
             Comm::LinkSend(MSG_BANK_STATUS, &bank->Status(), sizeof(BankStatusMessage)) >= 0)
             bank->ReplySent();

@@ -450,6 +450,7 @@ scrolling an unknown card by pot detent.
 |---|---|
 | `PING`, `LOG`, `FILTER` | ack / as before |
 | `STATE` | `voices underruns samples streaming blocks dropped` |
+| `BANKSTATS` | Last accepted Bank job: `request op busy error pumps max_us work_us`; read-only, available during storage work. Rejected requests do not reset the measurement. |
 | `TRACKS` | `t0..t15` = `empty` / `sample:<id>` / `instrument:<name>` / `loading:<name>` — what `MSG_TRACK_BINDING` would say |
 | `SAMPLES` | `n ids` — the WAV registry |
 | `MSG <type_hex> <payload_hex>` | straight into `ProcessInterMcuMessage` |

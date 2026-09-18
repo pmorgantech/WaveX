@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Bank save/recall HIL coverage through the real UI/UART/SD path, including
+  shared and newly admitted samples, cancellation and failure preservation.
+  Debug-only `BANKSTATS` reports per-job foreground service timing; JUnit
+  retains those measurements separately from UI completion time.
+
 - Project → Shift → Banks: 128 stable slots, named New/Open/Save copy,
   explicit Track Store/Clear copies and confirmed recall into the selected
   Track. Recall stages samples before replacement, preserves Track routing/mix

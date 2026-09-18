@@ -3,7 +3,8 @@
 Bank Manager, its foreground session owner and selected-Track recall are
 implemented for Phase 2.5. The codec, SD transactions, staged recall and UI are
 host-tested and both firmware images compile. Physical SD/audio acceptance is
-still open in HV-016. Preload and MIDI Program Change recall remain unimplemented.
+still open in HV-016. A sparse two-board HIL regression passed on 2026-09-18;
+preload and MIDI Program Change recall remain unimplemented.
 
 ## Contents
 
@@ -134,14 +135,28 @@ index replacement. Seven SD-adapter tests cover sparse store/copy/clear and
 selected-slot reads, source preservation, free-space/query failure, exclusive
 publication, short writes, close/rename failures, cancellation, malformed input
 and failed reads using the byte-backed FatFs mock.
-No SD durability, recall latency or MIDI behavior is established by these
-tests.
+Host tests establish no SD durability, recall latency or MIDI behavior.
+The two-board Bank HIL case and its timing readback are described below.
 
 Session tests cover private Track copies, preserved routing/shared sample
 ownership, newly admitted PCM rollback, missing dependencies, full media,
 stale/busy requests and explicit replacement confirmation. Wire/dispatch tests
 reject malformed messages; real-LVGL tests cover confirmation, Track changes,
 stale/offline status, stable slot selection, no mutation replay and idle rendering.
+
+`tests/hil/test_bank_files.py` exercises the Manager through the real UI/UART/SD
+path: sparse Store/Save/Clear copies, Open, cancellation, LFO recall, preserved
+Track routing/mix, shared and newly admitted samples, duplicate destinations and
+missing sources. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
+See [the bench command](../testing_guide.md#bank-files-and-track-recall).
+
+`BANKSTATS` is debug-only foreground telemetry. Each accepted job resets its
+request/op, pump count, maximum pump wall time and summed pump wall time in
+microseconds. It reads the raw TIM2 counter with wrap-safe subtraction around
+each pump; interrupt preemption and blocking SD time are included. Summed work
+saturates at UINT32_MAX. UI/poll/confirmation time is separate. These are not
+callback DWT, CPU utilization, analog continuity or MIDI wire-jitter results.
+Timing instrumentation compiles out when the debug harness is disabled.
 
 The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
 remains open. Next software work is preload and channel-routed MIDI Program

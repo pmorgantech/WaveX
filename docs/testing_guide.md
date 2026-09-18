@@ -201,6 +201,28 @@ cover subsets of HV-003, HV-007 and HV-015; reboot, power interruption, nearly
 full cards, analog sound quality and callback/soak measurements remain open.
 No card formatting occurs in this suite.
 
+### Bank files and Track recall
+
+With both current debug firmware images and serial loggers running, execute:
+
+```bash
+/usr/bin/python3 -m pytest -v tests/hil/test_bank_files.py \
+  -o junit_family=xunit1 --junitxml=logs/bank-hil.xml
+```
+
+This replaces the live bench session and leaves uniquely named `.wxb` copies on
+the card. It uses the same `--hil-sample`/`--hil-sample2` WAV fixtures as the
+save/load suite above. The test exercises New, Store, Save, Clear, Open and
+confirmed/cancelled Recall, preserves another Track while recalling shared or
+unloaded sample data, and checks duplicate-name/missing-file isolation.
+
+JUnit properties retain each accepted job's `BANKSTATS` counters and UI wall
+completion time. Preserve the JUnit report, `logs/hil-*.log`, image hashes and
+card identity with results in HV-016. A sparse one-zone Bank is a functional
+regression fixture, not a full-Bank performance or power-loss gate. Unchanged
+reported underrun counts and retained voices do not establish audible continuity
+or callback headroom; DWT, clock-jitter and soak checks remain separate.
+
 ### Stereo channels and Project mixing
 
 With both debug consoles logged, the default eight-channel firmware and a

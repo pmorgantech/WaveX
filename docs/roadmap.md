@@ -104,7 +104,8 @@ Apply/Revert and Mixer v1 are implemented. Continue from the
 1. **Bank performance recall and editing follow-up.** The [Bank Manager and
    staged selected-Track recall](features/bank-persistence.md) are host-tested
    and compile-verified. New/Open/Save copy and explicit Store/Clear copy preserve
-   immutable source files; physical SD/recall acceptance remains HV-016. Add
+   immutable source files. Sparse Bank HIL passed on 2026-09-18; full SD/recall
+   and timing acceptance remains HV-016. Add
    preload and channel-routed MIDI Program Change recall after measuring service
    latency. Add slot-to-slot copy/move; decide whether a deferred unsaved Bank
    working copy improves the current explicit named-copy workflow. Persist the

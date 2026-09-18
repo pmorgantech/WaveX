@@ -212,6 +212,16 @@ void LoadCvCalFromSd();
 bool StorageJobBusy();
 bool ProjectBusy();
 bool BankBusy();
+#if WAVEX_DEBUG_HARNESS_ENABLED
+// Foreground-only diagnostic snapshot for the most recently accepted Bank job.
+// Timings include interrupt preemption; they are not callback CPU measurements.
+struct BankJobMetrics {
+    uint32_t request_id = 0, pumps = 0, max_pump_us = 0, work_us = 0;
+    uint8_t op = 0, error = 0;
+    bool busy = false;
+};
+BankJobMetrics DebugBankJobMetrics();
+#endif
 void OnBankOp(const WaveX::Protocol::BankOpMessage&);
 void OnSeqSlotEdit(const WaveX::Protocol::SeqSlotEditMessage&);
 void OnSeqSlotPageRequest(const WaveX::Protocol::SeqPatternRequestMessage&);

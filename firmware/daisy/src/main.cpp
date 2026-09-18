@@ -139,7 +139,8 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
 
 #if WAVEX_AUDIO_ENGINE_ENABLED
     if ((WaveX::AudioEngine::ProjectBusy() || WaveX::AudioEngine::BankBusy()) &&
-        std::strcmp(c.verb, "PING") && std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG")) {
+        std::strcmp(c.verb, "PING") && std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG") &&
+        std::strcmp(c.verb, "BANKSTATS")) {
         FormatErr(
             seq, WaveX::AudioEngine::BankBusy() ? "bankbusy" : "projectbusy", reply, sizeof(reply));
         WaveX::Log::PrintLine("%s", reply);
@@ -191,6 +192,19 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
                           "dropped",
                           static_cast<long>(s_console_reader.DroppedBytes()));
         (void)len;
+    } else if (std::strcmp(c.verb, "BANKSTATS") == 0) {
+        const auto stats = WaveX::AudioEngine::DebugBankJobMetrics();
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        char number[11];
+        std::snprintf(number, sizeof(number), "%lu", static_cast<unsigned long>(stats.request_id));
+        len = AppendKv(reply, sizeof(reply), len, "request", number);
+        len = AppendKvInt(reply, sizeof(reply), len, "op", stats.op);
+        len = AppendKvInt(reply, sizeof(reply), len, "busy", stats.busy);
+        len = AppendKvInt(reply, sizeof(reply), len, "error", stats.error);
+        len = AppendKvInt(reply, sizeof(reply), len, "pumps", stats.pumps);
+        len = AppendKvInt(reply, sizeof(reply), len, "max_us", stats.max_pump_us);
+        std::snprintf(number, sizeof(number), "%lu", static_cast<unsigned long>(stats.work_us));
+        AppendKv(reply, sizeof(reply), len, "work_us", number);
     } else if (std::strcmp(c.verb, "METERS") == 0) {
         WaveX::AudioEngine::BlockMeters levels;
         WaveX::AudioEngine::GetMeters(levels);
