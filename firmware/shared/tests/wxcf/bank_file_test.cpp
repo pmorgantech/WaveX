@@ -178,4 +178,51 @@ TEST(BankFile, EmptyBankIsValidAndDoesNotRetainAnEarlierIndex) {
     for (const auto& slot: idx.slots)
         EXPECT_FALSE(slot.used());
 }
+TEST(BankFile, SerializedCopyIsBoundedAndPreservesEmbeddedBytes) {
+    auto source = Sparse();
+    BankFile::Index index;
+    ASSERT_EQ(Scan(source, index), R::Done);
+    Memory destination;
+    BankFile::Encoder writer(destination.Io());
+    ASSERT_EQ(writer.Begin("Copied"), R::More);
+    source.pos = index.slots[127].offset;
+    ASSERT_EQ(writer.BeginCopy(7, index.slots[127]), R::More);
+    while (writer.Copying()) {
+        source.transferred = destination.transferred = 0;
+        ASSERT_EQ(writer.CopyNext(source.Io()), R::More);
+        EXPECT_LE(source.transferred, 128u);
+        EXPECT_EQ(source.transferred, destination.transferred);
+    }
+    ASSERT_EQ(writer.Finish(), R::Done);
+    BankFile::Index copied;
+    ASSERT_EQ(Scan(destination, copied), R::Done);
+    ASSERT_TRUE(copied.slots[7].used());
+    EXPECT_FALSE(copied.slots[127].used());
+    EXPECT_EQ(copied.slots[7].bytes, index.slots[127].bytes);
+    EXPECT_EQ(std::memcmp(source.data.data() + index.slots[127].offset,
+                          destination.data.data() + copied.slots[7].offset,
+                          copied.slots[7].bytes),
+              0);
+}
+TEST(BankFile, UnfinishedOrFailedCopiesCannotProduceCompletedBanks) {
+    auto source = Sparse();
+    BankFile::Index index;
+    ASSERT_EQ(Scan(source, index), R::Done);
+    Memory destination;
+    BankFile::Encoder writer(destination.Io());
+    ASSERT_EQ(writer.Begin("Copy"), R::More);
+    ASSERT_EQ(writer.BeginCopy(0, index.slots[0]), R::More);
+    EXPECT_EQ(writer.Finish(), R::Invalid);
+    Memory failed;
+    BankFile::Encoder broken(failed.Io());
+    ASSERT_EQ(broken.Begin("Copy"), R::More);
+    ASSERT_EQ(broken.BeginCopy(0, index.slots[0]), R::More);
+    source.pos = index.slots[0].offset;
+    source.fail_at = source.pos;
+    EXPECT_EQ(broken.CopyNext(source.Io()), R::IoError);
+    const auto size = failed.data.size();
+    EXPECT_EQ(broken.Finish(), R::IoError);
+    EXPECT_EQ(broken.CopyNext(source.Io()), R::IoError);
+    EXPECT_EQ(failed.data.size(), size);
+}
 }  // namespace

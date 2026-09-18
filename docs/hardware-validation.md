@@ -25,6 +25,7 @@ this document owns the runnable checks and their validation status.
 - [HV-013 — MCP3208 and endless pots](#hv-013--mcp3208-and-endless-pots)
 - [HV-014 — MIDI ports and clock serialization](#hv-014--midi-ports-and-clock-serialization)
 - [HV-015 — LFO range and musical rate controls](#hv-015--lfo-range-and-musical-rate-controls)
+- [HV-016 — Bank SD transactions](#hv-016--bank-sd-transactions)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -81,6 +82,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
+| HV-016 | Bank SD transactions | Blocked | Adapter host-tested; session/UI entry point required before bench execution |
 
 ## HV-001 — SD card formatting
 
@@ -282,33 +284,6 @@ paths. Preserve earlier files when testing failure/recovery.
 date and evidence below; no reboot/durability/timing result is implied by the
 host integration and widget tests.
 
-## Recording a validation session
-
-Append a record for each run and update the relevant boxes and queue status.
-For a quick report, use IDs such as `001a passed; 001b failed — ...`.
-Unrun subcases stay open. No physical tests were run when this checklist was
-created; the checked switching observation above comes from the user.
-
-```text
-Date / tester:
-Check IDs and per-case result (pass / fail / not run):
-ESP32 image / source commit / build profile:
-Daisy image / source commit / build profile:
-Hardware, card, fixtures and relevant configuration:
-Observed behavior / measurements:
-Evidence (log, recording, trace or photo link):
-Failure follow-up / remaining cases:
-```
-
-## Related
-
-- [Roadmap and phase gates](roadmap.md)
-- [Testing guide](testing_guide.md)
-- [Flashing](flashing.md)
-- [Performance monitoring](performance_monitoring.md)
-- [Callback performance evidence](callback-performance-log.md)
-
-
 ### Save/load HIL — 2026-09-17
 
 **Partial pass:** Four tests passed in 95.35 s on both boards (UTC transcript
@@ -387,7 +362,6 @@ Queued launch follow-up (host-verified, hardware pending):
   Record matched DWT average/p95/max on launch blocks with full voice load,
   not just idle sequencing. Include loop-boundary launches in the soak.
 
-
 ## HV-009 — Song arrangement and playback
 
 **Status:** Pending. No hardware execution recorded for this implementation.
@@ -427,7 +401,6 @@ audio recording and DWT/underrun logging per the performance guide.
 **Pass:** Every case above passes with dated paired image identities and evidence.
 **Blockers:** Physical boards, audio/MIDI capture and DWT measurements are required;
 host and compile results do not close this gate.
-
 
 ## HV-010 — Waveform playback head
 
@@ -471,7 +444,6 @@ feedback, not a sample-accurate audio/visual synchronization promise.
 Reverse playback and Track/Zone-specific views are not implemented; add their
 checks when those features reach their own gate.
 
-
 ## HV-011 — Keypad interrupt and recovery
 
 **Status:** Blocked on physical wiring; no bench results recorded.
@@ -497,7 +469,6 @@ shared touch bus, logic analyzer, serial diagnostics, and a playable test kit.
 touch, measured latency and zero audio underruns under the test workload.
 Host tests cover register setup, FIFO ordering/ACK race, backpressure, overflow,
 I2C failure and bounded draining; they do not establish physical correctness.
-
 
 ## HV-012 — Panel LED output
 
@@ -538,7 +509,6 @@ Record wiring revision and images with each dated result.
 or visual evidence. Host tests cover policy, mapping, PWM packing, blanking and
 heartbeat wrap; builds do not establish electrical correctness. Repeat electrical
 and flicker checks with MCP3208 scans active as specified in HV-013.
-
 
 ## HV-013 — MCP3208 and endless pots
 
@@ -672,7 +642,6 @@ Pattern/Song seeking and UI controls implemented. Parser/queue/protocol and
 transport/follower host tests added or updated. No board flashed and no new
 hardware result recorded; all checks above remain open.
 
-
 ## HV-015 — LFO range and musical rate controls
 
 **Status:** Partial: WXI/Project retention and LFO UI HIL passed on 2026-09-17;
@@ -709,3 +678,55 @@ for DWT/callback and UI RENDER/sysmon measurements.
 **Pass:** All applicable steps pass with date, both image identities, saved-file
 identities and capture/profile evidence. Host tests cover numeric timing,
 mode behavior and wire/WXI retention; they do not close these physical gates.
+
+## HV-016 — Bank SD transactions
+
+**Status:** Blocked on the working-copy session owner and device entry point;
+this is a procedure for the next integration, not a runnable bench gate yet.
+**Design / gate:** [Bank persistence](features/bank-persistence.md),
+[Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer).
+**Setup:** Both integrated images, a backed-up disposable card, a sparse Bank
+with occupied first/last slots and two-oscillator Instruments, serial capture
+and DWT/audio monitoring. Use new names; preserve the source Bank.
+
+- [ ] **016a — Sparse copies:** Create an empty Bank, store in slots 1/128,
+  copy it while replacing one slot, then clear one slot into another copy.
+  Reload each file. **Pass:** Stable slot identities, names/tags and both
+  oscillator/LFO settings; the original Bank and its embedded bytes are unchanged.
+- [ ] **016b — Failure isolation:** Try duplicate names, an occupied temporary
+  name, insufficient free space and removed media. Cancel a long copy.
+  **Pass:** No destination is published on failure, earlier files remain usable,
+  and only the job's own temporary is eligible for cleanup. Failed reads never
+  replace the live Bank or Track.
+- [ ] **016c — Service budget and recovery:** Copy a full Bank while resident
+  playback runs; measure foreground pump worst case (including one new WXI
+  encode/read), callback DWT and underruns. Reboot and reload the successful copy.
+  **Pass:** No underruns, acceptable control responsiveness under the performance
+  policy, and the saved Bank reopens with the same slot contents. Record image
+  hashes, card identity, timings and evidence before closing this entry.
+
+## Recording a validation session
+
+Append a record for each run and update the relevant boxes and queue status.
+For a quick report, use IDs such as `001a passed; 001b failed — ...`.
+Unrun subcases stay open. No physical tests were run when this checklist was
+created; the checked switching observation above comes from the user.
+
+```text
+Date / tester:
+Check IDs and per-case result (pass / fail / not run):
+ESP32 image / source commit / build profile:
+Daisy image / source commit / build profile:
+Hardware, card, fixtures and relevant configuration:
+Observed behavior / measurements:
+Evidence (log, recording, trace or photo link):
+Failure follow-up / remaining cases:
+```
+
+## Related
+
+- [Roadmap and phase gates](roadmap.md)
+- [Testing guide](testing_guide.md)
+- [Flashing](flashing.md)
+- [Performance monitoring](performance_monitoring.md)
+- [Callback performance evidence](callback-performance-log.md)

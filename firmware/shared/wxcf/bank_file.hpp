@@ -53,7 +53,7 @@ class Encoder {
     Result Append(uint8_t slot, const Wxi::InstrumentFile& doc) {
         if (result_ != Result::More)
             return result_;
-        if (!started_ || slot >= kSlots || seen_[slot] || !ValidName(doc.name))
+        if (!started_ || copying_ || slot >= kSlots || seen_[slot] || !ValidName(doc.name))
             return Fail(Result::Invalid);
         const uint32_t bytes = Wxi::detail::TotalFileSize(doc);
         if (bytes > kMaxDocumentBytes || written_ > kMaxFileBytes - 8 - kSlotPrefixBytes - bytes)
@@ -71,9 +71,45 @@ class Encoder {
         written_ += 8 + kSlotPrefixBytes + bytes;
         return result_;
     }
+    // Copy an already indexed WXI without decoding/re-encoding its extensions.
+    // Caller positions a stable read-only source at metadata.offset. Each
+    // CopyNext transfers at most 128 bytes; the metadata comes from IndexDecoder.
+    Result BeginCopy(uint8_t slot, const Slot& metadata) {
+        if (result_ != Result::More)
+            return result_;
+        if (!started_ || copying_ || slot >= kSlots || seen_[slot] || !ValidName(metadata.name) ||
+            metadata.bytes < 12 || metadata.bytes > kMaxDocumentBytes ||
+            written_ > kMaxFileBytes - 8 - kSlotPrefixBytes - metadata.bytes)
+            return Fail(Result::Invalid);
+        uint8_t prefix[kSlotPrefixBytes]{};
+        std::memcpy(prefix, metadata.name, sizeof(metadata.name));
+        prefix[24] = metadata.tags;
+        if (writer_.BeginChunk(0x100 + slot, kVersion, kSlotPrefixBytes + metadata.bytes) !=
+                Wxcf::Result::Ok ||
+            writer_.WriteData(prefix, sizeof(prefix)) != Wxcf::Result::Ok)
+            return Fail(Result::IoError);
+        seen_[slot] = true;
+        copying_ = metadata.bytes;
+        written_ += 8 + kSlotPrefixBytes + metadata.bytes;
+        return result_;
+    }
+    Result CopyNext(Wxcf::IoContext source) {
+        if (result_ != Result::More)
+            return result_;
+        if (!copying_ || !source.read)
+            return Fail(Result::Invalid);
+        uint8_t bytes[128];
+        const uint32_t n = copying_ < sizeof(bytes) ? copying_ : 128u;
+        if (!source.read(source.user_data, bytes, n) ||
+            writer_.WriteData(bytes, n) != Wxcf::Result::Ok)
+            return Fail(Result::IoError);
+        copying_ -= static_cast<uint32_t>(n);
+        return result_;
+    }
+    bool Copying() const { return copying_ != 0; }
     Result Finish() {
         if (result_ == Result::More)
-            result_ = started_ ? Result::Done : Result::Invalid;
+            result_ = started_ && !copying_ ? Result::Done : Result::Invalid;
         return result_;
     }
 
@@ -82,7 +118,7 @@ class Encoder {
     Wxcf::IoContext io_;
     Wxcf::Writer writer_;
     bool started_ = false, seen_[kSlots]{};
-    uint32_t written_ = 12 + 8 + 24;
+    uint32_t written_ = 12 + 8 + 24, copying_ = 0;
     Result result_ = Result::More;
 };
 
@@ -91,7 +127,12 @@ class Encoder {
 // bounded index scan regardless of the number of zones in an Instrument.
 class IndexDecoder {
    public:
-    IndexDecoder(Wxcf::IoContext io, Index& index) : reader_(io), out_(index) { out_ = Index{}; }
+    IndexDecoder(Wxcf::IoContext io, Index& index) : reader_(io), out_(index) {
+        // Reset in small records; never materialize a full index on the MCU stack.
+        std::memset(out_.name, 0, sizeof(out_.name));
+        for (auto& slot: out_.slots)
+            slot = Slot{};
+    }
     Result Advance() {
         if (result_ != Result::More)
             return result_;

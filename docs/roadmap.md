@@ -323,7 +323,10 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    These runs do not close the one-hour phase soak or permit a voice-count
    change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
-   bounded resident index are host-tested. SD working-copy management, Bank
+   bounded resident index are host-tested. The SD transaction adapter now
+   supports named create/copy, a stored/cleared slot, index loading and private
+   Instrument decoding, with free-space admission and failure cleanup. It is
+   host-tested/compile-verified, without a device entry point yet. SD working-copy management, Bank
    Manager, Track recall, preload and Program Change recall remain open and
    follow the expanded Instrument engine. The requested Bank Manager must
    create/name/open/save Banks, browse stable numbered slots, store an edited

@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Bank SD transaction adapter for empty creation, save copies with stable-slot
+  store/clear, bounded copying of unchanged Instruments, index scans and private
+  Instrument reads. Saves check free space and preserve earlier files on failure.
+  Host-tested and compile-verified; Bank Manager/runtime integration remains open.
+
 - Save/load HIL coverage for complete Projects, Pattern session ownership and
   Instrument LFO range endpoints, with current Mixer/Pattern Slots navigation
   and a repeatable JUnit-producing bench command.

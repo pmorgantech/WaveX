@@ -62,6 +62,7 @@ set(WAVEX_COLD_SOURCES
     src/comm/daisy_filesystem.cpp
     src/comm/daisy_inter_mcu_message_handlers.cpp
     src/storage/card_service.cpp
+    src/storage/bank_file_job.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
     src/storage/project_patterns.cpp
@@ -92,6 +93,7 @@ set(FIRMWARE_SOURCES
     src/audio/sfz_loader.hpp
     src/audio/snapshot_mailbox.hpp
     src/storage/card_service.cpp
+    src/storage/bank_file_job.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
     src/storage/project_patterns.cpp
