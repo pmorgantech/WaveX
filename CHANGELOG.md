@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Sample Edit → Shift → Select opens a paged resident-sample picker with touch
+  and encoder selection, cancellation and stale/offline selection guards. Track
+  assignment stays unchanged; pending marker edits finish before switching samples.
+  Real-LVGL host checks pass; physical validation is tracked in HV-017.
+
 - Bank SD transaction adapter for empty creation, save copies with stable-slot
   store/clear, bounded copying of unchanged Instruments, index scans and private
   Instrument reads. Saves check free space and preserve earlier files on failure.

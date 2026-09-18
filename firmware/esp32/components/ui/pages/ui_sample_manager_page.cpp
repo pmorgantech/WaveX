@@ -68,7 +68,8 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    buildTrackStrip(root_);
+    if (!select_only_)
+        buildTrackStrip(root_);
 
     // The grid holds cards, not rows, so it is a plain container placed
     // absolutely and the cards are placed inside it - a flex column would
@@ -125,7 +126,8 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     cache_revision_seen_ = inter_mcu_sample_cache_revision();
     requestPage();
     inter_mcu_request_sample_mem_status();
-    inter_mcu_request_track_binding(0xFF);
+    if (!select_only_)
+        inter_mcu_request_track_binding(0xFF);
 
     // An lv_timer runs in LVGL context with the lock held, so it may touch
     // widgets directly. Rebuilding from the cache is how new metadata reaches
@@ -369,6 +371,25 @@ void UISampleManagerPage::rebuildList() {
         lv_obj_set_style_border_color(btn, UI_COLOR_LINE, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(btn, 16, LV_PART_MAIN);
         lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        if (select_only_) {
+            lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(
+                btn,
+                [](lv_event_t* event) {
+                    auto* self = static_cast<UISampleManagerPage*>(lv_event_get_user_data(event));
+                    auto* target = static_cast<lv_obj_t*>(lv_event_get_target(event));
+                    for (int index = 0; index < self->row_count_; ++index) {
+                        if (self->rows_[index].btn == target) {
+                            self->focus_ = index;
+                            self->styleRows(getCurrentSampleId());
+                            self->refreshDetail();
+                            break;
+                        }
+                    }
+                },
+                LV_EVENT_CLICKED,
+                this);
+        }
 
         // The basename, not the path. m.name carries the whole card path, and
         // on a card that fits about twenty characters the leading directories
@@ -523,7 +544,11 @@ void UISampleManagerPage::refreshDetail() {
         have_binding && (binding.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
                          binding.state == WaveX::Protocol::TRACK_BINDING_LOADING);
     char action[128];
-    if (is_bound) {
+    if (select_only_) {
+        snprintf(action,
+                 sizeof(action),
+                 "Select opens this sample in the editor. Tracks stay assigned.");
+    } else if (is_bound) {
         snprintf(action, sizeof(action), "Notes play THIS sample on this Track.");
     } else if (track_holds_patch) {
         snprintf(action,
@@ -564,7 +589,10 @@ void UISampleManagerPage::refreshTrackLabel() {
     if (!track_label_) {
         return;
     }
-    lv_label_set_text_fmt(track_label_, "TRACK %u", trackDisplayNumber(getCurrentTrack()));
+    if (select_only_)
+        lv_label_set_text(track_label_, "Choose a sample to edit");
+    else
+        lv_label_set_text_fmt(track_label_, "TRACK %u", trackDisplayNumber(getCurrentTrack()));
 }
 
 void UISampleManagerPage::moveFocus(int delta) {
@@ -722,6 +750,25 @@ void UISampleManagerPage::editFocused() {
     }
 }
 
+void UISampleManagerPage::selectFocused() {
+    const Row* row = focusedRow();
+    WaveX::Protocol::SampleMetadata meta{};
+    // Revalidate against the cache at activation; a removed row or an old page
+    // must not change selection while a replacement page is in flight.
+    WaveX::Protocol::SampleMetadata page[kMaxRows]{};
+    uint16_t total = 0, first = 0;
+    const auto count = inter_mcu_get_sample_meta_page(page, kMaxRows, &total, &first);
+    if (!inter_mcu_backend_link_alive() || !row || first != page_first_ ||
+        focus_ >= static_cast<int>(count) || page[focus_].sample_id != row->sample_id ||
+        !inter_mcu_get_sample_meta(row->sample_id, &meta) ||
+        !(meta.flags & WaveX::Protocol::SAMPLE_META_RESIDENT)) {
+        lv_label_set_text(status_label_, "Sample unavailable - refresh the list");
+        return;
+    }
+    setCurrentSampleId(row->sample_id);
+    UINavigator::instance().pop();
+}
+
 void UISampleManagerPage::onInput(const InputEvent& evt) {
     switch (evt.type) {
         // Clockwise (positive steps()) moves focus forward. EncoderDown used
@@ -735,7 +782,10 @@ void UISampleManagerPage::onInput(const InputEvent& evt) {
             moveFocus(evt.steps() > 0 ? +1 : -1);
             break;
         case InputType::EncoderClick:
-            assignFocused();
+            if (select_only_)
+                selectFocused();
+            else
+                assignFocused();
             break;
         default:
             break;
@@ -744,7 +794,14 @@ void UISampleManagerPage::onInput(const InputEvent& evt) {
 
 std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
-    keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
+    keys[0] = {select_only_ ? "Cancel" : "Back", []() { UINavigator::instance().pop(); }};
+    if (select_only_) {
+        keys[1] = {"Select", [this]() { selectFocused(); }};
+        keys[3] = {"Previous", [this]() { moveFocus(-1); }};
+        keys[4] = {"Next", [this]() { moveFocus(1); }};
+        keys[5] = {"Refresh", [this]() { requestPage(); }};
+        return keys;
+    }
     keys[1] = {"Assign", [this]() { assignFocused(); }};
     keys[2] = {"Unload", [this]() { unloadFocused(); }};
     keys[3] = {"Up", [this]() { moveFocus(-1); }};
@@ -758,6 +815,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
 }
 
 std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getShiftedSoftkeys() {
+    if (select_only_)
+        return getSoftkeys();
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     keys[1] = {"Track -", [this]() { changeTrack(-1); }};
@@ -780,6 +839,10 @@ size_t UISampleManagerPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvText(
         out, cap, len, "status", status_label_ ? lv_label_get_text(status_label_) : "");
     return len;
+}
+
+std::shared_ptr<UIPage> createSamplePickerPage() {
+    return std::make_shared<UISampleManagerPage>(true);
 }
 
 std::shared_ptr<UIPage> createSampleManagerPage() {

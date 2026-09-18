@@ -15,3 +15,17 @@ esp_err_t inter_mcu_send_seq_slot_op(const WaveX::Protocol::SeqSlotOpMessage&);
 bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage*);
 esp_err_t inter_mcu_send_seq_song_op(const WaveX::Protocol::SeqSongOpMessage& request);
 bool inter_mcu_get_seq_song_status(WaveX::Protocol::SeqSongStatusMessage* out);
+
+bool inter_mcu_get_sample_meta(uint16_t, WaveX::Protocol::SampleMetadata*);
+size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata*,
+                                      size_t,
+                                      uint16_t*,
+                                      uint16_t*);
+bool inter_mcu_get_track_binding(uint8_t, WaveX::Protocol::TrackBindingMessage*);
+esp_err_t inter_mcu_request_track_binding(uint8_t);
+esp_err_t inter_mcu_request_sample_meta_page(uint16_t, uint8_t);
+esp_err_t inter_mcu_request_sample_mem_status();
+uint32_t inter_mcu_sample_pool_revision();
+uint32_t inter_mcu_sample_cache_revision();
+esp_err_t inter_mcu_send_sample_select(uint16_t, uint8_t);
+esp_err_t inter_mcu_send_sample_unload(uint16_t);

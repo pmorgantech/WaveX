@@ -102,6 +102,13 @@ The selected Track (`ui/current_track.h`) and selected sample
 them from the previous page. Replacing an occupied Track follows the
 confirmation policy in the Track/Instrument model.
 
+Sample Edit → Shift → Select opens a resident-sample picker using the Sample
+Manager’s bounded Pool pages. Touch a card or use Previous/Next/the encoder,
+then Select; Cancel leaves the current sample unchanged. Selection changes only
+the shared editor sample, never a Track binding. The editor publishes pending
+marker edits and stops its audition before leaving, then recreates the waveform
+for the selected sample on return. Physical checks are HV-017.
+
 The header status strip owns its LVGL timer and reads meter snapshots from
 `inter_mcu_get_meter_data()`. There is no second `UITask` meter timer.
 Backend uptime comes from the heartbeat; storage diagnostics have one

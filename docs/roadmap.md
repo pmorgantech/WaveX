@@ -34,8 +34,8 @@ while panel wiring is pending; the full Phase 2 gate remains open.
 1. Persist standalone marker/gain edits with the WXCF sidecar model; settle
    Save As naming and sidecar versus render-to-new-file behavior. Project
    snapshots already retain sample edits.
-2. Finish explicit Sample Edit selection and define partial-load behavior for
-   samples too large for resident RAM.
+2. Define partial-load behavior for samples too large for resident RAM.
+   Explicit resident-sample selection is implemented; panel checks are HV-017.
 3. Finish marker interaction: loop seam verification, zero-crossing snap
    protocol/policy for stereo, and playback-time loop crossfade.
 4. Reconcile streaming/RAM channel behavior and expose `channel_mode` in the
@@ -166,7 +166,7 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–016. Keep partial/deferred checks open;
+image identities and results for HV-001–017. Keep partial/deferred checks open;
 formatting remains deferred until the user tests it. Save/load HIL and selected
 bench passes do not replace physical or full-phase acceptance.
 

@@ -37,7 +37,8 @@ namespace wavex_ui {
  */
 class UISampleManagerPage : public UIPage {
    public:
-    const char* name() const override { return "Sample Manager"; }
+    explicit UISampleManagerPage(bool select_only = false) : select_only_(select_only) {}
+    const char* name() const override { return select_only_ ? "Select sample" : "Sample Manager"; }
 
     void onEnter(lv_obj_t* parent) override;
     size_t consoleState(char* out, size_t cap, size_t len) override;
@@ -47,6 +48,8 @@ class UISampleManagerPage : public UIPage {
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
    private:
+    const bool select_only_;
+    void selectFocused();
     // One page of the Sample Pool: the window this page asks the Daisy for
     // (MSG_SAMPLE_META_PAGE_REQ) and shows. The Pool holds up to 1024; the
     // list pages through it rather than mirroring it.
@@ -123,5 +126,6 @@ class UISampleManagerPage : public UIPage {
 };
 
 std::shared_ptr<UIPage> createSampleManagerPage();
+std::shared_ptr<UIPage> createSamplePickerPage();
 
 }  // namespace wavex_ui

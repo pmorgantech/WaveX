@@ -26,6 +26,7 @@ this document owns the runnable checks and their validation status.
 - [HV-014 — MIDI ports and clock serialization](#hv-014--midi-ports-and-clock-serialization)
 - [HV-015 — LFO range and musical rate controls](#hv-015--lfo-range-and-musical-rate-controls)
 - [HV-016 — Bank SD transactions](#hv-016--bank-sd-transactions)
+- [HV-017 — Sample Edit selection](#hv-017--sample-edit-selection)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -83,6 +84,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
 | HV-016 | Bank SD transactions | Blocked | Adapter host-tested; session/UI entry point required before bench execution |
+| HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 
 ## HV-001 — SD card formatting
 
@@ -704,6 +706,31 @@ and DWT/audio monitoring. Use new names; preserve the source Bank.
   **Pass:** No underruns, acceptable control responsiveness under the performance
   policy, and the saved Bank reopens with the same slot contents. Record image
   hashes, card identity, timings and evidence before closing this entry.
+
+## HV-017 — Sample Edit selection
+
+**Status:** Pending. Real-LVGL host tests cover selection, cancellation,
+removed/offline samples and stale page rejection; physical behavior is unrun.
+**Design / gate:** [Sample Edit](ui-architecture.md#page-contract-and-lifetime),
+[Phase 1.5](roadmap.md#phase-15--sample-editing).
+**Setup:** Both images, at least ten resident samples with different lengths,
+stereo/mono files, two assigned Tracks, serial/audio capture and render profiling.
+
+- [ ] **017a — Select and cancel:** In Sample Edit, Shift → Select; touch a card,
+  Select, then repeat using encoder/Previous/Next across pages. Cancel a different
+  choice. **Pass:** The correct name, waveform, duration and saved markers appear;
+  Cancel retains the old sample; Track assignments and current Track are unchanged.
+- [ ] **017b — Lifetime:** Audition and drag a marker, immediately open the picker
+  and select another sample; repeat while waveform data arrives. Remove a focused
+  sample or disconnect the backend before selecting. **Pass:** Audition stops,
+  the pending edit belongs only to the old sample, invalid selection stays in
+  the picker, and no stale waveform or marker request affects the new sample.
+- [ ] **017c — Panel/render:** Exercise touch, encoder, exit/re-entry and empty
+  Pool; profile idle polling and selection during resident playback. **Pass:**
+  Readable layout, no idle full-screen repaint, no stuck controls or underruns.
+
+**Blockers:** Requires the new frontend image and physical touch/audio checks.
+No hardware result is claimed by the host tests.
 
 ## Recording a validation session
 

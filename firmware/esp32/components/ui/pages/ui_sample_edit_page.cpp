@@ -10,6 +10,7 @@
 #include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
+#include "ui/ui_sample_manager_page.h"
 #include "ui_theme.h"
 
 #include <algorithm>
@@ -146,6 +147,9 @@ void formatFrames(char* out, size_t n, uint32_t frames, uint32_t rate) {
 }  // namespace
 
 void UISampleEditPage::onEnter(lv_obj_t* parent) {
+    edit_due_ms_ = 0;
+    params_dirty_ = false;
+    wave_status_shown_ = false;
     root_ = lv_obj_create(parent);
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
@@ -180,7 +184,7 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     WaveX::Protocol::SampleMetadata m;
     has_sample_ = currentSampleId() != 0 && inter_mcu_get_sample_meta(currentSampleId(), &m);
     if (!has_sample_) {
-        refreshStatus("No sample selected. Load one, or Edit from Sample Manager.");
+        refreshStatus("No sample selected. Shift > Select chooses a loaded sample.");
         refreshParams();
         return;
     }
@@ -320,6 +324,12 @@ void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::onExit() {
+    // Publish the final coalesced drag for the old sample before a picker can
+    // change the shared selection. Never carry it into the next page entry.
+    if (edit_due_ms_) {
+        edit_due_ms_ = 0;
+        sendEdit();
+    }
     // Detach first. It releases the chunk listener before anything else, so
     // deleting the timer and the views below cannot race a chunk arriving on
     // the RX task, and it releases the cache's run in flight, which would
@@ -390,13 +400,11 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getSoftkeys() {
     return keys;
 }
 
-// Shifted row: the file- and parameter-level operations. All of these need
-// protocol work that does not exist yet (roadmap Phase 1.5.1), so they are
-// present but disabled with the reason attached - a key that silently does
-// nothing is worse than one that says why it cannot.
+// Shifted row: sample selection and parameter operations. Standalone file
+// saves remain disabled until marker persistence is implemented.
 std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
-    keys[0] = {"Select", nullptr, false, "no sample picker yet"};
+    keys[0] = {"Select", []() { UINavigator::instance().push(createSamplePickerPage()); }};
     keys[1] = {loop_enabled_ ? "Loop Off" : "Loop On", [this]() {
                    loop_enabled_ = !loop_enabled_;
                    params_dirty_ = true;
