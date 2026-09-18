@@ -1728,7 +1728,8 @@ enum BankOpCode : uint8_t {
     BANK_SAVE_COPY,
     BANK_STORE_COPY,
     BANK_CLEAR_COPY,
-    BANK_RECALL
+    BANK_RECALL,
+    BANK_PRELOAD
 };
 enum BankError : uint8_t {
     BANK_OK = 0,
@@ -1775,7 +1776,7 @@ struct BankStatusMessage {
 } __attribute__((packed));
 static_assert(sizeof(BankOpMessage) == 36 && sizeof(BankStatusMessage) == 72, "Bank wire sizes");
 inline bool IsValidBankOp(const BankOpMessage& m) {
-    return m.request_id && m.op <= BANK_RECALL && m.slot < 128 && m.track < 16 &&
+    return m.request_id && m.op <= BANK_PRELOAD && m.slot < 128 && m.track < 16 &&
            !(m.flags & ~BANK_CONFIRM_REPLACE);
 }
 inline bool IsValidBankStatus(const BankStatusMessage& m) {
@@ -1786,7 +1787,7 @@ inline bool IsValidBankStatus(const BankStatusMessage& m) {
         instrument_end |= c == 0;
     return m.request_id && m.revision && m.busy <= 1 && m.blocked <= 1 && m.loaded <= 1 &&
            m.occupied <= m.loaded && m.slot < 128 && m.error <= BANK_CONFIRM_REQUIRED &&
-           m.active_op <= BANK_RECALL && m.completed_op <= BANK_RECALL && name_end &&
+           m.active_op <= BANK_PRELOAD && m.completed_op <= BANK_PRELOAD && name_end &&
            instrument_end &&
            (m.busy ? m.active_request_id != 0 && m.active_op != BANK_GET
                    : m.active_request_id == 0);

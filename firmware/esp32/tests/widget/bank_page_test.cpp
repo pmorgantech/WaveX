@@ -179,3 +179,30 @@ TEST_F(BankPageTest, RenderLayoutAndIdleRefresh) {
     EXPECT_TRUE(mutations.empty());
     EXPECT_TRUE(page->getSoftkeys()[3].enabled);
 }
+
+TEST_F(BankPageTest, PreloadUsesActiveBankWithoutNameOrReplacementConfirmation) {
+    status.occupied = 0;  // selected slot need not be occupied
+    Advance(5);
+    Press(5);
+    ASSERT_EQ(mutations.size(), 1u);
+    EXPECT_EQ(mutations[0].op, BANK_PRELOAD);
+    EXPECT_EQ(mutations[0].flags, 0);
+    EXPECT_STREQ(mutations[0].name, "");
+    EXPECT_FALSE(page->getSoftkeys()[5].enabled);
+    alive = false;
+    Advance(3);
+    alive = true;
+    Advance(20);
+    EXPECT_EQ(mutations.size(), 1u);
+}
+TEST_F(BankPageTest, PreloadNeedsLoadedFreshBank) {
+    status.loaded = status.occupied = 0;
+    Advance(5);
+    EXPECT_FALSE(page->getSoftkeys()[5].enabled);
+    status.loaded = 1;
+    Advance(5);
+    EXPECT_TRUE(page->getSoftkeys()[5].enabled);
+    respond = false;
+    Advance(20);
+    EXPECT_FALSE(page->getSoftkeys()[5].enabled);
+}

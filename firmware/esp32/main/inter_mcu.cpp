@@ -1829,7 +1829,7 @@ namespace {
 portMUX_TYPE s_bank_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::BankStatusMessage s_bank_status;
 bool s_bank_valid = false;
-uint32_t s_bank_recalled = 0;
+uint32_t s_bank_pool_changed = 0;
 }  // namespace
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage& request) {
     if (!WaveX::Protocol::IsValidBankOp(request))
@@ -1845,14 +1845,15 @@ void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage& statu
     taskENTER_CRITICAL(&s_bank_lock);
     s_bank_status = status;
     s_bank_valid = true;
-    const bool recalled = status.completed_op == BANK_RECALL && status.error == BANK_OK &&
-                          status.completed_request_id &&
-                          status.completed_request_id != s_bank_recalled;
-    if (recalled)
-        s_bank_recalled = status.completed_request_id;
+    const bool pool_changed =
+        (status.completed_op == BANK_RECALL || status.completed_op == BANK_PRELOAD) &&
+        status.error == BANK_OK && status.completed_request_id &&
+        status.completed_request_id != s_bank_pool_changed;
+    if (pool_changed)
+        s_bank_pool_changed = status.completed_request_id;
     taskEXIT_CRITICAL(&s_bank_lock);
-    if (recalled) {
-        // Recall can retire old Pool IDs. Discard cached records/pages before
+    if (pool_changed) {
+        // Recall can retire IDs; preload adds records/pins. Discard caches before
         // readers request the new authoritative Pool view.
         taskENTER_CRITICAL(&s_meta_lock);
         for (auto& valid: s_meta_valid)

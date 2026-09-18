@@ -7,7 +7,7 @@
 using namespace WaveX::Protocol;
 TEST(BankProtocol, OperationsAndRetainedResultsRoundTrip) {
     std::array<uint8_t, 128> packet{};
-    for (uint8_t op = BANK_GET; op <= BANK_RECALL; ++op) {
+    for (uint8_t op = BANK_GET; op <= BANK_PRELOAD; ++op) {
         BankOpMessage request;
         request.request_id = 123;
         request.revision = 456;
@@ -31,7 +31,7 @@ TEST(BankProtocol, OperationsAndRetainedResultsRoundTrip) {
         status.completed_request_id = 3;
         status.busy = 1;
         status.active_op = BANK_STORE_COPY;
-        status.completed_op = BANK_RECALL;
+        status.completed_op = BANK_PRELOAD;
         status.error = error;
         status.loaded = status.occupied = 1;
         status.slot = 127;
@@ -61,7 +61,7 @@ TEST(BankProtocol, RejectsInvalidBoundsFlagsAndStatus) {
     op.flags = 2;
     EXPECT_FALSE(IsValidBankOp(op));
     op.flags = 0;
-    op.op = BANK_RECALL + 1;
+    op.op = BANK_PRELOAD + 1;
     EXPECT_FALSE(IsValidBankOp(op));
     BankStatusMessage status;
     status.request_id = 1;

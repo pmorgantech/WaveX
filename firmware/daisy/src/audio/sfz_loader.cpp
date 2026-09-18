@@ -76,6 +76,7 @@ alignas(Tracks) static uint8_t s_bank_storage[sizeof(Tracks)] WAVEX_BACKGROUND_D
 static Tracks* s_bank = nullptr;
 static Tracks* s_project_bank = nullptr;
 static bool s_in_project_step = false;
+static bool s_project_samples_only = false;
 static bool s_project_close_failed = false;
 static bool s_project_failed = false;
 static InstrumentSoundUndo s_sound_undo[kNumTracks];
@@ -270,7 +271,8 @@ uint32_t AvailableBytes(SamplePool& pool, SampleMemMgr& memory, uint8_t track) {
     uint64_t free_bytes = static_cast<uint64_t>(stats.large_free_bytes) + stats.small_free_bytes;
     // Replacing what this Track holds frees the samples only it references;
     // they become available after the callback's stop acknowledgement.
-    free_bytes += ReclaimableBytes(pool, track);
+    if (!s_project_samples_only)
+        free_bytes += ReclaimableBytes(pool, track);
     if (free_bytes <= WAVEX_INST_LOAD_RESERVE_BYTES)
         return 0;
     free_bytes -= WAVEX_INST_LOAD_RESERVE_BYTES;
@@ -827,6 +829,7 @@ uint8_t SaveCopy() {
 void Reset() {
     s_project_bank = nullptr;
     s_in_project_step = false;
+    s_project_samples_only = false;
     s_project_close_failed = false;
     s_project_snapshot = false;
     s_bank_snapshot = false;
@@ -1101,7 +1104,8 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     // Only this Track's holdings are released; every other Track's refs, and
     // the user's pinned samples, are untouched (they may be this import's
     // hits). Mod slots survive: a load is not an edit of them.
-    ReleaseTrack(pool, memory, s_request.slot);
+    if (!s_project_samples_only)
+        ReleaseTrack(pool, memory, s_request.slot);
     s_allocated = 0;
     s_index = 0;
     s_phase = Phase::AllocateSample;
@@ -1705,28 +1709,36 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
                 // 4-deep TX queue. The frontend pages the Pool
                 // (MSG_SAMPLE_META_PAGE_REQ) and sees them there.
             }
-            // The mapper numbered samples 1..N within this document; the
-            // zones now name their Pool ids, and the Track takes its refs.
-            Instrument& ins = s_bank->At(s_request.slot).instrument;
-            ins = s_mapped.instrument;
-            for (auto& oscillator: ins.osc)
-                for (auto& zone: oscillator.zones) {
-                    if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
-                        continue;
+            if (s_project_samples_only) {
+                // Explicit preload pins every dependency in the private Pool.
+                // Tracks and their ownership bits are never changed here.
+                for (uint8_t i = 0; i < s_plan.count; ++i)
+                    pool.SetPinned(s_loaded_samples[i].pool_id, true);
+            } else {
+                // The mapper numbered samples 1..N within this document; the
+                // zones now name their Pool ids, and the Track takes its refs.
+                Instrument& ins = s_bank->At(s_request.slot).instrument;
+                ins = s_mapped.instrument;
+                for (auto& oscillator: ins.osc)
+                    for (auto& zone: oscillator.zones) {
+                        if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
+                            continue;
+                        }
+                        zone.sample_id = s_loaded_samples[zone.sample_id - 1].pool_id;
+                        pool.SetUsedBy(zone.sample_id, s_request.slot, true);
                     }
-                    zone.sample_id = s_loaded_samples[zone.sample_id - 1].pool_id;
-                    pool.SetUsedBy(zone.sample_id, s_request.slot, true);
-                }
-            // The mapper knows zones, not where the document came from, so the
-            // display name is stamped here - the one place still holding the
-            // .sfz path. Truncation is fine; it is a label, not an identifier.
-            if (InstrumentMap::PathIsSfz(s_request.path) || !ins.name[0])
-                std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
-            PublishModSlots(s_request.slot);
+                // The mapper knows zones, not where the document came from, so the
+                // display name is stamped here - the one place still holding the
+                // .sfz path. Truncation is fine; it is a label, not an identifier.
+                if (InstrumentMap::PathIsSfz(s_request.path) || !ins.name[0])
+                    std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
+                PublishModSlots(s_request.slot);
+            }
             s_status.loaded_bytes = s_total_bytes;
             s_status.current_loaded_bytes = s_status.current_bytes;
             SendStatus(INST_STATUS_LOAD_COMPLETE);
-            WaveX::Log::PrintLine("SFZ_LOAD: bound '%s' to Track %u (%u zones, %u samples, %lu B)",
+            WaveX::Log::PrintLine("SFZ_LOAD: %s '%s' Track %u (%u zones, %u samples, %lu B)",
+                                  s_project_samples_only ? "preloaded" : "bound",
                                   s_request.path,
                                   (unsigned)s_request.slot,
                                   (unsigned)s_mapped.zone_count,
@@ -1797,6 +1809,7 @@ bool BeginProjectTrack(uint8_t track, const char* path) {
         s_project_bank->At(track).instrument.origin != InstrumentOrigin::None)
         return false;
     s_in_project_step = true;
+    s_project_samples_only = false;
     s_project_close_failed = false;
     auto* live = s_bank;
     s_bank = s_project_bank;
@@ -1822,6 +1835,12 @@ bool BeginProjectDocument(uint8_t track, const Wxi::InstrumentFile& document) {
     s_status.sample_count = s_plan.count;
     s_index = 0;
     s_phase = Phase::ProbeSample;
+    return true;
+}
+bool BeginProjectPreload(const Wxi::InstrumentFile& document) {
+    if (!BeginProjectDocument(0, document))
+        return false;
+    s_project_samples_only = true;
     return true;
 }
 void PumpProjectLoad(SamplePool& pool, SampleMemMgr& memory, uint8_t* io, uint32_t bytes) {
@@ -1864,6 +1883,7 @@ bool FinishProjectLoad(bool commit, int only_track) {
                 s_project_bank->At(static_cast<uint8_t>(only_track)).instrument;
     }
     s_project_bank = nullptr;
+    s_project_samples_only = false;
     if (commit) {
         for (uint8_t track = 0; track < kNumTracks; ++track) {
             if (only_track >= 0 && track != only_track)

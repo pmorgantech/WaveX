@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Bank Manager Preload loads and pins all active-Bank sample dependencies in
+  one private transaction, preserving Tracks and existing PCM. Failed admission
+  rolls back new samples and pin changes. Host tests cover full slot/zone
+  capacity and failure isolation; sparse two-board HIL confirms cold/shared
+  preload and repeated reuse with a held voice and zero reported underruns.
+
 - Bank save/recall HIL coverage through the real UI/UART/SD path, including
   shared and newly admitted samples, cancellation and failure preservation.
   Debug-only `BANKSTATS` reports per-job foreground service timing; JUnit

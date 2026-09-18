@@ -31,7 +31,7 @@ class BankSession {
         AudioEngine::SamplePool::Record records[AudioEngine::SamplePool::kCapacity];
         AudioEngine::SamplePool pool{records};
     };
-    enum class Phase { Idle, Begin, File, Snapshot, Index, Stage, Load, Commit };
+    enum class Phase { Idle, Begin, File, Snapshot, Index, Stage, Load, Commit, PreloadNext };
     void Finish(uint8_t);
     void RefreshSlot();
     void Cleanup();
@@ -49,6 +49,7 @@ class BankSession {
     std::optional<AudioEngine::SamplePoolStage> stage_;
     Protocol::BankOpMessage request_;
     Protocol::BankStatusMessage status_;
+    uint16_t preload_slot_ = 0;
     Phase phase_ = Phase::Idle;
     bool reply_ = false;
 };

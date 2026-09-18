@@ -116,7 +116,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
 | MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
-| MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy and confirmed Track recall |
+| MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy, confirmed Track recall and explicit sample preload |
 | MSG_BANK_STATUS | 0x83 | D→E | `BankStatusMessage` | revisioned stable slot, storage availability and retained completion |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
@@ -593,4 +593,10 @@ revision. Store/Clear publish a new named copy, preserving the old file. Recall
 always requires explicit replacement confirmation, stages the selected document
 and sample dependencies, and commits only after the target Track's audio stop
 fence. Read/validation/memory failures preserve the live Track and Bank.
+PRELOAD (appended operation 7) also requires the current Bank revision. It
+ignores name/selected slot/Track for loading and needs no replacement flag.
+It atomically admits/pins all Bank dependencies without changing Tracks; failure
+preserves the original Pool. Payload sizes and existing operation values stay
+unchanged. Upgrade both images to expose the new action; older backends reject
+it as an unknown operation.
 See [Bank persistence](bank-persistence.md) for ownership and SD semantics.

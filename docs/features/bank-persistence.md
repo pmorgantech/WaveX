@@ -4,7 +4,8 @@ Bank Manager, its foreground session owner and selected-Track recall are
 implemented for Phase 2.5. The codec, SD transactions, staged recall and UI are
 host-tested and both firmware images compile. Physical SD/audio acceptance is
 still open in HV-016. A sparse two-board HIL regression passed on 2026-09-18;
-preload and MIDI Program Change recall remain unimplemented.
+explicit Bank sample preload is implemented; MIDI Program Change recall remains
+unimplemented.
 
 ## Contents
 
@@ -12,6 +13,7 @@ preload and MIDI Program Change recall remain unimplemented.
 - [Foreground transactions](#foreground-transactions)
 - [SD transaction adapter](#sd-transaction-adapter)
 - [Bank Manager and Track recall](#bank-manager-and-track-recall)
+- [Sample preload](#sample-preload)
 - [Validation and remaining work](#validation-and-remaining-work)
 - [Related](#related)
 
@@ -91,7 +93,7 @@ with Project, Instrument, Pattern and card operations.
 
 Project → Shift → Banks opens the Manager. Previous/Next or encoder rotation
 selects one of 128 stable slots. Recall targets the globally selected Track.
-Files/Shift exposes Open, New, Save copy and Clear copy. Enter a saved Bank's
+Shift exposes Open, New, Save copy and Clear copy. Preload loads Bank samples. Enter a saved Bank's
 name to open it, or a new destination name to create/store/clear/save a copy.
 The initial UI opens files by name; it has no file-list or slot-grid browser.
 
@@ -126,6 +128,35 @@ Sample audition closes and competing edits/new note requests are held off;
 note-off and clock/transport handling remain available. Worst-case foreground
 service latency and audible continuity require the physical checks below.
 
+## Sample preload
+
+Preload loads dependencies from every occupied slot of the active Bank. It
+ignores the selected slot and name field, and needs no replacement confirmation.
+It uses the same private loader lease and admission limits as recall, with one
+WXI document at a time in allocator-backed scratch. It does not replace any
+Instrument, change editor revisions or stop Tracks.
+
+The candidate Pool retains all live records and Track ownership. Existing paths
+are reused after the loader validates their file dimensions; missing PCM is
+loaded privately. Every Bank dependency is pinned on successful completion,
+including samples already resident. Pins are explicit user residency requests,
+not Bank ownership: opening another Bank does not unpin them. Unload samples
+through the Pool when they are no longer needed. Pins retain residency for this
+session; they do not make Bank-path restoration automatic on reboot.
+
+Only after all occupied slots succeed does the foreground publish the additive
+Pool metadata. No old PCM is retired, so no audio stop fence is required. A
+missing/unsupported dependency, card error or memory refusal discards all newly
+staged PCM and pin changes, preserving live Tracks and the original Pool. The
+frontend invalidates its Pool cache once for the successful completion.
+
+Competing card/edit requests remain gated for the whole operation, while resident
+sequencing and note-off/clock handling continue. There is no in-flight cancel.
+The existing selected-document reader rescans the Bank index for each occupied
+slot; dense Banks therefore require separate total-time and responsiveness
+measurements. Preload removes later PCM reads, but recall still reads/validates
+the Instrument and WAV headers; it is not a guarantee of instant switching.
+
 ## Validation and remaining work
 
 Eight codec tests cover sparse and full-capacity Banks, both oscillator maps,
@@ -140,14 +171,18 @@ The two-board Bank HIL case and its timing readback are described below.
 
 Session tests cover private Track copies, preserved routing/shared sample
 ownership, newly admitted PCM rollback, missing dependencies, full media,
-stale/busy requests and explicit replacement confirmation. Wire/dispatch tests
+stale/busy requests and explicit replacement confirmation. Preload tests cover
+shared/new dependencies, preserved unpinned records, late-failure rollback,
+reserve-aware memory refusal, repeated/empty Banks and all 128 slots with both
+full oscillator maps. Wire/dispatch tests
 reject malformed messages; real-LVGL tests cover confirmation, Track changes,
 stale/offline status, stable slot selection, no mutation replay and idle rendering.
 
 `tests/hil/test_bank_files.py` exercises the Manager through the real UI/UART/SD
 path: sparse Store/Save/Clear copies, Open, cancellation, LFO recall, preserved
 Track routing/mix, shared and newly admitted samples, duplicate destinations and
-missing sources. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
+missing sources, plus preload with cold/shared dependencies and an unrelated
+held voice. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
 See [the bench command](../testing_guide.md#bank-files-and-track-recall).
 
 `BANKSTATS` is debug-only foreground telemetry. Each accepted job resets its
@@ -159,7 +194,7 @@ callback DWT, CPU utilization, analog continuity or MIDI wire-jitter results.
 Timing instrumentation compiles out when the debug harness is disabled.
 
 The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
-remains open. Next software work is preload and channel-routed MIDI Program
+remains open. Next software work is channel-routed MIDI Program
 Change recall, followed by slot-to-slot copy/move and a decision on deferred
 unsaved Bank working copies. Project save/load does not yet persist the selected
 Bank path; reopen it by name after reboot. See the [roadmap](../roadmap.md).

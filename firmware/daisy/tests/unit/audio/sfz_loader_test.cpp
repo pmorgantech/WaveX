@@ -2158,3 +2158,190 @@ TEST_F(SfzLoaderTest, BankRecallStagesNewPcmAndFailedStopReleasesOnlyItsScratch)
     EXPECT_EQ(pool_.FindByPath("/new.wav")->used_by, 1u);
     EXPECT_STREQ(SfzLoader::TrackName(0), "New.keys.sfz");
 }
+
+namespace {
+void SaveBankDependency(const char* name, const char* source, uint8_t slot, const char* path) {
+    auto doc = std::make_unique<WaveX::Wxi::InstrumentFile>();
+    std::strcpy(doc->name, "Preload test");
+    doc->osc[0].type = WaveX::Wxi::OscType::Sample;
+    doc->osc[0].zone_count = 1;
+    std::strcpy(doc->osc[0].zones[0].path, path);
+    WaveX::Storage::BankFileJob file;
+    ASSERT_TRUE(file.SaveCopy(name, slot + 100, source, slot, doc.get()));
+    for (unsigned i = 0; i < 70000 && file.Busy(); ++i)
+        file.Pump();
+    ASSERT_EQ(file.Status(), WaveX::Storage::BankFileJob::Result::Saved);
+}
+}  // namespace
+TEST_F(SfzLoaderTest, BankPreloadPinsDependenciesWithoutStoppingOrChangingTracks) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    AddResidentWave("/orphan.wav", 1024);  // unpinned and unused must also survive
+    MockFatFS::Instance().AddFile("/new.wav", PcmWave(2048));
+    SaveBankDependency("First", nullptr, 0, "/kits/a.wav");
+    SaveBankDependency("Second", "First", 63, "/new.wav");
+    SaveBankDependency("Preload", "Second", 127, "/new.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Preload")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    const auto id = SampleId("/kits/a.wav");
+    const auto orphan = SampleId("/orphan.wav");
+    const auto revision = SfzLoader::ReadEditState(0).revision;
+    bank_stopped_track = 0xff;
+    bank_published = 0;
+    auto request = BankRequest(bank, 2, BANK_PRELOAD, "", 1);  // empty selected slot
+    request.flags = 0;
+    ASSERT_TRUE(bank.Request(request));
+    // Private admission must not become visible before the complete Bank succeeds.
+    while (bank.Busy()) {
+        EXPECT_EQ(SampleId("/new.wav"), 0u);
+        EXPECT_FALSE(pool_.Find(id)->pinned);
+        bank.Pump();
+    }
+    ASSERT_EQ(bank.Status().error, BANK_OK);
+    EXPECT_EQ(bank_stopped_track, 0xff);
+    EXPECT_EQ(bank_published, 0u);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, revision);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "kit.sfz");
+    EXPECT_STREQ(SfzLoader::TrackName(1), "kit.sfz");
+    EXPECT_EQ(SampleId("/kits/a.wav"), id);
+    EXPECT_EQ(pool_.Find(id)->used_by, 3u);
+    EXPECT_TRUE(pool_.Find(id)->pinned);
+    EXPECT_EQ(SampleId("/orphan.wav"), orphan);
+    EXPECT_FALSE(pool_.Find(orphan)->pinned);
+    const auto fresh = SampleId("/new.wav");
+    ASSERT_NE(fresh, 0u);
+    EXPECT_TRUE(pool_.Find(fresh)->pinned);
+    EXPECT_EQ(pool_.Find(fresh)->used_by, 0u);
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 3, BANK_PRELOAD)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(SampleId("/new.wav"), fresh);
+    // Preloading is not a Track load: recall still installs the requested sound.
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 4, BANK_RECALL, "", 127)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "Preload test");
+    EXPECT_EQ(pool_.Find(fresh)->used_by, 1u);
+    EXPECT_TRUE(pool_.Find(fresh)->pinned);
+}
+TEST_F(SfzLoaderTest, BankPreloadLateFailureRollsBackAllNewPcmAndPins) {
+    ASSERT_TRUE(Load(0));
+    const auto old = SampleId("/kits/a.wav");
+    MockFatFS::Instance().AddFile("/new.wav", PcmWave(2048));
+    SaveBankDependency("First", nullptr, 0, "/kits/a.wav");
+    SaveBankDependency("Second", "First", 1, "/new.wav");
+    SaveBankDependency("Broken", "Second", 127, "/missing.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Broken")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    const auto revision = SfzLoader::ReadEditState(0).revision;
+    bank_stopped_track = 0xff;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_PRELOAD)));
+    EXPECT_EQ(RunBank(bank), BANK_DEPENDENCY);
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(SampleId("/new.wav"), 0u);
+    EXPECT_FALSE(pool_.Find(old)->pinned);
+    EXPECT_EQ(pool_.Find(old)->used_by, 1u);
+    EXPECT_EQ(bank_stopped_track, 0xff);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, revision);
+    EXPECT_STREQ(bank.Status().name, "Broken");
+    EXPECT_FALSE(SfzLoader::Busy());
+    // A later retry can finish; failed preload must not poison the loader lease.
+    MockFatFS::Instance().AddFile("/missing.wav", PcmWave());
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 3, BANK_PRELOAD)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_NE(SampleId("/new.wav"), 0u);
+    EXPECT_NE(SampleId("/missing.wav"), 0u);
+}
+TEST_F(SfzLoaderTest, BankPreloadNeverCountsLiveTrackPcmAsReclaimable) {
+    AddResidentWave("/held.wav", 14 * 1024 * 1024);
+    const auto old = SampleId("/held.wav");
+    pool_.SetUsedBy(old, 0, true);
+    MockFatFS::Instance().AddFile("/large.wav", PcmWave(3 * 1024 * 1024));
+    SaveBankDependency("Large", nullptr, 0, "/large.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Large")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_PRELOAD)));
+    EXPECT_EQ(RunBank(bank), BANK_NO_MEMORY);
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(SampleId("/held.wav"), old);
+    EXPECT_EQ(pool_.Find(old)->used_by, 1u);
+    EXPECT_EQ(SampleId("/large.wav"), 0u);
+}
+TEST_F(SfzLoaderTest, EmptyBankPreloadIsAdditiveAndRequiresAnActiveBank) {
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    EXPECT_FALSE(bank.Request(BankRequest(bank, 1, BANK_PRELOAD)));
+    EXPECT_EQ(bank.Status().error, BANK_NO_BANK);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_NEW, "Empty")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    AddResidentWave("/orphan.wav", 1024);
+    const auto orphan = SampleId("/orphan.wav");
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 3, BANK_PRELOAD)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_EQ(SampleId("/orphan.wav"), orphan);
+    EXPECT_FALSE(pool_.Find(orphan)->pinned);
+}
+
+TEST_F(SfzLoaderTest, BankPreloadTraversesAll128SlotsAndBothFullOscillatorMaps) {
+    auto doc = std::make_unique<WaveX::Wxi::InstrumentFile>();
+    std::strcpy(doc->name, "Full maps");
+    for (auto& osc: doc->osc) {
+        osc.type = WaveX::Wxi::OscType::Sample;
+        osc.zone_count = 32;
+        for (uint8_t i = 0; i < 32; ++i) {
+            osc.zones[i].index = i;
+            std::strcpy(osc.zones[i].path, "/kits/a.wav");
+        }
+    }
+    std::vector<uint8_t> bytes;
+    const auto write = [](void* context, const void* source, size_t size) {
+        auto& out = *static_cast<std::vector<uint8_t>*>(context);
+        const auto* data = static_cast<const uint8_t*>(source);
+        out.insert(out.end(), data, data + size);
+        return true;
+    };
+    WaveX::BankFile::Encoder encoder({&bytes, nullptr, write, nullptr});
+    using Result = WaveX::BankFile::Result;
+    ASSERT_EQ(encoder.Begin("Full"), Result::More);
+    for (uint16_t slot = 0; slot < 128; ++slot) {
+        if (slot == 127)
+            std::strcpy(doc->osc[1].zones[31].path, "/kits/b.wav");
+        ASSERT_EQ(encoder.Append(slot, *doc), Result::More);
+    }
+    ASSERT_EQ(encoder.Finish(), Result::Done);
+    MockFatFS::Instance().AddFile("0:/wavex/banks/Full.wxb", bytes);
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Full")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    bank_stopped_track = 0xff;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_PRELOAD)));
+    // Each selected-document read currently revalidates the whole Bank index.
+    for (unsigned i = 0; i < 4000000 && bank.Busy(); ++i)
+        bank.Pump();
+    ASSERT_FALSE(bank.Busy());
+    ASSERT_EQ(bank.Status().error, BANK_OK);
+    ASSERT_NE(SampleId("/kits/a.wav"), 0u);
+    ASSERT_NE(SampleId("/kits/b.wav"), 0u);
+    EXPECT_TRUE(pool_.FindByPath("/kits/a.wav")->pinned);
+    EXPECT_TRUE(pool_.FindByPath("/kits/b.wav")->pinned);
+    EXPECT_EQ(bank_stopped_track, 0xff);
+    EXPECT_FALSE(SfzLoader::TrackLoaded(0));
+}

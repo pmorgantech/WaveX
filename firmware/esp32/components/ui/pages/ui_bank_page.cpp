@@ -45,7 +45,7 @@ const char* errorText(uint8_t error) {
         case BANK_NO_SPACE:
             return "Not enough free space on the card.";
         case BANK_NO_MEMORY:
-            return "Not enough sample memory to stage recall. Current Track retained.";
+            return "Not enough memory for Bank samples. Current Tracks and Pool retained.";
         case BANK_DEPENDENCY:
             return "Instrument or sample missing/unsupported. Current Track retained.";
         case BANK_AUDIO_BUSY:
@@ -117,7 +117,7 @@ void UIBankPage::onEnter(lv_obj_t* parent) {
     std::snprintf(message_,
                   sizeof(message_),
                   "Shift: Open / New / Save copy / Clear copy. Store copy saves the selected Track "
-                  "in a new named Bank.");
+                  "in a new named Bank. Preload pins Bank samples until unloaded.");
     alive_ = inter_mcu_backend_link_alive();
     read();
     timer_ = lv_timer_create(tick, 100, this);
@@ -180,7 +180,13 @@ void UIBankPage::service() {
         valid_ = true;
         if (pending_id_ && received.completed_request_id == pending_id_) {
             pending_id_ = 0;
-            std::snprintf(message_, sizeof(message_), "%s", errorText(received.error));
+            std::snprintf(
+                message_,
+                sizeof(message_),
+                "%s",
+                received.error == BANK_OK && received.completed_op == BANK_PRELOAD
+                    ? "Bank samples preloaded and pinned until unloaded. Tracks unchanged."
+                    : errorText(received.error));
         }
         if (changed)
             UINavigator::instance().refreshSoftkeys();
@@ -238,7 +244,7 @@ void UIBankPage::choose(uint8_t op) {
     draft_.op = op;
     draft_.slot = slot_;
     draft_.track = getCurrentTrack();
-    if (op != BANK_RECALL) {
+    if (op != BANK_RECALL && op != BANK_PRELOAD) {
         const auto* name = lv_textarea_get_text(input_);
         if (!WaveX::BankFile::ValidName(name)) {
             std::snprintf(message_, sizeof(message_), "%s", errorText(BANK_BAD_NAME));
@@ -347,7 +353,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getSoftkeys() {
                [this] { choose(BANK_STORE_COPY); },
                ready() && status_.loaded,
                "Open a Bank first"};
-    keys[5] = {"Files", [] { UINavigator::instance().setShift(true); }};
+    keys[5] = {"Preload",
+               [this] { choose(BANK_PRELOAD); },
+               ready() && status_.loaded,
+               "Open a Bank first"};
     return keys;
 }
 std::array<Softkey, NUM_SOFTKEYS> UIBankPage::getShiftedSoftkeys() {

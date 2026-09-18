@@ -214,7 +214,10 @@ This replaces the live bench session and leaves uniquely named `.wxb` copies on
 the card. It uses the same `--hil-sample`/`--hil-sample2` WAV fixtures as the
 save/load suite above. The test exercises New, Store, Save, Clear, Open and
 confirmed/cancelled Recall, preserves another Track while recalling shared or
-unloaded sample data, and checks duplicate-name/missing-file isolation.
+unloaded sample data, and checks duplicate-name/missing-file isolation. It then
+stores a second occupied slot and preloads with cold/shared dependencies while
+another Track holds a note. Repeated preload must reuse resident IDs and leave
+Track state/editor revision unchanged.
 
 JUnit properties retain each accepted job's `BANKSTATS` counters and UI wall
 completion time. Preserve the JUnit report, `logs/hil-*.log`, image hashes and

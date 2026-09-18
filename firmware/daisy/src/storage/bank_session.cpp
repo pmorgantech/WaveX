@@ -53,7 +53,8 @@ bool BankSession::Request(const BankOpMessage& request, bool external_busy) {
         return reject(BANK_BUSY);
     if (request.revision != status_.revision)
         return reject(BANK_STALE);
-    if (request.op != BANK_RECALL && !BankFile::ValidName(request.name))
+    if (request.op != BANK_RECALL && request.op != BANK_PRELOAD &&
+        !BankFile::ValidName(request.name))
         return reject(BANK_BAD_NAME);
     if (request.op >= BANK_SAVE_COPY && !status_.loaded)
         return reject(BANK_NO_BANK);
@@ -119,7 +120,7 @@ void BankSession::Pump() {
                     break;
                 }
                 phase_ = Phase::Snapshot;
-            } else if (request_.op == BANK_RECALL) {
+            } else if (request_.op == BANK_RECALL || request_.op == BANK_PRELOAD) {
                 void* storage = nullptr;
                 if (!memory_.alloc(sizeof(Candidate), &candidate_mem_) ||
                     !memory_.ptr(candidate_mem_, &storage)) {
@@ -127,6 +128,17 @@ void BankSession::Pump() {
                     break;
                 }
                 candidate_ = new (storage) Candidate{};
+                if (request_.op == BANK_PRELOAD) {
+                    stage_.emplace(pool_, candidate_->pool, memory_);
+                    if (!stage_->BeginAdditions() ||
+                        !SfzLoader::BeginProjectLoad(candidate_->tracks)) {
+                        Finish(BANK_DEPENDENCY);
+                        break;
+                    }
+                    preload_slot_ = 0;
+                    phase_ = Phase::PreloadNext;
+                    break;
+                }
                 if (!file_.ReadInstrument(status_.name, request_.slot, candidate_->document)) {
                     Finish(FileError());
                     break;
@@ -203,6 +215,14 @@ void BankSession::Pump() {
             Finish(BANK_OK);
             break;
         case Phase::Stage:
+            if (request_.op == BANK_PRELOAD) {
+                if (!SfzLoader::BeginProjectPreload(candidate_->document)) {
+                    Finish(BANK_DEPENDENCY);
+                    break;
+                }
+                phase_ = Phase::Load;
+                break;
+            }
             stage_.emplace(pool_, candidate_->pool, memory_);
             if (!stage_->Begin(static_cast<uint16_t>(~(1u << request_.track))) ||
                 !SfzLoader::BeginProjectLoad(candidate_->tracks) ||
@@ -220,7 +240,20 @@ void BankSession::Pump() {
                 Finish(InstrumentError(SfzLoader::ProjectTrackError()));
                 break;
             }
-            phase_ = Phase::Commit;
+            phase_ = request_.op == BANK_PRELOAD ? Phase::PreloadNext : Phase::Commit;
+            break;
+        case Phase::PreloadNext:
+            // At most 128 index entries; documents and PCM load cooperatively.
+            while (preload_slot_ < BankFile::kSlots && !index_.slots[preload_slot_].used())
+                ++preload_slot_;
+            if (preload_slot_ == BankFile::kSlots) {
+                SfzLoader::FinishProjectLoad(false);
+                stage_->Commit();  // additive: never retires live PCM or changes Tracks
+                Finish(BANK_OK);
+            } else if (!file_.ReadInstrument(status_.name, preload_slot_++, candidate_->document))
+                Finish(FileError());
+            else
+                phase_ = Phase::File;
             break;
         case Phase::Commit:
             if (!boundary_.stop_track || !boundary_.stop_track(request_.track)) {

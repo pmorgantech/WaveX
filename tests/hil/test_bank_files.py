@@ -155,5 +155,36 @@ def test_bank_copy_recall_failure_isolation_and_service_timing(
     assert daisy.state()["voices"] == "1"
     assert daisy.cmd("LFO", 0, 0)["rate"] == saved_lfo["rate"]
     assert int(daisy.state()["underruns"]) == underruns
+    # Add a second occupied slot, then preload with one cold dependency and
+    # one shared by the sounding Track. The selected empty slot is irrelevant.
+    daisy.note(1, 60, on=False)
+    daisy.bind_track(0, second)
+    _files(esp, False)
+    esp.softkey("Next")
+    esp.wait_state(bankready=1, bankslot=1, bankoccupied=0)
+    esp.page("NAME", prefix + "E")
+    _operation(esp, daisy, "Store copy", 4, record_property, confirm=True)
+    for sid in daisy.samples():
+        if sid != second:
+            daisy.unload_sample(sid)
+    before_tracks = daisy.tracks()
+    before_edit = daisy.cmd("EDIT", 0)
+    resident = set(daisy.samples())
+    assert resident == {second}
+    daisy.note(1, 60)
+    daisy.wait_state(voices=1)
+    _files(esp, False)
+    esp.softkey("Next")
+    esp.wait_state(bankready=1, bankslot=2, bankoccupied=0)
+    _operation(esp, daisy, "Preload", 7, record_property)
+    assert daisy.tracks() == before_tracks
+    assert daisy.cmd("EDIT", 0)["revision"] == before_edit["revision"]
+    assert daisy.state()["voices"] == "1"
+    preloaded = set(daisy.samples())
+    assert len(preloaded) == 2 and resident < preloaded
+    _operation(esp, daisy, "Preload", 7, record_property)
+    # Shared/repeated paths deduplicate.
+    assert set(daisy.samples()) == preloaded
+    assert int(daisy.state()["underruns"]) == underruns
     daisy.note(1, 60, on=False)
     esp.home()

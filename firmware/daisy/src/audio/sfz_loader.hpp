@@ -53,6 +53,10 @@ bool FinishProjectLoad(bool commit, int only_track = -1);
 // Bank recall shares the private Project loader lease, but installs only the
 // selected Instrument; routing/mix and every other Track remain live.
 bool BeginProjectDocument(uint8_t track, const Wxi::InstrumentFile& document);
+// Under the same private lease, load/pin only dependencies, preserving all
+// Track ownership. Candidate Tracks stay empty so documents can be repeated.
+// End with FinishProjectLoad(false); the caller commits the additive Pool.
+bool BeginProjectPreload(const Wxi::InstrumentFile& document);
 // Preflight a Track snapshot without a temporary standalone WXI file. The
 // caller serializes all edits until its borrowed document is no longer used.
 bool BeginBankSnapshot(uint8_t track);

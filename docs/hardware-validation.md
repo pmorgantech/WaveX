@@ -727,7 +727,17 @@ preserve the source Bank. Capture both image identities before starting.
   time, callback DWT, clock jitter and underruns. **Pass:** No underruns or lost
   transport state; non-target Tracks remain continuous, the target changes only
   after successful staging, and response/timing meet the performance policy.
-  Preload and MIDI Program Change recall are not implemented in this gate.
+  MIDI Program Change recall is not implemented in this gate.
+- [ ] **016g — Bank sample preload:** Create a Bank containing shared and unique
+  dependencies across both oscillator maps. Unload one dependency, keep another
+  Track sounding, select an empty slot and press Preload. Repeat; switch Banks;
+  explicitly unload unneeded samples. Repeat with a late missing file, full
+  sample memory and removed media. **Pass:** Success pins every dependency once,
+  leaves all Track sound/routing/mix/editor state unchanged and stops no Track;
+  failures restore the entire original Pool and release all new PCM/pin changes.
+  Bank changes do not silently unpin samples. Repeat with all 128 slots and
+  maximum maps; collect service timing, callback DWT, audio continuity and
+  underruns. No in-flight UI cancellation is available.
 
 **2026-09-18 bench result:** `tests/hil/test_bank_files.py` passed (1 test,
 32.93 s), covering subsets of 016a/b/d. A sparse Bank with slot 128 populated
@@ -772,6 +782,35 @@ Full 128-slot/worst-zone-count fixtures, card identification, callback DWT,
 clock jitter, nearly-full/removed media, missing-dependency/memory failures,
 reconnect, reboot and power interruption are still required. No full HV-016
 case or phase gate is marked passed by this sparse regression.
+
+**2026-09-18 preload bench result:** The extended Bank HIL passed (1 test,
+40.70 s), repeating the earlier functional regression and a subset of 016g.
+The Bank had slots 1/128 occupied with one-zone Instruments and distinct WAVs.
+One sample was unloaded; the other was shared by two Tracks. Preload from empty
+slot 2 admitted the missing PCM, preserved both Track states and the target's
+editor revision, and retained another Track's held voice. A second preload
+reused the same resident IDs. Reported underruns remained zero. This does not
+establish audible continuity, pin-release behavior or failure recovery on media.
+
+- Source base `28f1340` plus the preload change, before commit formatting.
+- Daisy QSPI image SHA-256:
+  `2c05b60626f9da7e0588d000675b658518e205853dd331c69e228254a6f11dbf`;
+  debug harness on, callback profiling off, normal `-O2`/storage `-Os` settings.
+- ESP32 image SHA-256:
+  `bb535917da1dd5059b5274269f5b8299f14e72f4b9bec876d43abb3f10362c92`.
+- Same attached card and two WAV paths as above; card identity remains unknown.
+  Saved copies `HILB 735230596373441A.wxb` through `...E.wxb` remain on card.
+- Evidence (local, gitignored): `logs/preload-hil.xml`,
+  `logs/preload-hil-result.log`, `logs/hil-20260918-124024.log`.
+
+| Preload workload | Pumps | Maximum foreground step | Summed foreground work |
+|---|---:|---:|---:|
+| One cold and one shared dependency | 57 | 10,846 µs | 34,357 µs |
+| Both dependencies resident | 54 | 10,700 µs | 27,041 µs |
+
+Full-bank/responsiveness profiling, hardware failure injection, callback DWT,
+MIDI jitter and soak remain open. The earlier 74 ms SD outlier remains relevant;
+these sparse measurements do not bound latency or close any whole checklist item.
 
 ## HV-017 — Sample Edit selection
 
