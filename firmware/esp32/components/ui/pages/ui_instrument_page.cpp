@@ -116,9 +116,9 @@ const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod", "LFO"};
 // header now holds that context (contextLine()), which is where it belongs -
 // it was the same information on every stage, redrawn inside the page.
 constexpr int kTabBarH = 56;
-constexpr int kBodyH = UI_CONTENT_HEIGHT - kTabBarH;  // 501
+constexpr int kBodyH = UI_CONTENT_HEIGHT - kTabBarH - kEncoderStripHeight;  // 501
 constexpr int kBodyPadTop = 12;
-constexpr int kPaneH = 466;
+constexpr int kPaneH = 466 - kEncoderStripHeight;
 
 // Env: a 2x2 dial grid on the left, the envelope drawn on the right.
 constexpr int kDialGridW = 700;
@@ -129,7 +129,7 @@ constexpr int kEnvCurveX = UI_MARGIN_X + kDialGridW + 16;               // 736
 constexpr int kEnvCurveW = UI_SCREEN_WIDTH - UI_MARGIN_X - kEnvCurveX;  // 524
 
 // Filter: response curve across the top, three tiles under it.
-constexpr int kFilterCurveH = 270;
+constexpr int kFilterCurveH = 230;
 constexpr int kFilterTileY = kBodyPadTop + kFilterCurveH + 12;
 constexpr int kFilterTileH = kPaneH - kFilterCurveH - 12;  // 184
 
@@ -263,7 +263,8 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     // navigator's header via contextLine(), so the tabview gets the full
     // content area rather than 84px less.
     lv_obj_t* tab_host = lv_obj_create(root_);
-    lv_obj_set_size(tab_host, lv_pct(100), lv_pct(100));
+    lv_obj_set_size(tab_host, lv_pct(100), UI_CONTENT_HEIGHT - kEncoderStripHeight);
+    encoder_strip_.Create(root_, UI_CONTENT_HEIGHT - kEncoderStripHeight);
     lv_obj_set_pos(tab_host, 0, 0);
     lv_obj_set_style_bg_color(tab_host, lv_color_hex(kColBg), LV_PART_MAIN);
     lv_obj_set_style_border_width(tab_host, 0, LV_PART_MAIN);
@@ -306,6 +307,7 @@ bool UIInstrumentPage::canLeave() {
     return false;
 }
 void UIInstrumentPage::onExit() {
+    encoder_strip_.Reset();
     if (timer_)
         lv_timer_delete(timer_);
     timer_ = nullptr;
@@ -791,7 +793,50 @@ void UIInstrumentPage::sendParam(const Param& p) {
         refreshStatus("Instrument is not ready");
 }
 
-void UIInstrumentPage::stepParam(int steps) {
+EncoderBindings UIInstrumentPage::encoderBindings() {
+    EncoderBindings bindings;
+    if (stage_ != static_cast<int>(Stage::Filter) && stage_ != static_cast<int>(Stage::Amp))
+        return bindings;
+    Param params[kMaxParams];
+    const int count = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
+    for (uint8_t i = 0; i < 4 && i < count; ++i) {
+        auto& binding = bindings[i];
+        const auto& param = params[i];
+        binding.label = param.label;
+        binding.owner = this;
+        binding.parameter = i;
+        binding.enabled =
+            alive_ && sound_.Editable() && !requested_action_ && !track_change_pending_;
+        const bool mode = param.wire_param == kParamFilterMode;
+        const bool model = param.wire_param == kParamFilterTopology;
+        binding.coarse_step = mode || model ? 1 : 4;
+        if (mode || model)
+            std::snprintf(
+                binding.value.data(),
+                binding.value.size(),
+                "%s",
+                mode ? filterModes[std::clamp<int>(param.value, 0, 3)]
+                     : filterTopologies[std::clamp<int>(param.value, 0, kFilterTopologyMax)]);
+        else if (stage_ == static_cast<int>(Stage::Amp))
+            std::snprintf(binding.value.data(),
+                          binding.value.size(),
+                          "%.1f %%",
+                          static_cast<double>(param.value) / 10);
+        else
+            std::snprintf(binding.value.data(),
+                          binding.value.size(),
+                          "%.1f %%",
+                          static_cast<double>(param.value) * 100 / 65535);
+        binding.onSteps = [](void* owner, uint8_t parameter, int steps) {
+            auto& page = *static_cast<UIInstrumentPage*>(owner);
+            page.param_ = parameter;
+            page.stepParam(steps, 4);
+        };
+    }
+    return bindings;
+}
+
+void UIInstrumentPage::stepParam(int steps, int divisor) {
     if (requested_action_ || track_change_pending_)
         return;
     Param params[kMaxParams];
@@ -897,12 +942,14 @@ void UIInstrumentPage::stepParam(int steps) {
                      : drive ? 1000
                      : amp   ? (param_ == 0 ? 64000 : 1000)
                              : 65535;
-    p.value = static_cast<int32_t>(std::clamp<int64_t>(
-        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (enumerated     ? 1
-                                                                       : amp || drive ? 10
-                                                                                      : kParamStep),
-        0,
-        high));
+    p.value = static_cast<int32_t>(
+        std::clamp<int64_t>(static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) *
+                                                                (enumerated     ? 1
+                                                                 : amp || drive ? 10
+                                                                                : kParamStep) /
+                                                                (enumerated ? 1 : divisor),
+                            0,
+                            high));
     sendParam(p);
     refreshParams();
 }

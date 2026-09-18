@@ -10,6 +10,8 @@ set(COMPONENT_SRCS
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
     "components/ui_value_tile.cpp"
+    "components/encoder_strip.cpp"
+    "pages/ui_pot_cal_page.cpp"
     "components/ui_dial.cpp"
     "src/ui_diagnostics_page.cpp"
     "src/ui_screenshot.cpp"

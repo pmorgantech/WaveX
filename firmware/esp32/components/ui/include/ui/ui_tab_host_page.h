@@ -46,6 +46,14 @@ class UITabHostPage : public UIPage {
     const char* name() const override { return name_.c_str(); }
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
+    EncoderBindings encoderBindings() override {
+        auto* page = activePage();
+        return page ? page->encoderBindings() : EncoderBindings{};
+    }
+    void servicePanelControls() override {
+        if (auto* page = activePage())
+            page->servicePanelControls();
+    }
     PanelPageLeds panelLeds() const override {
         auto* page = activePage();
         return page ? page->panelLeds() : PanelPageLeds{};

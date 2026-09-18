@@ -762,27 +762,26 @@
 #define WAVEX_LED_CH_PAD15 38
 #define WAVEX_LED_CH_PAD16 39
 
-// Optional potentiometer configuration (e.g., MCP3008 via SPI)
-#ifndef WAVEX_POT_COUNT
+// Four Alpha RV112FF 20 kOhm dual-wiper endless pots on MCP3208.
+// No control events until each pot has explicitly saved a calibration.
+#ifndef WAVEX_PANEL_POTS_ENABLED
+#define WAVEX_PANEL_POTS_ENABLED 1
+#endif
 #define WAVEX_POT_COUNT 4
+#define WAVEX_POT_ADC_RESOLUTION 12
+// Conservative acquisition for an unbuffered 20k divider (up to 5k source R).
+// Verify settling/crosstalk on the actual board before raising this clock.
+#ifndef WAVEX_MCP3208_CLOCK_HZ
+#define WAVEX_MCP3208_CLOCK_HZ 250000
 #endif
-
-#ifndef WAVEX_POT_ADC_RESOLUTION
-#define WAVEX_POT_ADC_RESOLUTION 10
-#endif
-
-#ifndef WAVEX_POT_ADC_SAMPLES
-#define WAVEX_POT_ADC_SAMPLES 64
-#endif
-
-// Rotary Encoder Configuration (via MCP3008 ADC)
-#ifndef WAVEX_ROTARY_ENCODER_COUNT
-#define WAVEX_ROTARY_ENCODER_COUNT 4  // 4x dual rotary encoders
-#endif
-
-#ifndef WAVEX_ROTARY_ENCODER_TYPE
-#define WAVEX_ROTARY_ENCODER_TYPE 1  // 1 = Endless rotary via ADC
-#endif
+#define WAVEX_POT1_A_CHANNEL 0
+#define WAVEX_POT1_B_CHANNEL 1
+#define WAVEX_POT2_A_CHANNEL 2
+#define WAVEX_POT2_B_CHANNEL 3
+#define WAVEX_POT3_A_CHANNEL 4
+#define WAVEX_POT3_B_CHANNEL 5
+#define WAVEX_POT4_A_CHANNEL 6
+#define WAVEX_POT4_B_CHANNEL 7
 
 // Optional button matrix configuration (e.g., TCA8418)
 #ifndef WAVEX_BTN_MATRIX_ROWS

@@ -94,20 +94,21 @@ extern "C" {
 #define WAVEX_ESP_MIDI_TX 21
 #define WAVEX_ESP_MIDI_BAUD 31250
 
-// SPI2 master: TLC5947 LED chain + MCP3008 ADC (endless pots). Was 46/47/52,
+// SPI2 master: TLC5947 LED chain + MCP3208 ADC (endless pots). Was 46/47/52,
 // colliding with PCNT unit 1 on 46/47; moved to the adjacent header run
-// GPIO2-5. The MCP3008 has a chip select; the TLC5947 does not - it is a
+// GPIO2-5. The MCP3208 has a chip select; the TLC5947 does not - it is a
 // shift register that latches whatever was clocked in when XLAT pulses, so
-// every MCP3008 transaction also shifts garbage through it and the LED frame
+// every MCP3208 transaction also shifts garbage through it and the LED frame
 // must always be re-sent in full before XLAT. Per-device clocks: the
-// TLC5947 takes up to 30 MHz, the MCP3008 about 2 MHz at 3.3 V.
+// TLC5947 takes up to 30 MHz, MCP3208 acquisition timing is configured separately in
+// hardware_config.h.
 #define WAVEX_ESP_SPI2_HOST SPI2_HOST
 #define WAVEX_ESP_SPI2_SCLK 2
-#define WAVEX_ESP_SPI2_MOSI 3  // TLC5947 SIN + MCP3008 DIN
-#define WAVEX_ESP_SPI2_MISO 4  // MCP3008 DOUT
+#define WAVEX_ESP_SPI2_MOSI 3  // TLC5947 SIN + MCP3208 DIN
+#define WAVEX_ESP_SPI2_MISO 4  // MCP3208 DOUT
 #define WAVEX_ESP_SPI2_FREQ_HZ 10000000
 
-#define WAVEX_ESP_MCP3008_CS 5  // ADC #0 (8 channels = 4 endless pots)
+#define WAVEX_ESP_MCP3208_CS 5  // ADC #0 (8 channels = 4 endless pots)
 
 // TLC5947: XLAT latches the frame; BLANK high forces all outputs off. Wire a
 // pull-up on BLANK so the LEDs stay dark from power-on until the first frame
@@ -115,7 +116,7 @@ extern "C" {
 #define WAVEX_ESP_TLC5947_LAT 28
 #define WAVEX_ESP_TLC5947_BLANK 29
 
-// Unassigned header GPIO: 52 (earmarked: chip select for a second MCP3008
+// Unassigned header GPIO: 52 (earmarked: chip select for a second MCP3208
 // if more than four endless pots or any plain pots are added). GPIO26/27 are
 // reserved for USB, see above.
 

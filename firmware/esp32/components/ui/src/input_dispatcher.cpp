@@ -82,6 +82,12 @@ void InputDispatcher::processAll() {
 }
 
 void InputDispatcher::dispatch(InputEvent evt) {
+    if (evt.type == InputType::PotUp || evt.type == InputType::PotDown) {
+        auto& nav = UINavigator::instance();
+        if (auto page = nav.active())
+            InvokeEncoder(page->encoderBindings(), evt.source_id, evt.steps(), nav.isShifted());
+        return;
+    }
     const bool is_key = evt.type == InputType::KeyPress || evt.type == InputType::KeyRelease ||
                         evt.type == InputType::ButtonPress || evt.type == InputType::ButtonRelease;
     if (!is_key) {

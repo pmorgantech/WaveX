@@ -195,6 +195,10 @@ foreach(test_file IN LISTS unit_tests integration_tests)
     add_wavex_esp32_test(${test_file})
 endforeach()
 
+target_sources(pot_service_test PRIVATE ../main/panel/pot_service.cpp)
+set_source_files_properties(../main/panel/pot_service.cpp PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/mocks/panel_lock_host.h")
+
 # Compile the real replacement stub, so selecting it cannot silently light the
 # temporary TLC chain or claim a successful hardware write.
 target_sources(led_backend_stub_test PRIVATE ../main/panel/led_backend.cpp)

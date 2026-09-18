@@ -1,4 +1,5 @@
 #include "panel/panel_task.h"
+#include "panel/pot_service.h"
 #include "ui/panel/panel_led_service.h"
 // ESP32 debug console: one line reader, two grammars, acknowledged verbs.
 // See ui_console.h and docs/features/debug-harness-and-hil.md.
@@ -393,7 +394,7 @@ void dispatch(const Command& c) {
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
     } else if (!strcmp(c.verb, "STATE") || !strcmp(c.verb, "PAGE") || !strcmp(c.verb, "TRACK") ||
-               !strcmp(c.verb, "HOME") || !strcmp(c.verb, "LEDS")
+               !strcmp(c.verb, "HOME") || !strcmp(c.verb, "LEDS") || !strcmp(c.verb, "PANEL")
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
                || !strcmp(c.verb, "RENDER")
 #endif
@@ -536,6 +537,31 @@ void serve_request() {
                  static_cast<unsigned long>(s_render.peak_pixels),
                  static_cast<unsigned long>(s_render.peak_us));
 #endif
+    } else if (!strcmp(s_req.verb, "PANEL")) {
+        if (s_req.args[0]) {
+            FormatErr(seq, "badarg", s_reply, sizeof(s_reply));
+            return;
+        }
+        const auto state = wavex_panel::ReadPots();
+        size_t len = FormatOk(seq, s_reply, sizeof(s_reply));
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "adc", state.adc_ready);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "scans", state.scans);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "errors", state.errors);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "calstage", static_cast<int>(state.stage));
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "calresult", state.last_result);
+        for (size_t i = 0; i < 4; ++i) {
+            char key[12], value[64];
+            std::snprintf(key, sizeof(key), "pot%u", static_cast<unsigned>(i));
+            std::snprintf(value,
+                          sizeof(value),
+                          "%u,%u,%u,%u,%u",
+                          state.wipers[i][0],
+                          state.wipers[i][1],
+                          state.readings[i].angle,
+                          state.readings[i].valid,
+                          state.calibration[i].enabled);
+            len = AppendKv(s_reply, sizeof(s_reply), len, key, value);
+        }
     } else if (!strcmp(s_req.verb, "LEDS")) {
         if (!strcmp(s_req.args, "WALK"))
             wavex_ui::PanelLedWalk();

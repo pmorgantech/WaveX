@@ -1,4 +1,6 @@
+#include "panel/pot_service.h"
 #include "ui/panel/panel_led_service.h"
+#include "ui/ui_navigator.h"
 /**
  * @file ui_task.cpp
  * @brief UI Task Implementation for MIPI DSI Display with LVGL
@@ -266,6 +268,18 @@ void UITask::run() {
             }
         }
 #endif
+        const auto pot_steps = wavex_panel::TakePotSteps();
+        for (uint8_t i = 0; i < pot_steps.size(); ++i) {
+            if (!pot_steps[i])
+                continue;
+            wavex_ui::InputEvent event;
+            event.type =
+                pot_steps[i] > 0 ? wavex_ui::InputType::PotUp : wavex_ui::InputType::PotDown;
+            event.source_id = i;
+            event.delta = static_cast<int16_t>(pot_steps[i] > 0 ? pot_steps[i] : -pot_steps[i]);
+            event.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+            wavex_ui::InputDispatcher::instance().post(event);
+        }
         // Dispatch queued input events to current context. processAll() takes
         // the LVGL port lock around each event itself (see input_dispatcher.cpp
         // for why per event and not around the drain), so no lock here.
@@ -288,6 +302,8 @@ void UITask::run() {
         wavex_ui::BusyOverlay::service();
         wavex_ui::UISampleBrowser::processDeferredUpdates();
         wavex_ui::ServicePanelLeds();
+        if (auto page = wavex_ui::UINavigator::instance().active())
+            page->servicePanelControls();
         LV_UNLOCK();
 
         adaptiveRefreshControl();

@@ -1,8 +1,8 @@
 // WaveX Play page - Pads and Keys performance surfaces
 #pragma once
-
 #include <lvgl.h>
 
+#include "components/encoder_strip.h"
 #include "components/ui_value_tile.h"
 #include "ui_page.h"
 
@@ -67,11 +67,14 @@ class UIPlayPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     void onTrackChanged() override;
+    EncoderBindings encoderBindings() override;
+    void servicePanelControls() override { encoder_strip_.Update(encoderBindings()); }
     PanelPageLeds panelLeds() const override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
    private:
+    EncoderStrip encoder_strip_;
     struct Key {
         lv_obj_t* obj = nullptr;
         lv_obj_t* label = nullptr;
@@ -113,7 +116,7 @@ class UIPlayPage : public UIPage {
     void refreshKeys();
     void refreshBindingStatus();
 
-    void stepParam(int direction);
+    void stepParam(int direction, int divisor = 1);
     void selectParam(int direction);
     void sendParam();
     void refreshParamLabel();

@@ -1,6 +1,6 @@
 # Panel Controls — Buttons, LEDs, Endless Pots, and MIDI I/O
 
-**Status**: Design with stages 0–3 implemented; keypad INT and LED output added 2026-09-17.
+**Status**: Design with stages 0–4 implemented; keypad, LED and pot firmware added 2026-09-17.
 Physical panel validation remains open. Pin numbers live only in `firmware/shared/config/pin_config.h`; feature
 flags and table sizes only in `hardware_config.h`. This document names the
 functions those pins carry and the rules that produced the allocation — never
@@ -14,7 +14,7 @@ a Phase 2 prerequisite, sequenced before items 2 and 3 as "2.P".
 
 ---
 
-## 1. Where we start (as-built, 2026-09-05)
+## 1. Current implementation (as-built, 2026-09-17)
 
 What the ESP32 image actually does with the panel today, from code (file
 references are the audit trail; re-verify before trusting):
@@ -22,12 +22,12 @@ references are the audit trail; re-verify before trusting):
 | Piece | State |
 |---|---|
 | Touch (GT911) | The only `lv_indev` fed by hardware. Bus is the BSP's I2C (`bsp_i2c_get_handle()`), shared with the keypad. |
-| Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled at 2 ms (`main/pcnt_task.cpp`). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1 counts negative on clockwise as wired; direction is now one per-encoder setting in `hardware_config.h` (`WAVEX_*_DIRECTION`) applied in the PCNT task, and the three pages that had compensated were reverted to the shared `steps()` contract (2026-09-05). No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
+| Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled by `panel_task` with a 2 ms delay plus I/O (`main/pcnt_task.cpp` supplies the service routine). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1 counts negative on clockwise as wired; direction is now one per-encoder setting in `hardware_config.h` (`WAVEX_*_DIRECTION`) applied in the PCNT task, and the three pages that had compensated were reverted to the shared `steps()` contract (2026-09-05). No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
 | Keypad (TCA8418) | INT wakes a bounded FIFO task; 100 ms safety poll, 10 ms fallback without INT. Logical key map and diagnostics exist. Geometry and wiring remain unverified; see HV-011. |
 | Softkeys | Six on-screen buttons, touch only. `SoftkeyBar::focusNext()` / `pressFocused()` exist with no callers — the documented "encoder scrolls softkeys" interaction is not in the binary. |
 | Shift | Latched-and-sticky global modifier in `InputDispatcher::processAll()` with a header chip. Works, driven by keycode 4 today. |
 | LEDs (temporary TLC5947) | `panel_task` owns SPI2 DMA and complete-frame latching; logical policy and diagnostics implemented. HV-012 open. |
-| Pot ADC (MCP3008) | Pending stage 4; no ADC driver yet. |
+| Pot ADC (MCP3208) | Eight-channel DMA scans, RV112FF 20 kΩ decoder, calibration and page bindings implemented; HV-013 open. |
 | DIN MIDI | Compiled out since 2026-09-04: RX sat on the USB-Serial/JTAG D- pin. Pins moved 2026-09-05; still off until rewired (§5). TX ring is zero-length — no MIDI out. |
 | USB MIDI | Device on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Input only; `WAVEX_USB_MIDI_OUTPUT_ENABLED` is read by nothing. |
 | Input plumbing | `InputEvent` → `InputDispatcher` queue (64 deep) → drained on the UI task under the LVGL lock → global Shift/Back → `UIPage::onInput()`. The debug console injects the same events (`KEY`, `ENC`, `POT`). |
@@ -42,10 +42,10 @@ LED namespace, and (c) the page contract for pots — not a UI rewrite.
 |---|---|---|
 | **TCA8418** keypad controller (I2C) | **Keep.** | Up to 80 keys on two wires plus INT, hardware debounce, 10-event FIFO; already on the touch I2C bus and already driven. Every panel key, both encoder push switches and the 16 Phase-2 pads fit in one part with rows to spare. Two caveats: the vendored driver hard-codes 100 kHz for its device (fine — events are tiny), and it cannot do velocity. Pads are on/off switches in this design; velocity comes from touch position or a fixed level, as required by the panel's switch-only hardware. |
 | **TLC5947** 24-ch 12-bit constant-current LED driver | **Temporary backend, two chained (48 ch).** | User decision 2026-09-17: use TLC5947 for bring-up, then replace it with PCA9956B. Keep policy and logical brightness independent of chip registers and bus. It has no chip select — it is a shift register — which is the one rule the SPI2 driver has to respect (§3.3). If per-pad **RGB** is ever wanted, 16 pads alone need 48 channels; switch to an I2C matrix driver (IS31FL37xx class) then rather than chaining four TLC5947s. Not a v1 concern. |
-| **MCP3008** 8-ch 10-bit SPI ADC | **Keep.** | Eight channels is exactly four endless pots. 10 bits over a wiper's ~180° linear span is ~0.2°/count before noise, more than the UI can use. If finer control is ever wanted the **MCP3208** is the same footprint and protocol with 12 bits — a one-constant change (`WAVEX_POT_ADC_RESOLUTION`). The chip's own on-board ADC was considered and rejected: the P4's ADC-capable header pins are all spoken for (I2C, inter-MCU UART, the SPI-slave reserve), and it would cost eight GPIO where the MCP3008 costs four. |
+| **MCP3208** 8-ch 12-bit SPI ADC | **Adopt**, user confirmed 2026-09-17. | Eight channels serve four dual-wiper pots. Commands and result extraction explicitly implement the MCP3208 wire format. Use a conservative acquisition clock for the unbuffered 20 kΩ pots; settling remains a bench gate. |
 | **PEC11R** detented quadrature encoders (x2, PCNT) | **Keep both** as navigation encoders. | Already working through the hardware pulse counter, glitch-filtered, no CPU cost. Detents suit list navigation and value stepping; the push switch gives Select. The endless pots are a different tool (§2.1). |
-| **CD74HC4067** analog mux | **Dropped** (removed from `hardware_config.h` 2026-09-05). | Predated the MCP3008; its plan used the chip's single ADC through a mux on address pins that are not on this board's header. |
-| Endless pots ("dual pots at 90°") | **Adopt, four.** Example part: Alpha RV112FF-40B1 series (two wipers 90° apart, 360° endless). Confirm the exact part before the panel PCB; the decoder (§4.4) is written against the two-wiper triangle-wave family, not one vendor. | See §2.1. |
+| **CD74HC4067** analog mux | **Dropped** (removed from `hardware_config.h` 2026-09-05). | Predated the MCP3208; its plan used the chip's single ADC through a mux on address pins that are not on this board's header. |
+| Alpha **RV112FF, 20 kΩ**, four | User confirmed 2026-09-17. | Endless dual-unit potentiometers. The decoder assumes quarter-turn-offset triangular wipers; measure the actual waveform before enabling controls (HV-013). |
 
 ### 2.1 Why both encoder types
 
@@ -89,7 +89,7 @@ order:
    run) so each control is one small connector.
 
 Under those rules the panel needs nine pins and gets them, with **one spare**
-(earmarked for a second MCP3008 chip select if more than four pots or any
+(earmarked for a second MCP3208 chip select if more than four pots or any
 plain pots are ever added). The result is in `pin_config.h`, with the
 reasoning for each move recorded there.
 
@@ -98,7 +98,7 @@ reasoning for each move recorded there.
 ```
 ESP32-P4
 ├─ I2C (BSP bus, 400 kHz)      GT911 touch ── TCA8418 keypad (100 kHz device clock) + INT
-├─ SPI2 master                 TLC5947 #0 ─ TLC5947 #1 (chain; XLAT, BLANK)   MCP3008 (CS)
+├─ SPI2 master                 TLC5947 #0 ─ TLC5947 #1 (chain; XLAT, BLANK)   MCP3208 (CS)
 ├─ PCNT unit 0, unit 1         NAV_A, NAV_B quadrature (push switches → TCA8418 matrix)
 ├─ UART1                       inter-MCU link (as-built)
 ├─ UART2                       DIN MIDI in/out
@@ -107,14 +107,14 @@ ESP32-P4
 └─ USB 1.1 FS pair             reserved, unpopulated: future USB host
 ```
 
-**One task owns SPI2.** The MCP3008 reads and the TLC5947 frames go through
+**One task owns SPI2.** The MCP3208 reads and the TLC5947 frames go through
 the same bus from the same task (`panel_task`, §4.1), so there is no bus
 mutex and no way for a pot read to interleave with a half-shifted LED frame.
 
 ### 3.3 The TLC5947 rule
 
 The TLC5947 has no chip select. Every clock edge on SPI2 — including the
-MCP3008's — shifts data through its 288-bit register. That is harmless only
+MCP3208's — shifts data through its 288-bit register. That is harmless only
 because outputs change on **XLAT**, not on shift. Therefore:
 
 - The driver always sends the **complete** 72-byte chain frame immediately
@@ -123,8 +123,9 @@ because outputs change on **XLAT**, not on shift. Therefore:
   latched — via a pull-up so the LEDs are dark before the firmware runs, then
   driven by the GPIO. BLANK also gives free global dimming/screen-blanker
   integration.
-- SPI2 carries two `spi_device` handles with their own clocks (TLC5947 up to
-  30 MHz, MCP3008 ~2 MHz at 3.3 V); ESP-IDF serialises them on the bus.
+- SPI2 carries two `spi_device` handles with separately configured clocks;
+  see `hardware_config.h`. ADC reads never pulse XLAT. The panel task owns bus
+  lifetime separately from both devices, so LED retries do not remove the ADC bus.
 
 ### 3.4 Control inventory (v1)
 
@@ -145,9 +146,10 @@ That is 37 keys and 31 LEDs, inside `WAVEX_LED_CHANNELS` with room spare.
 `hardware_config.h` sizes (`WAVEX_LED_CHANNELS`, rows/columns) follow the
 final panel PCB, not this table.
 
-Analog: four endless pots, each two wipers → eight MCP3008 channels. Wipers
-run wiper-to-wiper between 3.3 V and ground with the MCP3008 on the same
-3.3 V reference so calibration is a min/max per channel, not a ratio.
+Analog: four RV112FF 20 kΩ endless pots, each with two wiper outputs → eight
+MCP3208 channels. Connect the resistive elements across the same supply/reference
+as the ADC and measure both wipers. Confirm terminal identification from the
+manufacturer drawing and the actual parts before powering the assembly.
 
 ### 3.5 MIDI hardware
 
@@ -166,10 +168,10 @@ run wiper-to-wiper between 3.3 V and ground with the MCP3008 on the same
 ### 4.1 Ownership and tasks
 
 ```
-panel_task (prio 5, 2 ms)            keypad_task (existing → INT-driven)
+panel_task (prio 5, 2 ms delay + I/O)            keypad_task (existing → INT-driven)
 ├─ PCNT unit 0/1 deltas               └─ TCA8418 FIFO on INT, 100 ms fallback poll
-├─ MCP3008 8-ch burst read (stage 4, pending)                 │
-├─ endless-pot decoder → deltas (stage 4, pending)            │  physical keycode → PanelKey (table)
+├─ MCP3208 8-ch DMA scan                 │
+├─ endless-pot decoder → bounded delta mailbox            │  physical keycode → PanelKey (table)
 ├─ LED frame flush if dirty                │
 │      │  InputEvent (Pot/Encoder)         │  InputEvent (Key press/release)
 │      └──────────────► InputDispatcher::post() ◄──────────┘
@@ -181,8 +183,11 @@ panel_task (prio 5, 2 ms)            keypad_task (existing → INT-driven)
 └─ ◄── LED frame (locked value mailbox) ◄── PanelLeds (UI-task-owned model)
 ```
 
-- `panel_task` absorbs today's `pcnt_task`: one 2 ms poller instead of two,
-  and it is the **sole SPI2 user**. It never touches LVGL.
+- `panel_task` services PCNT, ADC and LEDs, then delays 2 ms. Its actual
+  period includes transactions and occasional calibration persistence; measure
+  latency and PCNT overflow headroom in HV-013. It is the **sole SPI2 user**
+  and never touches LVGL. The UI drains at most four accumulated pot deltas
+  per pass into the existing input queue; queue overflow uses its existing drop counter.
 - The keypad task switches to the INT line (the TCA8418 `CFG` register's
   `KE_IEN` bit is written, INT falling edge → task notification), keeping a
   slow poll as a safety net. Physical latency remains unmeasured in HV-011; no sub-millisecond claim is made.
@@ -202,14 +207,15 @@ Entities and where their truth lives:
 | `PanelLed` | `enum class : uint8_t` — the LEDs of §3.4 | `components/ui/include/ui/panel_led.h` |
 | LED map | `PanelLed` → physical output channel index, one table, `static_assert` no duplicate channel and all `< WAVEX_LED_CHANNELS` | `hardware_config.h` |
 | `InputEvent` | Existing struct gains `InputType::KeyPress/KeyRelease` carrying a `PanelKey` in `source_id`, and `InputType::PotUp/PotDown` carrying the pot index in `source_id` and the magnitude in `delta` — same magnitude-plus-direction contract `steps()` already enforces. Existing `Encoder*` types stay for the nav encoders. | `input_event.h` |
-| `EncoderBinding` | `{ const char* label; const char* value; void (*onSteps)(int); }`, four per page, mirroring `Softkey` | `ui_page.h` |
+| `EncoderBinding` | Four fixed records: label, owned value text, owner/callback, parameter index, coarse multiplier and enabled flag | `ui/encoder_binding.h` |
 | LED frame/policy | Fixed array of chip-independent 8-bit brightness indexed by `PanelLed`, plus blank/test state; UI owns policy, output task owns applied status | `ui/panel/panel_led_frame.h`, `main/panel/` |
-| Pot calibration | per-channel min/max + per-pot direction, persisted in NVS (`wavex/panel`), defaults from the datasheet range | `main/panel/endless_pot_store.cpp` |
+| Pot calibration | Per-wiper ranges, per-pot direction and enable; versioned explicit bytes in NVS namespace `wavex_panel`, key `pots_v1`; defaults disabled | `shared/panel/endless_pot.hpp`, `main/panel/pot_store.cpp` |
 
 Invariants: every physical keycode maps to at most one `PanelKey`; every
 `PanelLed` maps to exactly one channel; `SHIFT` and `BACK` never reach a
-page (already true); a page's four bindings are re-read on every
-`refreshSoftkeys()` so labels follow state exactly as softkeys do.
+page (already true). Bindings are fetched from the active page at dispatch
+time under the LVGL lock. The strip refreshes from the same binding values;
+unchanged text does not invalidate widgets. No worker retains page pointers.
 
 ### 4.3 Key semantics (global, in `InputDispatcher::processAll()`)
 
@@ -223,27 +229,30 @@ page (already true); a page's four bindings are re-read on every
 | `TRACK_PREV/NEXT` | Change the shared selected Track (`ui/current_track.h`); the header chip updates on every page. |
 | `PLAY_STOP`, `REC`, `PAD1..16` | Forwarded to the page until Phase 2 gives them global sequencer semantics (`sequencer.md` §5). Until then a page that does not handle them drops them; the Diagnostics Panel tab shows them so wiring can be verified before they mean anything. |
 
-Pot deltas go to the page's `EncoderBinding[n].onSteps(steps)`; Shift +
-pot divides the step size (fine mode) in the dispatcher, not per page.
+Pot deltas invoke the active page's binding. The dispatcher applies its coarse
+multiplier normally and one fine unit with Shift. Continuous Play and Instrument
+controls use four fine units per coarse step; enum controls remain one choice
+per step. Turning does not consume sticky Shift.
 
 ### 4.4 Endless-pot decoding (host-testable)
 
 `firmware/shared/panel/endless_pot.hpp`, HAL-free, C++17, under
 `firmware/shared/tests/`:
 
-1. Normalise both wipers to [0,1) with the per-channel calibration.
-2. Each wiper is a triangle wave over the turn; at any angle one of the two
-   is in its linear region (away from its fold). Pick that wiper, use the
-   other's sign to disambiguate the slope, and reconstruct the angle.
-3. Delta = wrapped difference from the previous angle; a dead-band (about
-   two ADC counts, configurable) suppresses noise; an optional acceleration
-   curve maps angular speed to steps. Output is signed steps per 2 ms sample.
-4. A stuck or disconnected wiper (both channels at rails) reports "no pot"
-   rather than spinning; the Diagnostics tab shows it.
+1. Normalize calibrated wipers to a 4096-unit turn. Reject invalid ranges and
+   pairs inconsistent with the quarter-turn triangular model.
+2. Use the wiper farther from its fold and the other wiper's half-range to
+   reconstruct angle. Retain fractional movement for 64 logical steps/turn.
+3. An eight-angle-unit dead band retains its anchor so slow turns accumulate.
+   Implausible jumps over an eighth-turn or gaps over 100 ms rebase without an
+   edit. Invalid reads clear accumulated input. There is no acceleration.
+4. Defaults are disabled. Range capture, frozen-range clockwise verification
+   and explicit Save enable each pot. Shape rejection is not a reliable probe
+   for physical presence: disconnected analog inputs can float.
 
-Tests drive synthetic sin/tri wiper pairs forward and backward at several
-speeds with added noise and assert monotonic step output, zero drift over a
-full turn, and no steps below the dead-band.
+Host tests cover triangular sweeps, wrap, direction, slow movement, jitter,
+stale/invalid readings, calibration acceptance, serialization, failed saves,
+cancellation and reconnects. They do not establish the RV112FF waveform.
 
 ### 4.5 LED policy (v1)
 
@@ -260,18 +269,17 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 
 ### 4.6 Diagnostics, console, tests
 
-- **Diagnostics → Panel tab**: last keycode with row/col and its `PanelKey`
-  (or "unmapped"), raw MCP3008 values and decoded angles per pot, PCNT
-  counts, an LED walk softkey and a full-on toggle. ADC/angle display is
-  deferred to stage 4. This
-  is how the matrix geometry and LED map get *verified* rather than assumed.
-- **Console**: `KEY <PanelKey name> [PRESS|RELEASE|TAP]` (every logical key
-  by name — today it knows four), `POT <n> <delta>`, `STATE` LED driver/ready/blank fields and `LEDS` (the
-  physical levels; implemented stage 3), `PANEL` (raw ADC + pcnt snapshot). `make test-hil` then covers
-  menu jumps, softkey keys honouring Shift, pots reaching a page binding,
-  and LED state following navigation — with no camera.
-- **Host tests**: endless-pot decoder (§4.4); key-map and LED-map table
-  uniqueness are `static_assert`s and need no runtime test.
+- **Diagnostics → Panel** shows keypad mapping and LED tests/status.
+- **Settings → Pots** shows raw wipers, decoded angle/validity, ADC errors and
+  per-pot calibration. Select a pot, Start, turn twice to capture ranges, Verify,
+  then turn clockwise through a full revolution and Save. Cancel leaves the
+  previous calibration intact. Disable persists the disabled state.
+- **Console**: `PANEL` reports ADC readiness/scans/errors, calibration status and
+  `pot0`…`pot3` tuples (raw A, raw B, angle, valid, enabled). `POT <n> <delta>`
+  injects through the same binding dispatcher; it does not require physical
+  calibration. `KEY`, `STATE` and `LEDS` retain their existing panel diagnostics.
+- **Host tests** cover the decoder/service, binding scaling and strip redraws;
+  physical checks and HIL results remain open in HV-013.
 
 ### 4.7 MIDI software
 
@@ -291,8 +299,8 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 | 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; per-encoder direction flags. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
 | 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. The dead `focusNext/pressFocused` deleted. *Done 2026-09-05.* | HIL: jumps, softkeys via key, Shift row (`test_panel_keys.py`) | keycode → key on the Diagnostics ▸ Panel tab |
 | 2 | **Keypad INT** — implemented 2026-09-17: CFG, ISR notification, fallback, error recovery. | FIFO/configuration/race/backpressure tests | HV-011: latency, key rolls, shared-bus recovery |
-| 3 | **LED output** — implemented 2026-09-17: temporary TLC5947 backend, PCNT service, replaceable output interface, blanking, policy and diagnostics. | Policy/packing tests and firmware compile; HIL still open | HV-012: mapping, startup, sleep, timing; shared-pot traffic deferred to stage 4 |
-| 4 | **MCP3008 + endless pots** — decoder (host tests), calibration store, Settings → Calibrate flow, `EncoderBinding` page contract, strip widget, Shift = fine. First consumers: Instrument page (Filter/Amp), Play page live strip. | decoder tests; HIL `POT n` | feel, drift, noise floor; measure the strip's cost on the 30 FPS budget |
+| 3 | **LED output** — implemented 2026-09-17: temporary TLC5947 backend, PCNT service, replaceable output interface, blanking, policy and diagnostics. | Policy/packing tests and firmware compile; HIL still open | HV-012: mapping, startup, sleep, timing; shared-pot traffic covered by HV-013 |
+| 4 | **MCP3208 + RV112FF 20 kΩ pots** — implemented 2026-09-17: decoder, NVS calibration, Settings → Pots, page bindings, strip, Shift fine mode. Play and Instrument Filter/Amp are first consumers. | Decoder/service/binding/widget tests and firmware compile | HV-013: waveform, acquisition settling, calibration, feel, latency and rendering |
 | 5 | **MIDI** — DIN on, TX ring, USB out, latency measured (closes the roadmap's "MIDI latency" row). | — | DIN in → sound, USB in → sound, both < 5 ms |
 
 **Gate**: from the panel alone (no touch), jump to Instrument, change the
@@ -303,7 +311,7 @@ notes sound; `make test` and `make test-hil` green.
 ## 6. Decisions taken here (revisit only with a reason)
 
 1. Both encoder kinds: two detented nav encoders on PCNT, four endless pots
-   on an MCP3008 (§2.1).
+   on an MCP3208 (§2.1).
 2. The second full-speed USB pair is reserved for a future host port; the
    dormant SPI-slave pins stay reserved (§3.1). Together that is seven GPIO
    held back, leaving one spare after the panel.
@@ -333,8 +341,8 @@ Recorded in `roadmap.md` § Outstanding hardware verification:
   tab (stage 1, landed) shows each press's keycode, row/column and `PanelKey`.
 - USB MIDI enumerates on the 4-pin HS connector — never confirmed on the
   bench (roadmap "MIDI latency" row).
-- Endless-pot part and its wiper waveform (triangle vs sinusoid) — the
-  decoder is written for triangle; verify on a scope before calibrating.
+- RV112FF 20 kΩ wiper waveform and relative phase — the decoder assumes
+  quarter-turn triangular waves; verify on a scope before calibrating.
 
 
 ## Keypad INT implementation (stage 2, 2026-09-17)
@@ -377,7 +385,7 @@ Off-context pads are dark. Tab hosts forward their active child's state.
 
 `panel_task` absorbs PCNT polling and exclusively owns backend initialization,
 writes and shutdown. It checks changed frames every 20 ms, separately from the
-2 ms PCNT cadence. UI publication and status readback copy complete values under
+PCNT/ADC service loop (2 ms delay plus I/O). UI publication and status readback copy complete values under
 a short SMP lock; no lock is held over I/O. A UI heartbeat older than one second
 forces blanking. Screen sleep overrides all policy and diagnostic test output.
 
@@ -393,7 +401,8 @@ selection remain solely in the canonical configuration headers.
 
 The backend interface is `init/write/shutdown`; policy and pages never reference
 TLC registers, SPI or PCA addresses. Selecting PCA9956B currently reports
-`ESP_ERR_NOT_SUPPORTED` without claiming pins or a bus. Replacing it requires a
+`ESP_ERR_NOT_SUPPORTED` without claiming TLC control pins or transmitting LED
+frames. The ADC may still own the shared SPI bus. Replacing it requires a
 board-specific backend for address/current/output-enable setup and PWM writes,
 plus the canonical channel map. The logical brightness/page contract is unchanged.
 
@@ -408,3 +417,36 @@ a just-requested test may not appear until the next UI/output service passes.
 `STATE` adds `leddriver`, `ledready`, `ledblank`. Transport success cannot verify
 the write-only chain or its wiring. [HV-012](../hardware-validation.md#hv-012--panel-led-output)
 owns those checks, HIL and measured timing; no hardware result is claimed.
+
+
+## Pot implementation (stage 4, 2026-09-17)
+
+`panel_task` owns all ADC transactions, decoder state and NVS writes. Fixed-size
+snapshots/commands cross a short SMP lock; no SPI/NVS operation runs under that
+lock or the LVGL lock. Each channel uses a four-byte full-duplex DMA transaction
+with preallocated aligned buffers; only a complete successful scan is published.
+The SPI device and bus lifetimes are separate, including the PCA LED stub.
+
+The acquisition clock is deliberately conservative for unbuffered 20 kΩ pots
+(approximately 5 kΩ worst-case divider source resistance). Measure settling and
+channel crosstalk before claiming twelve effective bits. ADC configuration and
+channel assignments live only in the canonical config headers.
+
+NVS stores explicit versioned bytes, validates every field and never erases the
+partition automatically on errors. Runtime calibration changes only after a
+successful commit. A failed Save leaves the verified candidate available for a
+retry; Cancel leaves active settings intact. During calibration all pot edits
+are suppressed. Missing or malformed stored data leaves the pots disabled.
+
+Play binds Cutoff, Resonance, Attack and Decay. Instrument binds Cutoff,
+Resonance, Type and Model on Filter, and Level/Pan on Amp. Other Instrument
+sections leave their four slots empty. Each page reserves a 60-pixel strip inside
+its existing content bounds. Hardware rendering and feel remain unverified.
+
+## Related references
+
+- [Hardware validation HV-013](../hardware-validation.md#hv-013--mcp3208-and-endless-pots)
+- [Microchip MCP3208 data sheet](https://ww1.microchip.com/downloads/en/devicedoc/21298e.pdf)
+- [Alpha RV112FF catalog](https://www.taiwanalpha.com/downloads?id=79&target=products)
+  (mechanical/terminal drawing; no electrical phase waveform supplied)
+- [ESP-IDF 5.5 SPI master](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/spi_master.html)

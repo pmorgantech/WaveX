@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- MCP3208 support for four RV112FF 20 kΩ endless pots, with DMA scans,
+  verified per-pot calibration saved in NVS and Settings → Pots diagnostics.
+  Pots default disabled until saved; failed saves preserve active calibration.
+  Play and Instrument Filter/Amp expose four labeled bindings with Shift for
+  finer continuous edits. ADC and temporary LED output share a panel-owned SPI
+  bus without coupling their device lifetimes. Hardware validation is tracked
+  in HV-013; the RV112FF waveform and acquisition settling remain unverified.
+
 - Panel LED feedback through a temporary DMA-driven TLC5947 backend, with
   chip-independent brightness frames and an explicit PCA9956B replacement stub.
   Softkeys, Shift, root navigation, transport, held pads and sequencer steps

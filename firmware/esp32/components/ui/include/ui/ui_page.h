@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 
+#include "encoder_binding.h"
 #include "input_event.h"
 #include "panel/panel_led_state.h"
 #include "ui_softkey.h"
@@ -36,6 +37,8 @@ class UIPage {
      */
     virtual void onTrackChanged() {}
     // Read under the UI lock. Backend-confirmed or held local presentation state.
+    virtual EncoderBindings encoderBindings() { return {}; }
+    virtual void servicePanelControls() {}
     virtual PanelPageLeds panelLeds() const { return {}; }
 
     /**

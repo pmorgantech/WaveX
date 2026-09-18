@@ -234,7 +234,7 @@ The user authorized stage 4 touchscreen editors to proceed on 2026-09-11:
 general key/velocity zones, Instrument Browser and Track page. This does not
 close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
-physical integration, pot drivers and DIN MIDI remain unverified or pending.
+physical integration and DIN MIDI remain unverified or pending.
 The user authorized keypad/LED firmware on 2026-09-17 with a temporary TLC5947
 backend and a replaceable interface for a later PCA9956B.
 Stages, one commit each:
@@ -246,9 +246,11 @@ Stages, one commit each:
    absorbs the PCNT poller. Chip-independent LED policy, diagnostics and console
    status are in place; PCA9956B is an explicit replacement stub. Host tests and
    compile checks do not close the electrical/latency gate in HV-012.
-4. MCP3008 + endless-pot decoder (host-tested), calibration store, the
-   four-`EncoderBinding` page contract and strip widget; first consumers
-   are the Instrument and Play pages.
+4. MCP3208 + RV112FF 20 kΩ pot firmware implemented 2026-09-17: host-tested
+   decoder and calibration service, NVS persistence, Settings → Pots, four pot
+   bindings and strip in Instrument Filter/Amp and Play. Shift selects fine
+   changes. Pots default disabled until calibrated and saved. Hardware waveform,
+   settling, feel and shared-bus/render timing remain open in HV-013.
 5. MIDI: DIN back on at its new pins, UART2 TX ring shared with USB MIDI
    out, DIN/USB latency measured.
 

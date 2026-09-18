@@ -6,6 +6,7 @@
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
+#include "panel_spi.h"
 #include "pin_config.h"
 #include "tlc5947_frame.h"
 #endif
@@ -14,7 +15,6 @@ namespace {
 #if WAVEX_PANEL_LED_BACKEND == WAVEX_PANEL_LED_TLC5947
 spi_device_handle_t device = nullptr;
 uint8_t* dma = nullptr;
-bool bus_owned = false;
 constexpr auto host = static_cast<spi_host_device_t>(WAVEX_ESP_SPI2_HOST);
 constexpr auto blank = static_cast<gpio_num_t>(WAVEX_ESP_TLC5947_BLANK);
 constexpr auto latch = static_cast<gpio_num_t>(WAVEX_ESP_TLC5947_LAT);
@@ -27,10 +27,6 @@ void shutdown() {
     if (dma) {
         heap_caps_free(dma);
         dma = nullptr;
-    }
-    if (bus_owned) {
-        spi_bus_free(host);
-        bus_owned = false;
     }
 }
 esp_err_t write(const wavex_ui::PanelLedFrame& frame) {
@@ -65,17 +61,9 @@ esp_err_t init() {
     esp_err_t result = gpio_config(&pins);
     if (result != ESP_OK)
         return result;
-    spi_bus_config_t bus{};
-    bus.mosi_io_num = WAVEX_ESP_SPI2_MOSI;
-    bus.miso_io_num = WAVEX_ESP_SPI2_MISO;
-    bus.sclk_io_num = WAVEX_ESP_SPI2_SCLK;
-    bus.quadwp_io_num = -1;
-    bus.quadhd_io_num = -1;
-    bus.max_transfer_sz = kTlcFrameBytes;
-    result = spi_bus_initialize(host, &bus, SPI_DMA_CH_AUTO);
+    result = EnsureSpiBus();
     if (result != ESP_OK)
-        return result;  // never take over another bus owner
-    bus_owned = true;
+        return result;
     spi_device_interface_config_t config{};
     config.mode = 0;
     config.clock_speed_hz = WAVEX_ESP_SPI2_FREQ_HZ;

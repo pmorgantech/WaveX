@@ -22,6 +22,7 @@ this document owns the runnable checks and their validation status.
 - [HV-010 — Waveform playback head](#hv-010--waveform-playback-head)
 - [HV-011 — Keypad interrupt and recovery](#hv-011--keypad-interrupt-and-recovery)
 - [HV-012 — Panel LED output](#hv-012--panel-led-output)
+- [HV-013 — MCP3208 and endless pots](#hv-013--mcp3208-and-endless-pots)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -75,6 +76,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-010 | Waveform playback head | Pending | Host/render checks; tracking, UART, DWT and soak unrun |
 | HV-011 | Keypad interrupt and recovery | Blocked | Firmware/host checks; physical matrix and INT wiring needed |
 | HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
+| HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 
 ## HV-001 — SD card formatting
 
@@ -498,11 +500,62 @@ Record wiring revision and images with each dated result.
   timings, UART drops and audio underruns. Compare matched pre/post workloads;
   no lost encoder movement, visible flicker or audio regressions are acceptable.
 - [ ] **012e — Replacement seam:** Compile/select the PCA9956B stub; startup and
-  encoders continue, diagnostics reports unavailable and no TLC bus/pins are
-  claimed. Restore TLC selection for the bench image. Later PCA hardware needs
+  encoders continue, diagnostics reports unavailable and no TLC control pins or LED frames are
+  used. ADC scans may still own the shared SPI bus. Restore TLC selection for the bench image. Later PCA hardware needs
   a new validation entry; this check does not validate a PCA implementation.
 
 **Pass:** All applicable checks pass with dated image identities and scope/log
 or visual evidence. Host tests cover policy, mapping, PWM packing, blanking and
-heartbeat wrap; builds do not establish electrical correctness. MCP3008 traffic
-and shared-bus flicker checks remain blocked until stage 4 and must be added then.
+heartbeat wrap; builds do not establish electrical correctness. Repeat electrical
+and flicker checks with MCP3208 scans active as specified in HV-013.
+
+
+## HV-013 — MCP3208 and endless pots
+
+**Status:** Blocked on wiring and waveform measurement; no hardware results recorded.
+**Design / gate:** [Panel controls stage 4](features/panel-controls.md#pot-implementation-stage-4-2026-09-17),
+[roadmap 2.P](roadmap.md#2p--panel-controls-and-midi-io-physical-integration).
+**Setup:** MCP3208 and four Alpha RV112FF 20 kΩ pots wired according to the
+canonical config headers and manufacturer terminal drawing; matched ADC supply
+and reference, TLC5947 chain with external BLANK pull-up, scope/logic analyzer,
+serial console and paired firmware. Record date, image identities, exact pot
+suffix, wiring revision and scope/log evidence for every result.
+
+- [ ] **013a — Electrical model:** Before calibration, measure each wiper through
+  several slow revolutions. Record minima/maxima, relative phase and fold shape.
+  Confirm quarter-turn triangular behavior; if it differs, stop and revise the
+  decoder before enabling a pot. Compare raw `PANEL` readings to the scope.
+  Measure settling, stationary noise and channel crosstalk with adjacent channels
+  near opposite rails. The configured acquisition clock must settle adequately
+  for stable controls; document effective resolution rather than assuming 12 bits.
+- [ ] **013b — Calibration and persistence:** On a fresh NVS image all four pots
+  must be disabled. Settings → Pots: select each pot, Start, turn twice, Verify,
+  turn clockwise through a full revolution, Save. Clockwise must increase values
+  regardless of wiper order. Reboot and verify ranges/direction/enabled state.
+  Cancel during capture/verification must retain prior settings; incomplete,
+  stuck or incompatible wipers must not pass verification. Disable must survive
+  reboot. Inject an NVS write failure/full partition: show failure, retain active
+  calibration, allow retry, and never erase other settings automatically.
+- [ ] **013c — Feel and recovery:** Sweep all pots slowly and quickly across
+  wraps, reverse direction and hold stationary. No stationary drift, large jumps
+  or stuck motion. Disconnect/reconnect the ADC and each wiper using a safe test
+  fixture; no spurious edits are acceptable (floating inputs may require hardware
+  biasing). Verify the first sample after recovery/gap rebases without an edit.
+- [ ] **013d — Bindings and rendering:** Play: Cutoff/Resonance/Attack/Decay;
+  Instrument Filter: Cutoff/Resonance/Type/Model; Amp: Level/Pan. Check normal
+  and Shift fine turns, value limits, tab/page changes and backend offline state.
+  Confirm blank slots do nothing. Listen for the intended parameter changes.
+  Inspect strips, touch targets and all resized page sections for overlap or
+  clipping. Measure unchanged-state redraws and active-control frame times
+  against the 30 FPS budget; console `POT` injection alone does not pass this gate.
+- [ ] **013e — Shared bus and workload:** Repeat HV-012 frame/latch/flicker checks
+  while scanning every ADC channel and turning pots. XLAT must follow only a
+  complete LED frame. Exercise LED/ADC failure and recovery independently. Under
+  maximum normal UART/playback traffic, key rolls and calibration saves, measure
+  scan period, input latency, PCNT counts/overflow headroom, task stack, UI frame
+  time and audio underruns against matched baseline workloads. No lost encoder
+  movement, flicker, stalled UI or audio regression is acceptable.
+
+**Pass:** All checks above pass with dated image identities and evidence. Host
+coverage establishes synthetic decoder/calibration behavior and UI binding/redraw
+logic only; the physical panel and Phase 2 gates remain open until measured.

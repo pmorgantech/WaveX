@@ -73,7 +73,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Display | 5" 1280×720, HX8394 controller | MIPI-DSI 2-lane | working |
 | Touch | GT911 capacitive | I2C0 (shared) | working |
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
-| Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
+| Encoders | 2× PCNT quadrature (PEC11R, nav); 4× RV112FF 20 kΩ endless pots via MCP3208 | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3208 driver/calibration/bindings implemented (2.P.4), HV-013 open |
 | LEDs | 2× TLC5947 chained, temporary | SPI2 DMA, `panel_task` only | implemented (2.P.3), HV-012 open; chip-independent frames, PCA9956B stub for later board |
 | MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |

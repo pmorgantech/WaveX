@@ -1,6 +1,6 @@
 // WaveX Instrument editor
 #pragma once
-
+#include "components/encoder_strip.h"
 #include "components/ui_dial.h"
 #include "components/ui_value_tile.h"
 #include "input_event.h"
@@ -28,6 +28,8 @@ class UIInstrumentPage : public UIPage {
     bool canLeave() override;
     void onInput(const InputEvent& evt) override;
     void onTrackChanged() override;
+    EncoderBindings encoderBindings() override;
+    void servicePanelControls() override { encoder_strip_.Update(encoderBindings()); }
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
     size_t consoleState(char* out, size_t cap, size_t len) override;
@@ -38,6 +40,7 @@ class UIInstrumentPage : public UIPage {
     enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, Lfo, kCount };
 
    private:
+    EncoderStrip encoder_strip_;
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
     // Oscillator selection plus five settings.
     static constexpr int kMaxParams = 8;
@@ -157,7 +160,7 @@ class UIInstrumentPage : public UIPage {
     void refreshHeader();
     void refreshParams();
     void refreshStatus(const char* text);
-    void stepParam(int steps);
+    void stepParam(int steps, int divisor = 1);
     void moveStage(int delta);
     void moveParam(int delta);
     void sendParam(const Param& p);

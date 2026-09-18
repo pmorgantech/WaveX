@@ -29,7 +29,7 @@ constexpr int kMidiNoteMax = 127;
 // matching how the diagnostics cards are laid out rather than introducing a
 // second convention.
 constexpr int kDesignW = UI_SCREEN_WIDTH;
-constexpr int kContentH = UI_CONTENT_HEIGHT;
+constexpr int kContentH = UI_CONTENT_HEIGHT - kEncoderStripHeight;
 // The status/parameter strip sits ABOVE the tabview, not inside a tab. It has
 // to: the parameters are page-scoped, and a strip built into one tab body would
 // vanish when the other tab was selected - taking the only readout of what the
@@ -151,7 +151,8 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* tab_host = lv_obj_create(root_);
-    lv_obj_set_size(tab_host, lv_pct(100), lv_pct(100));
+    lv_obj_set_size(tab_host, lv_pct(100), kContentH);
+    encoder_strip_.Create(root_, UI_CONTENT_HEIGHT - kEncoderStripHeight);
     lv_obj_set_pos(tab_host, 0, 0);
     lv_obj_set_style_bg_color(tab_host, lv_color_hex(kColBg), LV_PART_MAIN);
     lv_obj_set_style_border_width(tab_host, 0, LV_PART_MAIN);
@@ -182,6 +183,7 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
 }
 
 void UIPlayPage::onExit() {
+    encoder_strip_.Reset();
     // Leaving with a key down would strand a Note On with no matching Note Off,
     // and the voice would sustain until something stole it.
     releaseAll();
@@ -630,7 +632,7 @@ void UIPlayPage::selectParam(int direction) {
     refreshParamLabel();
 }
 
-void UIPlayPage::stepParam(int direction) {
+void UIPlayPage::stepParam(int direction, int divisor) {
     const size_t i = static_cast<size_t>(current_param_);
     // Track is a 0..15 Track index, not a continuous CC value - one
     // detent per step, and nothing rides the wire (it only takes effect on
@@ -652,7 +654,7 @@ void UIPlayPage::stepParam(int direction) {
         refreshParamLabel();
         return;
     }
-    int v = static_cast<int>(param_value_[i]) + direction * kParamStep;
+    int v = static_cast<int>(param_value_[i]) + direction * kParamStep / divisor;
     if (v < 0) {
         v = 0;
     } else if (v > 65535) {
@@ -719,6 +721,25 @@ void UIPlayPage::refreshPadTiles() {
 }
 
 // --- softkeys --------------------------------------------------------------
+
+EncoderBindings UIPlayPage::encoderBindings() {
+    EncoderBindings bindings;
+    for (uint8_t i = 0; i < 4; ++i) {
+        auto& binding = bindings[i];
+        binding.label = kParams[i].label;
+        FormatParamValue(
+            static_cast<Param>(i), param_value_[i], binding.value.data(), binding.value.size());
+        binding.owner = this;
+        binding.parameter = i;
+        binding.enabled = inter_mcu_backend_link_alive();
+        binding.onSteps = [](void* owner, uint8_t parameter, int steps) {
+            auto& page = *static_cast<UIPlayPage*>(owner);
+            page.current_param_ = static_cast<Param>(parameter);
+            page.stepParam(steps, 4);
+        };
+    }
+    return bindings;
+}
 
 PanelPageLeds UIPlayPage::panelLeds() const {
     PanelPageLeds result;

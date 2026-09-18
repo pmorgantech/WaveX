@@ -5,7 +5,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_backend.h"
+#include "panel_spi.h"
 #include "pcnt_task.h"
+#include "pot_service.h"
 
 #include <atomic>
 namespace wavex_panel {
@@ -23,11 +25,13 @@ void run(void*) {
     // Start publishes the handle before the worker may finish.
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     const auto& backend = SelectedLedBackend();
+    InitPots();
     Status local;
     bool attempted = false;
     uint32_t checked_at = nowMs() - 20, attempted_at = 0;
     while (running.load()) {
         pcnt_poll();
+        ServicePots(nowMs());
         const uint32_t now = nowMs();
         if (static_cast<uint32_t>(now - checked_at) >= 20) {
             checked_at = now;
@@ -72,6 +76,8 @@ void run(void*) {
         vTaskDelay(pdMS_TO_TICKS(2));
     }
     backend.shutdown();
+    StopPots();
+    CloseSpiBus();
     portENTER_CRITICAL(&mux);
     status.ready = status.applied = false;
     portEXIT_CRITICAL(&mux);

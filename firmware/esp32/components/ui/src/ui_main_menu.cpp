@@ -14,6 +14,7 @@
 #include "ui/ui_diagnostics_page.h"
 #include "ui/ui_instrument_page.h"
 #include "ui/ui_play_page.h"
+#include "ui/ui_pot_cal_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_edit_page.h"
 #include "ui/ui_sample_manager_page.h"
@@ -156,6 +157,7 @@ std::shared_ptr<UIPage> createSettingsGroup() {
     group->addTab("MIDI", createMidiSettingsPage());
     group->addTab("System", createSystemInfoPage());
     group->addTab("Calibrate", createCvCalPage());
+    group->addTab("Pots", createPotCalPage());
     return group;
 }
 
