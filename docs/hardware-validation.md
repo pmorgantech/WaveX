@@ -72,7 +72,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-004 | Stereo/Mono physical follow-up | Partial | Switching reported working by user, 2026-09-16; remaining checks below |
 | HV-005 | Phase 2 timing and soak | Blocked (full gate) | Timing/soak can be run separately; complete gate still needs roadmap prerequisites |
 | HV-006 | Mixer controls, master and callback timing | Pending | Host/compile checks; physical audio and timing unrun |
-| HV-007 | Project Save/Load/New and recovery | Pending | Host/compile checks; disposable card and two-board session needed |
+| HV-007 | Project Save/Load/New and recovery | Partial | Automated round trip passed; reboot, failure injection and timing remain open |
 | HV-008 | Project Pattern slots | Pending | Stopped workflow, panel, reboot and callback checks |
 | HV-009 | Song arrangement and playback | Pending | Host tests; audio timing, panel, MIDI and DWT unrun |
 | HV-010 | Waveform playback head | Pending | Host/render checks; tracking, UART, DWT and soak unrun |
@@ -80,7 +80,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
-| HV-015 | LFO range and musical rate controls | Unrun | Host/build checks; slow/fast modulation, saved settings, UI and callback cost open |
+| HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
 
 ## HV-001 — SD card formatting
 
@@ -308,6 +308,32 @@ Failure follow-up / remaining cases:
 - [Performance monitoring](performance_monitoring.md)
 - [Callback performance evidence](callback-performance-log.md)
 
+
+### Save/load HIL — 2026-09-17
+
+**Partial pass:** Four tests passed in 95.35 s on both boards (UTC transcript
+2026-09-18 03:03:46). Project Save/New/Load restored Track MIDI/level/pan/mute,
+master gain, tempo, swing, hidden step note/velocity/probability and LFO
+0.01 Hz with 3/16 Sync. Cancelled Load/New, duplicate Save and missing-file
+Load preserved the tested state. Standalone Pattern recall retained session
+tempo and Track bindings; resident held playback continued while streaming
+audition stopped. WXI recall preserved both LFOs, including 100 Hz, and the
+Instrument UI preview/Apply/Revert/save workflow passed.
+
+The initial run found an LFO-tab hang: Rate attempted to update a null unit
+label. Updating the existing tile description fixed it; all four tests were
+rerun together successfully. These are console/readback observations, not
+analog-output, reboot, power-loss, near-full-card or callback timing results.
+UART TX queue overflow messages occurred during the bench work; this run does
+not establish a transport/soak pass. All broader checklist items remain open.
+
+**Images:** Daisy persistent QSPI at `ef0995a2fde88d7eae3f92bd50c807cce9074e73`,
+SHA-256 `6c9649364bd0a93e4fafb8f0b5a1acb4c2536b968232269563af64262013bad4`;
+ESP32 from that revision plus the LFO tile-description fix,
+SHA-256 `9c52b3d91de0af08ebd851b47cd6372ed5e482d22343407746ee657f2d934ab7`.
+**Evidence:** local `logs/save-load-hil.xml`, `logs/save-load-hil-result.txt`
+and `logs/hil-20260918-030346.log`. Reproduce with the
+[save/load HIL command](testing_guide.md#project-pattern-and-instrument-saveload).
 
 ## HV-008 — Project Pattern management
 
@@ -649,7 +675,9 @@ hardware result recorded; all checks above remain open.
 
 ## HV-015 — LFO range and musical rate controls
 
-**Status:** Unrun; no board flashed or hardware result recorded for this change.
+**Status:** Partial: WXI/Project retention and LFO UI HIL passed on 2026-09-17;
+see [save/load evidence](#saveload-hil--2026-09-17). Physical rate, reboot,
+legacy-file and callback checks remain unrun.
 **Design / gate:** [LFO controls](features/param-locks-and-modulation.md#lfo-rate-controls),
 [Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
 **Setup:** Paired image hashes, a sustained sample with an Instrument LFO routed

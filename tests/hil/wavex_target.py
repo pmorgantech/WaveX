@@ -272,6 +272,7 @@ class Esp32(Target):
         items = [
             "Sample",
             "Project",
+            "Mixer",
             "Instrument",
             "Play",
             "Sequencer",

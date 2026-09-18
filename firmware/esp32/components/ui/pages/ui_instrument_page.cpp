@@ -1520,8 +1520,7 @@ void UIInstrumentPage::refreshLfo() {
         }
         if (i == 2) {
             const char* unit = lfo_.Synced() ? "note" : "Hz";
-            if (std::strcmp(lv_label_get_text(tile.unit), unit))
-                lv_label_set_text(tile.unit, unit);
+            valueTileSetDesc(tile, unit);
         }
         valueTileSetValue(tile, value);
         valueTileSetFill(tile, fill);

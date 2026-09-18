@@ -12,8 +12,17 @@ from test_sequencer_tracks import (  # noqa: F401
 def _files(esp):
     esp.key("SHIFT")
     esp.wait_state(shift=1)
+    esp.softkey("Patterns")
+    esp.wait_state(slotready=1)
     esp.softkey("Files")
     esp.wait_state(page="Pattern_Files", fileready=1)
+
+
+def _back(esp):
+    esp.softkey("Back")
+    esp.wait_state(slotready=1)
+    esp.softkey("Back")
+    esp.wait_state(page="Sequencer", seqready=1)
 
 
 def _new(esp):
@@ -37,8 +46,7 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     esp.wait_state(seqready=1)
     _files(esp)
     _new(esp)
-    esp.softkey("Back")
-    esp.wait_state(page="Sequencer", seqready=1)
+    _back(esp)
     esp.page("LENGTH", 64)
     esp.wait_state(seqlen=64, seqready=1)
     esp.page("FOCUS", 16, 64)
@@ -77,7 +85,7 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     esp.wait_state(fileready=1, fileerror=4, timeout=10)
     daisy.wait_state(streaming=0, voices=1)
     assert daisy.tracks() == bindings
-    esp.softkey("Back")
+    _back(esp)
     esp.wait_state(seqready=1, seqplaying=1)
     esp.page("TEMPO", 15100)
     esp.wait_state(seqtempo=15100, seqready=1)
@@ -103,7 +111,7 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     esp.wait_state(fileconfirm=2)
     esp.softkey("Confirm")
     esp.wait_state(fileready=1, fileerror=3, timeout=10)
-    esp.softkey("Back")
+    _back(esp)
     esp.wait_state(
         seqready=1,
         seqplaying=0,
@@ -124,7 +132,7 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     )
     _files(esp)
     _new(esp)
-    esp.softkey("Back")
+    _back(esp)
     esp.wait_state(seqready=1, seqplaying=0, seqlen=16, seqtempo=15100)
     esp.page("TEMPO", 12000)
     esp.wait_state(seqready=1, seqtempo=12000)

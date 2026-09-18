@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Save/load HIL coverage for complete Projects, Pattern session ownership and
+  Instrument LFO range endpoints, with current Mixer/Pattern Slots navigation
+  and a repeatable JUnit-producing bench command.
+
 - LFO Sync Off/On with Rate switching between logarithmic **0.01–100 Hz**
   adjustment and musical durations, including 3/16. Sync preserves the Hz
   setting; existing saved division IDs retain their meanings. Both per-voice
@@ -443,6 +447,10 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Opening the Instrument LFO tab no longer accesses a missing unit widget;
+  Rate updates the tile description used for its Hz/note label. Found by the
+  save/load hardware test.
 
 - Sequencer tempo changes retain musical phase, and Project Save permits MIDI
   clock ticks/Stop through its dispatcher lease.

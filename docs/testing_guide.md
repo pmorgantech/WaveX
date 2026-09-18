@@ -173,6 +173,34 @@ update the corresponding roadmap gate if all of its criteria passed.
 commands and transcripts. Missing boards cause skips: an all-skipped run is
 not a passing hardware gate.
 
+### Project, Pattern and Instrument save/load
+
+With both current firmware images loaded, the serial loggers running, and a
+backed-up card containing the two short default WAV fixtures, run inside the
+devcontainer:
+
+```bash
+/usr/bin/python3 -m pytest -v tests/hil/test_project_files.py \
+  tests/hil/test_pattern_files.py tests/hil/test_instrument_lfos.py \
+  --junitxml=logs/save-load-hil.xml
+```
+
+The Project test replaces the live bench session and leaves a new empty
+session. All saves use unique names; earlier files and source WAVs remain
+untouched. Override fixture paths with `--hil-sample` and `--hil-sample2`.
+The tests leave their Project/Instrument/Pattern copies on the card for
+inspection. Keep the JUnit report and `logs/hil-*.log` transcript with the
+flashed image hashes.
+
+Coverage includes Project Save/New/Load, cancelled confirmation, duplicate
+names, missing-file preservation, Track MIDI/mix/master settings, hidden
+Pattern steps and groove, session-owned tempo for standalone Pattern loads,
+and both Instrument LFOs including 0.01/100 Hz and 3/16. The UI case also
+exercises LFO tab entry, preview, Apply/Revert and WXI recall. These checks
+cover subsets of HV-003, HV-007 and HV-015; reboot, power interruption, nearly
+full cards, analog sound quality and callback/soak measurements remain open.
+No card formatting occurs in this suite.
+
 ### Stereo channels and Project mixing
 
 With both debug consoles logged, the default eight-channel firmware and a

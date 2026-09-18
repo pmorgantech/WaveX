@@ -24,7 +24,7 @@ def _lfo(daisy, request, revision, index, values):
 def test_two_voice_lfos_survive_wxi_recall(daisy, sequence_samples):
     daisy.bind_track(0, sequence_samples[0])
     before = daisy.cmd("LFO", 0, 1)
-    values = (4, 0, 0, 1, 5.25, 0.125, 0.75)
+    values = (4, 0, 0, 1, 100.0, 0.125, 0.75)
     _lfo(daisy, 880001, int(before["revision"]), 1, values)
     edited = daisy.cmd("LFO", 0, 1)
     assert edited["completed"] == "880001" and edited["error"] == "0"
@@ -33,7 +33,7 @@ def test_two_voice_lfos_survive_wxi_recall(daisy, sequence_samples):
         "sync": 0,
         "retrigger": 0,
         "follow": 1,
-        "rate": 5250,
+        "rate": 100000,
         "delay": 125,
         "fade": 750,
     }.items():
@@ -43,9 +43,10 @@ def test_two_voice_lfos_survive_wxi_recall(daisy, sequence_samples):
     _lfo(daisy, 880002, int(before["revision"]), 0, values)
     assert daisy.cmd("LFO", 0, 0)["error"] == "1"
     _lfo(  # noqa: E501
-        daisy, 880003, int(edited["revision"]), 0, (0, 7, 1, 0, 2.0, 0.0, 0.2)
+        daisy, 880003, int(edited["revision"]), 0, (0, 8, 1, 0, 0.01, 0.0, 0.2)
     )
-    assert daisy.cmd("LFO", 0, 0)["sync"] == "7"
+    assert daisy.cmd("LFO", 0, 0)["sync"] == "8"
+    assert daisy.cmd("LFO", 0, 0)["rate"] == "10"
     name = "HIL LFO " + str(int(time.time()))
     _instrument(daisy, 880004, 5, name)
     _wait_osc(daisy, 0, 0, busy=0, completed=880004, error=0)
@@ -63,7 +64,8 @@ def test_two_voice_lfos_survive_wxi_recall(daisy, sequence_samples):
         "fade",
     ):
         assert restored[key] == edited[key]
-    assert daisy.cmd("LFO", 0, 0)["sync"] == "7"
+    assert daisy.cmd("LFO", 0, 0)["sync"] == "8"
+    assert daisy.cmd("LFO", 0, 0)["rate"] == "10"
 
 
 @pytest.mark.both
