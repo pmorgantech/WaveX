@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Project → Shift → Banks: 128 stable slots, named New/Open/Save copy,
+  explicit Track Store/Clear copies and confirmed recall into the selected
+  Track. Recall stages samples before replacement, preserves Track routing/mix
+  and other Tracks' shared samples, and rolls back failed admission. New wire,
+  backend and real-LVGL tests cover the workflow; physical acceptance is HV-016.
+
 - Sample Edit → Shift → Select opens a paged resident-sample picker with touch
   and encoder selection, cancellation and stale/offline selection guards. Track
   assignment stays unchanged; pending marker edits finish before switching samples.
@@ -21,7 +27,7 @@ versioning and release process.
 - Bank SD transaction adapter for empty creation, save copies with stable-slot
   store/clear, bounded copying of unchanged Instruments, index scans and private
   Instrument reads. Saves check free space and preserve earlier files on failure.
-  Host-tested and compile-verified; Bank Manager/runtime integration remains open.
+  Host-tested and compile-verified; physical SD durability remains open.
 
 - Save/load HIL coverage for complete Projects, Pattern session ownership and
   Instrument LFO range endpoints, with current Mixer/Pattern Slots navigation

@@ -83,7 +83,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
 | HV-015 | LFO range and musical rate controls | Partial | WXI/Project settings and UI HIL passed; physical rates, reboot and timing remain open |
-| HV-016 | Bank SD transactions | Blocked | Adapter host-tested; session/UI entry point required before bench execution |
+| HV-016 | Bank SD transactions and Track recall | Pending | Session/UI host-tested and compile-verified; physical SD, recall and service timing unrun |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 
 ## HV-001 — SD card formatting
@@ -683,29 +683,51 @@ mode behavior and wire/WXI retention; they do not close these physical gates.
 
 ## HV-016 — Bank SD transactions
 
-**Status:** Blocked on the working-copy session owner and device entry point;
-this is a procedure for the next integration, not a runnable bench gate yet.
+**Status:** Pending. Bank Manager/session/Track recall are integrated and
+host-tested; no physical results are recorded for this change.
 **Design / gate:** [Bank persistence](features/bank-persistence.md),
 [Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer).
 **Setup:** Both integrated images, a backed-up disposable card, a sparse Bank
 with occupied first/last slots and two-oscillator Instruments, serial capture
-and DWT/audio monitoring. Use new names; preserve the source Bank.
+and DWT/audio monitoring. Open Project → Shift → Banks. Use new names;
+preserve the source Bank. Capture both image identities before starting.
 
 - [ ] **016a — Sparse copies:** Create an empty Bank, store in slots 1/128,
   copy it while replacing one slot, then clear one slot into another copy.
   Reload each file. **Pass:** Stable slot identities, names/tags and both
   oscillator/LFO settings; the original Bank and its embedded bytes are unchanged.
 - [ ] **016b — Failure isolation:** Try duplicate names, an occupied temporary
-  name, insufficient free space and removed media. Cancel a long copy.
-  **Pass:** No destination is published on failure, earlier files remain usable,
+  name, insufficient free space and removed media.
+  **Pass:** Rejected saves publish no destination, earlier files remain usable,
   and only the job's own temporary is eligible for cleanup. Failed reads never
-  replace the live Bank or Track.
+  replace the live Bank or Track. If publication succeeds but index reload fails,
+  the new file may exist; reopen it explicitly and verify the old active Bank was
+  retained. In-flight cancellation remains adapter-test coverage only: there is
+  no device cancellation entry point.
 - [ ] **016c — Service budget and recovery:** Copy a full Bank while resident
   playback runs; measure foreground pump worst case (including one new WXI
   encode/read), callback DWT and underruns. Reboot and reload the successful copy.
   **Pass:** No underruns, acceptable control responsiveness under the performance
   policy, and the saved Bank reopens with the same slot contents. Record image
   hashes, card identity, timings and evidence before closing this entry.
+- [ ] **016d — Track recall and confirmation:** Load two Tracks sharing samples,
+  give them different MIDI/mix settings, and store a kit and keyboard Instrument.
+  Cancel Recall; change Track while confirmation is open; then confirm Recall
+  into one Track. Edit it and recall again. **Pass:** Cancellation is inert;
+  confirmed recall restores the stored sound only on its captured target, keeps
+  Track MIDI/mix settings and the other Track's sound/sample ownership, and
+  preserves the Bank file. Repeat with newly loaded sample dependencies.
+- [ ] **016e — Recall failure and link recovery:** Remove a required sample or
+  fill sample memory before Recall. Disconnect the frontend during a Bank job,
+  reconnect and inspect status/files before retrying. **Pass:** Failed recall
+  retains the old Instrument, other Tracks remain playable, and reconnect does
+  not repeat Store/Clear/Recall. Record memory before/after failures.
+- [ ] **016f — Playback during recall:** Run resident sequencing with MIDI clock
+  input/output while opening/storing/recalling Banks. Measure foreground service
+  time, callback DWT, clock jitter and underruns. **Pass:** No underruns or lost
+  transport state; non-target Tracks remain continuous, the target changes only
+  after successful staging, and response/timing meet the performance policy.
+  Preload and MIDI Program Change recall are not implemented in this gate.
 
 ## HV-017 — Sample Edit selection
 

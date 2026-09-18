@@ -44,6 +44,8 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::CardOpMessage> card_ops;
     bool card_busy = false;
     bool project_busy = false;
+    bool bank_busy = false;
+    std::vector<WaveX::Protocol::BankOpMessage> bank_ops;
     std::vector<WaveX::Protocol::SeqSlotEditMessage> seq_slot_edits;
     std::vector<WaveX::Protocol::SeqPatternRequestMessage> seq_slot_pages;
     std::vector<WaveX::Protocol::SeqSongOpMessage> seq_song_ops;
@@ -108,7 +110,7 @@ struct DispatchRecord {
                static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
                seq_slot_edits.size() + seq_slot_pages.size() + seq_slot_ops.size() +
                playhead_requests.size() + seq_song_ops.size() + project_ops.size() +
-               seq_file_ops.size() + card_ops.size() + seq_pattern_ops.size() +
+               bank_ops.size() + seq_file_ops.size() + card_ops.size() + seq_pattern_ops.size() +
                seq_pattern_requests.size() + midi_clock_events.size() + midi_ccs.size() +
                instrument_ops.size() + browse_requests.size() + play_requests.size() +
                stop_requests.size() + play_index_requests.size() + sample_edits.size() +

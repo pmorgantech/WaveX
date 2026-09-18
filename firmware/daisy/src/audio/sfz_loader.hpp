@@ -11,6 +11,7 @@
 #include "mod_matrix.hpp"
 #include "sample_pool.hpp"
 #include "voice_manager.hpp"
+#include "wxi/wxi.hpp"
 #include <cstdint>
 
 class SampleMemMgr;
@@ -48,7 +49,14 @@ void CancelProjectTrack(SamplePool&, SampleMemMgr&);
 // Keep notes/transport gated until Pool commit, Track commit and publication
 // of all prepared voice maps finish. A failed/cancelled session cannot commit.
 // Abort requires CancelProjectTrack first, then caller rolls back staged PCM.
-bool FinishProjectLoad(bool commit);
+bool FinishProjectLoad(bool commit, int only_track = -1);
+// Bank recall shares the private Project loader lease, but installs only the
+// selected Instrument; routing/mix and every other Track remain live.
+bool BeginProjectDocument(uint8_t track, const Wxi::InstrumentFile& document);
+// Preflight a Track snapshot without a temporary standalone WXI file. The
+// caller serializes all edits until its borrowed document is no longer used.
+bool BeginBankSnapshot(uint8_t track);
+const Wxi::InstrumentFile& BankSnapshot();
 // Project-owned WXI copy. Uses normal sample admission, but does not rename
 // the live Instrument, apply its undo point, or emit an editor completion.
 // Parent directory must already exist; destination is never overwritten.

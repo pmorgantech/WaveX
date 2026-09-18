@@ -6,6 +6,7 @@
 #include "fatfs_mock.h"
 
 #include "audio/sample_pool_stage.hpp"
+#include "storage/bank_session.hpp"
 #include "storage/pattern_store.hpp"
 #include "storage/project_session.hpp"
 #include "wxi/wxi.hpp"
@@ -1992,4 +1993,168 @@ TEST_F(SfzLoaderTest, SongRejectsInvalidEditsAndStopWaitsForCallbackRelease) {
     EXPECT_FALSE(session.Busy());
     EXPECT_EQ(session.Songs().Status().completed_request_id, request.request_id);
     EXPECT_FALSE(transport.SongActive());
+}
+
+namespace {
+uint8_t bank_stopped_track = 0xff;
+bool bank_stop_ok = true;
+unsigned bank_published = 0;
+bool StopBankTest(uint8_t track) {
+    bank_stopped_track = track;
+    return bank_stop_ok;
+}
+void PublishBankTest() {
+    ++bank_published;
+}
+uint8_t RunBank(WaveX::Storage::BankSession& session) {
+    for (unsigned i = 0; i < 70000 && session.Busy(); ++i)
+        session.Pump();
+    EXPECT_FALSE(session.Busy());
+    return session.Status().error;
+}
+BankOpMessage BankRequest(WaveX::Storage::BankSession& session,
+                          uint32_t id,
+                          uint8_t op,
+                          const char* name = "",
+                          uint8_t slot = 0,
+                          uint8_t track = 0) {
+    BankOpMessage request;
+    request.request_id = id;
+    request.revision = session.Status().revision;
+    request.op = op;
+    request.slot = slot;
+    request.track = track;
+    request.flags = BANK_CONFIRM_REPLACE;
+    std::snprintf(request.name, sizeof(request.name), "%s", name);
+    return request;
+}
+}  // namespace
+TEST_F(SfzLoaderTest, BankStoresPrivateCopiesAndRecallsOnlyTheTargetInstrument) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(1, 7));
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_NEW, "Base")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_STORE_COPY, "Stored", 127, 0)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    auto original = *MockFatFS::Instance().GetFile("0:/wavex/banks/Stored.wxb");
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 321.f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(0, filter));
+    bank_stop_ok = true;
+    bank_stopped_track = 0xff;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 3, BANK_RECALL, "", 127, 1)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_EQ(bank_stopped_track, 1);
+    EXPECT_EQ(SfzLoader::TrackMidiIn(1), 7);
+    EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 321.f);
+    EXPECT_NE(SfzLoader::GetInstrumentFilter(1)->cutoff_hz, 321.f);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->used_by, 3u);
+    EXPECT_EQ(*MockFatFS::Instance().GetFile("0:/wavex/banks/Stored.wxb"), original);
+    // Repeated mutation cannot replay a recall.
+    bank_stopped_track = 0xff;
+    EXPECT_FALSE(bank.Request(BankRequest(bank, 3, BANK_RECALL, "", 127, 1)));
+    EXPECT_EQ(bank_stopped_track, 0xff);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 4, BANK_CLEAR_COPY, "Cleared", 127)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_FALSE(bank.Status().occupied);
+    EXPECT_EQ(*MockFatFS::Instance().GetFile("0:/wavex/banks/Stored.wxb"), original);
+}
+TEST_F(SfzLoaderTest, BankFailuresPreserveLiveTrackPoolAndCurrentFile) {
+    ASSERT_TRUE(Load(0));
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 10, BANK_NEW, "Base")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 11, BANK_STORE_COPY, "Stored")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 432.f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(0, filter));
+    const auto id = SampleId("/kits/a.wav");
+    MockFatFS::Instance().RemoveFile("/kits/a.wav");
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 12, BANK_RECALL)));
+    EXPECT_EQ(RunBank(bank), BANK_DEPENDENCY);
+    EXPECT_EQ(SampleId("/kits/a.wav"), id);
+    EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 432.f);
+    EXPECT_STREQ(bank.Status().name, "Stored");
+    MockFatFS::Instance().AddFile("/kits/a.wav", PcmWave());
+    bank_stop_ok = false;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 13, BANK_RECALL)));
+    EXPECT_EQ(RunBank(bank), BANK_AUDIO_BUSY);
+    bank_stop_ok = true;
+    EXPECT_EQ(SampleId("/kits/a.wav"), id);
+    EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 432.f);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 14, BANK_OPEN, "Missing")));
+    EXPECT_EQ(RunBank(bank), BANK_NOT_FOUND);
+    EXPECT_STREQ(bank.Status().name, "Stored");
+    MockFatFS::Instance().free_clusters = 0;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 15, BANK_SAVE_COPY, "NoSpace")));
+    EXPECT_EQ(RunBank(bank), BANK_NO_SPACE);
+    EXPECT_STREQ(bank.Status().name, "Stored");
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/banks/NoSpace.wxb"), nullptr);
+}
+TEST_F(SfzLoaderTest, BankRejectsStaleBusyUnconfirmedAndEmptyRecall) {
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    auto request = BankRequest(bank, 20, BANK_NEW, "Empty");
+    EXPECT_FALSE(bank.Request(request, true));
+    EXPECT_EQ(bank.Status().error, BANK_BUSY);
+    ++request.request_id;
+    ASSERT_TRUE(bank.Request(request));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    ++request.request_id;
+    EXPECT_FALSE(bank.Request(request));
+    EXPECT_EQ(bank.Status().error, BANK_STALE);
+    request = BankRequest(bank, 23, BANK_RECALL);
+    EXPECT_FALSE(bank.Request(request));
+    EXPECT_EQ(bank.Status().error, BANK_EMPTY_SLOT);
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 24, BANK_STORE_COPY, "Populated")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    request = BankRequest(bank, 25, BANK_RECALL);
+    request.flags = 0;
+    EXPECT_FALSE(bank.Request(request));
+    EXPECT_EQ(bank.Status().error, BANK_CONFIRM_REQUIRED);
+}
+
+TEST_F(SfzLoaderTest, BankRecallStagesNewPcmAndFailedStopReleasesOnlyItsScratch) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    auto doc = std::make_unique<WaveX::Wxi::InstrumentFile>();
+    std::strcpy(doc->name, "New.keys.sfz");
+    doc->osc[0].type = WaveX::Wxi::OscType::Sample;
+    doc->osc[0].zone_count = 1;
+    std::strcpy(doc->osc[0].zones[0].path, "/new.wav");
+    MockFatFS::Instance().AddFile("/new.wav", PcmWave(2048));
+    WaveX::Storage::BankFileJob file;
+    ASSERT_TRUE(file.SaveCopy("New samples", 30, nullptr, 0, doc.get()));
+    for (unsigned i = 0; i < 70000 && file.Busy(); ++i)
+        file.Pump();
+    ASSERT_EQ(file.Status(), WaveX::Storage::BankFileJob::Result::Saved);
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 31, BANK_OPEN, "New samples")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    const auto old = SampleId("/kits/a.wav");
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    bank_stop_ok = false;
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 32, BANK_RECALL)));
+    EXPECT_EQ(RunBank(bank), BANK_AUDIO_BUSY);
+    bank_stop_ok = true;
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(SampleId("/new.wav"), 0u);
+    EXPECT_EQ(SampleId("/kits/a.wav"), old);
+    EXPECT_EQ(pool_.Find(old)->used_by, 3u);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 33, BANK_RECALL)));
+    EXPECT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_NE(SampleId("/new.wav"), 0u);
+    EXPECT_EQ(pool_.Find(old)->used_by, 2u);
+    EXPECT_EQ(pool_.FindByPath("/new.wav")->used_by, 1u);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "New.keys.sfz");
 }

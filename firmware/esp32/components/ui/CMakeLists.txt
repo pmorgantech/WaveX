@@ -40,6 +40,7 @@ set(COMPONENT_SRCS
     "pages/ui_sequencer_page.cpp"
     "pages/ui_pattern_files_page.cpp"
     "pages/ui_project_files_page.cpp"
+    "pages/ui_bank_page.cpp"
     "pages/ui_pattern_slots_page.cpp"
     "pages/ui_song_page.cpp"
     "pages/ui_pad_map_page.cpp"

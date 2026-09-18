@@ -39,7 +39,7 @@ bool BankFileJob::SaveCopy(const char* name,
     if (Busy())
         return false;
     if (!request_id || edit_slot < -1 || edit_slot >= BankFile::kSlots ||
-        (document && (edit_slot < 0 || !BankFile::ValidName(document->name)))) {
+        (document && (edit_slot < 0 || !BankFile::ValidInstrumentName(document->name)))) {
         result_ = Result::Invalid;
         return false;
     }

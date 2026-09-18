@@ -69,9 +69,10 @@ state across tab changes, such as Instrument and Diagnostics. Reuse the
 shared chrome rather than duplicating styles. Diagnostics builds tab bodies
 lazily to bound entry work.
 
-Bank and Instrument Browser belong to the target
-[Track/Instrument model](features/track-and-patch-model.md). A logical panel
-jump key or a protocol operation does not prove the corresponding page exists.
+Instrument Browser loads WXI/SFZ sounds. Project → Shift → Banks opens Bank
+Manager with stable slot navigation, named file operations and confirmed recall
+into the selected Track. Its current file-copy workflow is described in
+[Bank persistence](features/bank-persistence.md#bank-manager-and-track-recall).
 
 Project replaces the Performance root label and owns the existing Track/mixer setup.
 Track setup remains globally accessible; it is not nested under Sequencer.
@@ -347,8 +348,8 @@ Shift provides Clear zone, Rename and a short note audition. Range edits preserv
 held voices; assignment/clear stops only the edited Track. Replacing a sample
 resets its zone's sample-specific region/loop markers, retaining key ranges,
 tuning, gain and sound settings. Save copy preserves sparse slots and ranges in
-WXI; Instrument Browser recalls the result. Bank and Program Change recall remain
-Phase 2.5 work. No physical panel gate is implied by these touchscreen controls.
+WXI; Instrument Browser recalls the result. Bank Manager also stores and recalls
+private Instrument copies; MIDI Program Change recall remains Phase 2.5 work. No physical panel gate is implied by these touchscreen controls.
 
 The final editor regression selection passed 17 two-board HIL tests, covering
 Key Map, Pad Map overrides, Track routing, Instrument/Sample loading, shared pool

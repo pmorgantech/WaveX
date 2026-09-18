@@ -133,6 +133,7 @@ static char s_line[Sfz::kMaxLine];
 static FIL s_file;
 static bool s_file_open = false;
 static bool s_project_snapshot = false;
+static bool s_bank_snapshot = false;
 static uint8_t s_snapshot_error = INST_ERROR_NONE;
 static char s_snapshot_path[Protocol::BROWSE_PATH_MAX]{};
 static uint32_t s_line_number = 0;
@@ -716,6 +717,8 @@ uint8_t PrepareSave(SamplePool& pool) {
         return INST_ERROR_MISSING_SAMPLES;
     if (!s_project_snapshot)
         Protocol::detail::CopyWireString(doc.name, sizeof(doc.name), s_request.path);
+    else if (s_bank_snapshot && !doc.name[0])
+        std::snprintf(doc.name, sizeof(doc.name), "Track %u", s_request.slot + 1);
     s_index = 0;
     s_phase = Phase::ProbeSaveSample;
     return INST_ERROR_NONE;
@@ -757,7 +760,10 @@ void ProbeSaveSample(SamplePool& pool) {
         // One dependency per main-loop pass; never stop or release resident voices.
         return;
     }
-    s_phase = Phase::SaveCopy;
+    if (s_bank_snapshot)
+        FinishEdit();
+    else
+        s_phase = Phase::SaveCopy;
 }
 
 uint8_t SaveCopy() {
@@ -823,6 +829,7 @@ void Reset() {
     s_in_project_step = false;
     s_project_close_failed = false;
     s_project_snapshot = false;
+    s_bank_snapshot = false;
     s_snapshot_error = INST_ERROR_NONE;
     CloseFile();
     s_zone_pending = false;
@@ -868,14 +875,30 @@ bool BeginProjectSnapshot(uint8_t track, const char* destination) {
     s_request = InstOpMessage(0, track, INST_OP_SAVE, "");
     s_snapshot_error = INST_ERROR_NONE;
     s_project_snapshot = true;
+    s_bank_snapshot = false;
     s_phase = Phase::PrepareSave;
     return true;
 }
+bool BeginBankSnapshot(uint8_t track) {
+    if (Busy() || track >= kNumTracks || !TrackLoaded(track))
+        return false;
+    s_request = InstOpMessage(0, track, INST_OP_SAVE, "");
+    s_snapshot_error = INST_ERROR_NONE;
+    s_project_snapshot = s_bank_snapshot = true;
+    s_phase = Phase::PrepareSave;
+    return true;
+}
+const Wxi::InstrumentFile& BankSnapshot() {
+    return s_doc_storage.Get();
+}
+
 uint8_t ProjectSnapshotError() {
     return s_snapshot_error;
 }
 
 bool Begin(const InstOpMessage& request) {
+    if (!Busy())
+        s_bank_snapshot = false;
     if (s_project_bank && !s_in_project_step)
         return false;
     if (request.op >= INST_OP_NEW && request.op <= INST_OP_NEW_KEYBOARD) {
@@ -1784,6 +1807,23 @@ bool BeginProjectTrack(uint8_t track, const char* path) {
     s_in_project_step = false;
     return accepted;
 }
+bool BeginProjectDocument(uint8_t track, const Wxi::InstrumentFile& document) {
+    if (!BeginProjectTrack(track, "Bank.wxi"))
+        return false;
+    InstrumentMap::FromFile(document, s_mapped);
+    Sfz::Status status;
+    if (!Sfz::BuildSamplePlan(s_mapped, s_plan, status)) {
+        s_project_failed = true;
+        s_status.error = INST_ERROR_BAD_FILE;
+        s_phase = Phase::Idle;
+        return false;
+    }
+    s_status.zone_count = s_mapped.zone_count;
+    s_status.sample_count = s_plan.count;
+    s_index = 0;
+    s_phase = Phase::ProbeSample;
+    return true;
+}
 void PumpProjectLoad(SamplePool& pool, SampleMemMgr& memory, uint8_t* io, uint32_t bytes) {
     if (!s_project_bank || s_phase == Phase::Idle)
         return;
@@ -1811,14 +1851,23 @@ void CancelProjectTrack(SamplePool& pool, SampleMemMgr& memory) {
     s_in_project_step = false;
     s_bank = live;
 }
-bool FinishProjectLoad(bool commit) {
+bool FinishProjectLoad(bool commit, int only_track) {
+    if (only_track < -1 || only_track >= kNumTracks)
+        return false;
     if (!s_project_bank || s_phase != Phase::Idle || (commit && s_project_failed))
         return false;
-    if (commit)
-        *s_bank = *s_project_bank;
+    if (commit) {
+        if (only_track < 0)
+            *s_bank = *s_project_bank;
+        else
+            s_bank->At(static_cast<uint8_t>(only_track)).instrument =
+                s_project_bank->At(static_cast<uint8_t>(only_track)).instrument;
+    }
     s_project_bank = nullptr;
     if (commit) {
         for (uint8_t track = 0; track < kNumTracks; ++track) {
+            if (only_track >= 0 && track != only_track)
+                continue;
             s_sound_undo[track].Apply();
             BumpKeyRevision(track);
             PublishModSlots(track);

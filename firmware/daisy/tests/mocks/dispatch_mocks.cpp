@@ -186,6 +186,12 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
     WaveX::Test::GetDispatchRecord().get_sample_mem_status_calls++;
 }
 
+bool BankBusy() {
+    return WaveX::Test::GetDispatchRecord().bank_busy;
+}
+void OnBankOp(const WaveX::Protocol::BankOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().bank_ops.push_back(m);
+}
 bool ProjectBusy() {
     return WaveX::Test::GetDispatchRecord().project_busy;
 }

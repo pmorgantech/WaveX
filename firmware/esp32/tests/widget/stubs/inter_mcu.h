@@ -29,3 +29,6 @@ uint32_t inter_mcu_sample_pool_revision();
 uint32_t inter_mcu_sample_cache_revision();
 esp_err_t inter_mcu_send_sample_select(uint16_t, uint8_t);
 esp_err_t inter_mcu_send_sample_unload(uint16_t);
+
+esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage&);
+bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);

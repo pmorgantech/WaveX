@@ -127,6 +127,8 @@ struct InterMcuCapture {
     WaveX::Protocol::SeqSongStatusMessage seq_song_status;
     int seq_slot_status_calls = 0;
     WaveX::Protocol::SeqSlotStatusMessage seq_slot_status;
+    int bank_status_calls = 0;
+    WaveX::Protocol::BankStatusMessage bank_status;
     int project_status_calls = 0;
     WaveX::Protocol::ProjectStatusMessage project_status;
     int mix_meter_calls = 0;

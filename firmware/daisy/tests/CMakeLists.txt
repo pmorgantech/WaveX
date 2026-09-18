@@ -300,6 +300,8 @@ function(add_wavex_test test_source)
 
     if(test_name STREQUAL "sfz_loader_test")
         target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/bank_file_job.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/bank_session.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_file_job.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_session.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_patterns.cpp

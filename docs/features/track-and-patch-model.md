@@ -346,6 +346,13 @@ Project (.wxp)
 
 ### 3.6 Bank: 128 Instruments in one file (`.wxb`)
 
+**Implementation, 2026-09-18:** the [Bank Manager/session](bank-persistence.md)
+implements named New/Open/Save copy, Store/Clear into new files and confirmed
+selected-Track recall. The operation names and progress sketch below remain
+**target design**; the as-built wire contract is in
+[the protocol reference](inter-mcu-protocol.md). Preload, MIDI Program Change,
+Project Bank-path persistence and save-with-samples remain future work.
+
 Every machine surveyed (Digitakt's 128-Sound pool, Octatrack's 128 Flex slots, E-mu's bank image, EP-133's numbered sounds, MIDI itself) has a numbered table of ready sounds. WaveX's is the **Bank**:
 
 - **Shape**: 128 slots, each empty or one embedded Instrument — the same chunk stream as a `.wxi`, nested under a per-slot `INST` chunk, so the two readers are one reader. Samples are referenced by card path, as in `.wxi`. `file_type` is allocated in `wxcf.hpp` alongside the others.

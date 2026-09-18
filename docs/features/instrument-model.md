@@ -1,9 +1,10 @@
 # Sampler Instruments and Sample Ownership
 
-**Status:** As-built sampler model and load path, reviewed 2026-09-06.
+**Status:** As-built sampler model and load path, reviewed 2026-09-18.
 The Track/Instrument/Sample Pool core, SFZ import and WXI read path exist.
-New-copy Instrument saves and the on-device Pad Map are built. Key Map editing
-and Bank recall remain open.
+New-copy Instrument saves, the on-device Pad Map, Key Map editing and Bank
+Manager selected-Track recall are built. MIDI Program Change/preload remains
+pending; see [bank-persistence.md](bank-persistence.md).
 The full two-oscillator target and persistence vocabulary are defined in
 [track-and-patch-model.md](track-and-patch-model.md).
 
@@ -155,14 +156,15 @@ Kit creation, naming, pad assignment/clear/choke and new-copy saves use
 the shared Instrument operations and sixteen-pad synchronization snapshot.
 Per-pad sound edits use the dedicated operation/readback contract in the
 [protocol catalog](inter-mcu-protocol.md#per-pad-sound-editing-additive-to-protocol-6).
-General keyboard-zone editing and Bank recall remain target work; new
-operations require shared definitions and round-trip tests before consumers.
+Key Map editing and confirmed selected-Track Bank recall are implemented; MIDI
+Program Change recall remains target work. New operations require shared
+definitions and round-trip tests before consumers.
 
 ## 7. UI and remaining work
 
 Instrument's Sample tab opens Pad Map. Its sixteen pads select and audition
 notes 60-75 on the selected Track. Assign opens a paged resident-sample picker;
-load additional samples or saved WXI files through Sample > Browse.
+load WAVs through Sample → Browse and WXI/SFZ through Instrument Browser.
 Choke controls edit the selected pad. Shift exposes Rename, Clear pad,
 Sound and Track navigation. New kit confirms replacement before showing
 the name keyboard. Save copy requires a new filename.

@@ -967,3 +967,30 @@ TEST_F(MessageDispatchTest, PlayheadIsReadOnlyAndRejectsMalformedRequests) {
     Dispatch(MSG_SAMPLE_PLAYHEAD, request);
     EXPECT_EQ(GetDispatchRecord().playhead_requests.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, BankCommandsAreExactAndStorageLeaseBlocksMutations) {
+    BankOpMessage request;
+    request.request_id = 1;
+    request.op = BANK_RECALL;
+    auto* bytes = reinterpret_cast<const uint8_t*>(&request);
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_BANK_OP, 1, bytes, n);
+    EXPECT_TRUE(GetDispatchRecord().bank_ops.empty());
+    request.slot = 128;
+    Dispatch(MSG_BANK_OP, request);
+    EXPECT_TRUE(GetDispatchRecord().bank_ops.empty());
+    request.slot = 127;
+    Dispatch(MSG_BANK_OP, request);
+    ASSERT_EQ(GetDispatchRecord().bank_ops.size(), 1u);
+    GetDispatchRecord().bank_busy = true;
+    Dispatch(MSG_NOTE_ON, NoteMessage(60, 100, 0));
+    Dispatch(MSG_NOTE_OFF, NoteMessage(60, 0, 0));
+    Dispatch(MSG_SEQ_FILE_OP, SeqFileOpMessage{2, SEQ_FILE_SAVE_COPY, {}, "Blocked"});
+    EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
+    EXPECT_TRUE(GetDispatchRecord().seq_file_ops.empty());
+    EXPECT_EQ(GetDispatchRecord().note_offs.size(), 1u);
+    request.op = BANK_GET;
+    request.request_id = 3;
+    Dispatch(MSG_BANK_OP, request);
+    EXPECT_EQ(GetDispatchRecord().bank_ops.size(), 2u);
+}

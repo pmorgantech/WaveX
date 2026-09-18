@@ -13,8 +13,8 @@ streaming, recording, platform maintenance and soak requirements are retained
 below; retiring the sections does not certify their hardware gates. Phase numbers
 remain stable, with deferred Phase 3 moved to the end.
 
-**Next software work:** finish Bank Manager and Track recall, then the remaining
-Phase 2.5 tasks in order. The authorized touchscreen/software work can continue
+**Next software work:** Bank preload and MIDI Program Change recall, then the
+remaining Phase 2.5 tasks in order. The authorized touchscreen/software work can continue
 while panel wiring is pending; the full Phase 2 gate remains open.
 
 ## Contents
@@ -101,14 +101,14 @@ Instrument/Kit editors, two-oscillator voices, envelopes/LFOs, held-note
 Apply/Revert and Mixer v1 are implemented. Continue from the
 [Track/Instrument/Bank model](features/track-and-patch-model.md):
 
-1. **Bank Manager and Track recall.** The [Bank codec and SD transaction
-   adapter](features/bank-persistence.md) are host-tested and compile-verified;
-   a device entry point is still missing. Add the working-copy session owner
-   and create/name/open/save UI; browse stable numbered slots, explicitly store
-   edited Instruments and recall into the selected Track. Define copy/move/clear,
-   replacement and unsaved-edit behavior. Validate sample admission before
-   replacing a Track; then add preload and MIDI Program Change recall. Physical
-   SD/recall acceptance is HV-016.
+1. **Bank performance recall and editing follow-up.** The [Bank Manager and
+   staged selected-Track recall](features/bank-persistence.md) are host-tested
+   and compile-verified. New/Open/Save copy and explicit Store/Clear copy preserve
+   immutable source files; physical SD/recall acceptance remains HV-016. Add
+   preload and channel-routed MIDI Program Change recall after measuring service
+   latency. Add slot-to-slot copy/move; decide whether a deferred unsaved Bank
+   working copy improves the current explicit named-copy workflow. Persist the
+   selected Bank path with Projects once its restore/admission policy is defined.
 2. **Polyphony policy, after measurement.** Implement saved Mono/Auto/1–8-note
    caps and Own only / Own first / Any stealing with Track inheritance/overrides.
    Kit-wide and per-pad refinements remain proposed. Define stable note-group

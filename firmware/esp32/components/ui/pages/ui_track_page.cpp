@@ -6,6 +6,7 @@
 #include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
+#include "ui/ui_bank_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_project_files_page.h"
 #include "ui/ui_sample_browser.h"
@@ -384,6 +385,13 @@ std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getSoftkeys() {
                 render();
             }};
     return k;
+}
+std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getShiftedSoftkeys() {
+    std::array<Softkey, NUM_SOFTKEYS> keys{};
+    keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
+    keys[1] = {"Banks", [] { UINavigator::instance().push(createBankPage()); }};
+    keys[2] = {"Project files", [] { UINavigator::instance().push(createProjectFilesPage()); }};
+    return keys;
 }
 void UITrackPage::onInput(const InputEvent& e) {
     if (e.type == InputType::EncoderRight || e.type == InputType::EncoderLeft)

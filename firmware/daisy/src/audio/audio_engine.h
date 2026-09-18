@@ -211,6 +211,8 @@ void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 void LoadCvCalFromSd();
 bool StorageJobBusy();
 bool ProjectBusy();
+bool BankBusy();
+void OnBankOp(const WaveX::Protocol::BankOpMessage&);
 void OnSeqSlotEdit(const WaveX::Protocol::SeqSlotEditMessage&);
 void OnSeqSlotPageRequest(const WaveX::Protocol::SeqPatternRequestMessage&);
 void OnSongOp(const WaveX::Protocol::SeqSongOpMessage& request);

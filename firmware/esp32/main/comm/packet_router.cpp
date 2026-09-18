@@ -164,6 +164,13 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 inter_mcu_store_seq_slot_status(message);
             break;
         }
+        case WaveX::Protocol::MSG_BANK_STATUS: {
+            WaveX::Protocol::BankStatusMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "BANK_STATUS") &&
+                WaveX::Protocol::IsValidBankStatus(message))
+                inter_mcu_store_bank_status(message);
+        } break;
         case WaveX::Protocol::MSG_PROJECT_STATUS: {
             WaveX::Protocol::ProjectStatusMessage message;
             if (payload_len == sizeof(message) &&

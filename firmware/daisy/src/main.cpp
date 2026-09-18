@@ -138,9 +138,10 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
     const char* p = c.args;
 
 #if WAVEX_AUDIO_ENGINE_ENABLED
-    if (WaveX::AudioEngine::ProjectBusy() && std::strcmp(c.verb, "PING") &&
-        std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG")) {
-        FormatErr(seq, "projectbusy", reply, sizeof(reply));
+    if ((WaveX::AudioEngine::ProjectBusy() || WaveX::AudioEngine::BankBusy()) &&
+        std::strcmp(c.verb, "PING") && std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG")) {
+        FormatErr(
+            seq, WaveX::AudioEngine::BankBusy() ? "bankbusy" : "projectbusy", reply, sizeof(reply));
         WaveX::Log::PrintLine("%s", reply);
         return;
     }

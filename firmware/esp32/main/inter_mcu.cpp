@@ -1824,3 +1824,56 @@ bool inter_mcu_get_sample_playhead(WaveX::Protocol::SamplePlayheadMessage* out) 
     taskEXIT_CRITICAL(&s_playhead_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_bank_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::BankStatusMessage s_bank_status;
+bool s_bank_valid = false;
+uint32_t s_bank_recalled = 0;
+}  // namespace
+esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage& request) {
+    if (!WaveX::Protocol::IsValidBankOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_BANK_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage& status) {
+    using namespace WaveX::Protocol;
+    if (!IsValidBankStatus(status))
+        return;
+    taskENTER_CRITICAL(&s_bank_lock);
+    s_bank_status = status;
+    s_bank_valid = true;
+    const bool recalled = status.completed_op == BANK_RECALL && status.error == BANK_OK &&
+                          status.completed_request_id &&
+                          status.completed_request_id != s_bank_recalled;
+    if (recalled)
+        s_bank_recalled = status.completed_request_id;
+    taskEXIT_CRITICAL(&s_bank_lock);
+    if (recalled) {
+        // Recall can retire old Pool IDs. Discard cached records/pages before
+        // readers request the new authoritative Pool view.
+        taskENTER_CRITICAL(&s_meta_lock);
+        for (auto& valid: s_meta_valid)
+            valid = false;
+        s_meta_newest_id = 0;
+        taskEXIT_CRITICAL(&s_meta_lock);
+        taskENTER_CRITICAL(&s_meta_page_lock);
+        s_meta_page_valid = false;
+        s_meta_page_n = 0;
+        taskEXIT_CRITICAL(&s_meta_page_lock);
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+        s_cache_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_bank_lock);
+    const bool valid = s_bank_valid;
+    if (valid)
+        *out = s_bank_status;
+    taskEXIT_CRITICAL(&s_bank_lock);
+    return valid;
+}

@@ -414,3 +414,8 @@ bool inter_mcu_get_seq_song_status(WaveX::Protocol::SeqSongStatusMessage* out);
 uint32_t inter_mcu_request_sample_playhead(uint16_t sample_id, uint16_t generation);
 void inter_mcu_store_sample_playhead(const WaveX::Protocol::SamplePlayheadMessage& status);
 bool inter_mcu_get_sample_playhead(WaveX::Protocol::SamplePlayheadMessage* out);
+
+// Bank snapshots cross from the link task as one locked value.
+esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage&);
+void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage&);
+bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);

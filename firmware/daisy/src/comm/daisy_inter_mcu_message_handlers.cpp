@@ -108,8 +108,8 @@ void ProcessInterMcuMessage(uint8_t msg_type,
     if (msg_type == MSG_SEQ_SLOT_EDIT) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         SeqSlotEditMessage request;
-        if (!AudioEngine::ProjectBusy() && !Storage::CardService::Busy() && payload &&
-            payload_size == sizeof(request)) {
+        if (!AudioEngine::ProjectBusy() && !AudioEngine::BankBusy() &&
+            !Storage::CardService::Busy() && payload && payload_size == sizeof(request)) {
             std::memcpy(&request, payload, sizeof(request));
             if (IsValidSeqSlotEdit(request))
                 AudioEngine::OnSeqSlotEdit(request);
@@ -124,6 +124,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             std::memcpy(&request, payload, sizeof(request));
             if (IsValidSeqSlotOp(request))
                 AudioEngine::OnPatternSlotOp(request);
+        }
+#endif
+        return;
+    }
+    if (msg_type == MSG_BANK_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        BankOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidBankOp(request))
+                AudioEngine::OnBankOp(request);
         }
 #endif
         return;
@@ -146,10 +157,10 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         std::memcpy(&transport, payload, sizeof(transport));
         project_stop = transport.command == SEQ_TRANSPORT_STOP;
     }
-    // One Project owner freezes edits, notes and competing SD operations.
+    // Project/Bank ownership freezes edits, notes and competing SD operations.
     // Releases and readback remain available; polling cannot replay a job.
-    if (AudioEngine::ProjectBusy() && !project_stop && msg_type != MSG_HEARTBEAT &&
-        msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
+    if ((AudioEngine::ProjectBusy() || AudioEngine::BankBusy()) && !project_stop &&
+        msg_type != MSG_HEARTBEAT && msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
         msg_type != MSG_MIX_STATE_REQ && msg_type != MSG_TRACK_STATE_REQ &&
         msg_type != MSG_SEQ_PATTERN_SYNC && msg_type != MSG_TRACK_BINDING_REQ &&
         msg_type != MSG_MIDI_CLOCK_EVENT)

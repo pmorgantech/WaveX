@@ -878,3 +878,19 @@ TEST_F(PacketRouterTest, PlayheadRejectsMalformedReplies) {
     EXPECT_EQ(GetInterMcuCapture().playhead_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().playhead.frame, 12345678u);
 }
+
+TEST_F(PacketRouterTest, BankStatusRejectsTruncationAndInvalidSlots) {
+    BankStatusMessage status;
+    status.request_id = 77;
+    auto* bytes = reinterpret_cast<uint8_t*>(&status);
+    for (size_t n = 0; n < sizeof(status); ++n)
+        router_->route_uart_message(MSG_BANK_STATUS, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().bank_status_calls, 0);
+    status.slot = 128;
+    router_->route_uart_message(MSG_BANK_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().bank_status_calls, 0);
+    status.slot = 127;
+    router_->route_uart_message(MSG_BANK_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().bank_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().bank_status.slot, 127);
+}

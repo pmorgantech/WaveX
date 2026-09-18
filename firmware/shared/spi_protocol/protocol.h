@@ -187,6 +187,8 @@ enum MessageType : uint8_t {
     MSG_MIX_STATE_REQ = 0x7B,   // E->D: correlated selected Track mix read
     MSG_MIX_STATE = 0x7C,       // D->E: foreground-owned accepted mix settings
     MSG_INST_EDIT_OP = 0x80,    // E->D: sound undo/apply/filter/amp
+    MSG_BANK_OP = 0x82,         // E->D: named Bank copies, slot readback and Track recall
+    MSG_BANK_STATUS = 0x83,     // D->E: stable slot and retained operation outcome
     MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
     MSG_ERROR = 0xFF
 };
@@ -1716,6 +1718,80 @@ inline bool IsValidProjectStatus(const ProjectStatusMessage& m) {
                    : m.active_request_id == 0);
 }
 
+// Bank commands operate on one foreground-owned, immutable named file at a
+// time. Store/Clear publish a NEW Bank copy. GET reads one stable slot and
+// retained completion; it never replays a mutation after a lost reply.
+enum BankOpCode : uint8_t {
+    BANK_GET = 0,
+    BANK_NEW,
+    BANK_OPEN,
+    BANK_SAVE_COPY,
+    BANK_STORE_COPY,
+    BANK_CLEAR_COPY,
+    BANK_RECALL
+};
+enum BankError : uint8_t {
+    BANK_OK = 0,
+    BANK_BUSY,
+    BANK_BAD_NAME,
+    BANK_NOT_FOUND,
+    BANK_EXISTS,
+    BANK_IO,
+    BANK_BAD_FILE,
+    BANK_NO_SPACE,
+    BANK_NO_MEMORY,
+    BANK_DEPENDENCY,
+    BANK_AUDIO_BUSY,
+    BANK_NO_BANK,
+    BANK_EMPTY_SLOT,
+    BANK_STALE,
+    BANK_CONFIRM_REQUIRED
+};
+constexpr uint8_t BANK_CONFIRM_REPLACE = 1;
+struct BankOpMessage {
+    uint32_t request_id = 0;
+    uint32_t revision = 0;
+    uint8_t op = BANK_GET;
+    uint8_t slot = 0;  // stable 0..127, shown as 1..128
+    uint8_t track = 0;
+    uint8_t flags = 0;
+    char name[24]{};  // Open source or new destination; never a path
+} __attribute__((packed));
+struct BankStatusMessage {
+    uint32_t request_id = 0;
+    uint32_t active_request_id = 0;
+    uint32_t completed_request_id = 0;
+    uint32_t revision = 1;
+    uint8_t busy = 0;
+    uint8_t error = BANK_OK;
+    uint8_t active_op = BANK_GET;
+    uint8_t completed_op = BANK_GET;
+    uint8_t slot = 0;
+    uint8_t occupied = 0;
+    uint8_t loaded = 0;
+    uint8_t blocked = 0;  // another storage owner; readback remains available
+    char name[24]{};
+    char instrument[24]{};
+} __attribute__((packed));
+static_assert(sizeof(BankOpMessage) == 36 && sizeof(BankStatusMessage) == 72, "Bank wire sizes");
+inline bool IsValidBankOp(const BankOpMessage& m) {
+    return m.request_id && m.op <= BANK_RECALL && m.slot < 128 && m.track < 16 &&
+           !(m.flags & ~BANK_CONFIRM_REPLACE);
+}
+inline bool IsValidBankStatus(const BankStatusMessage& m) {
+    bool name_end = false, instrument_end = false;
+    for (char c: m.name)
+        name_end |= c == 0;
+    for (char c: m.instrument)
+        instrument_end |= c == 0;
+    return m.request_id && m.revision && m.busy <= 1 && m.blocked <= 1 && m.loaded <= 1 &&
+           m.occupied <= m.loaded && m.slot < 128 && m.error <= BANK_CONFIRM_REQUIRED &&
+           m.active_op <= BANK_RECALL && m.completed_op <= BANK_RECALL && name_end &&
+           instrument_end &&
+           (m.busy ? m.active_request_id != 0 && m.active_op != BANK_GET
+                   : m.active_request_id == 0);
+}
+
 // Song arrangement commands address stable Project slots. Structural edits are
 // stopped-only; playback borrows the frozen Project until callback release.
 enum SeqSongOp : uint8_t {
@@ -3032,6 +3108,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SEQ_SLOT_OP";
         case MSG_SEQ_SLOT_STATUS:
             return "SEQ_SLOT_STATUS";
+        case MSG_BANK_OP:
+            return "BANK_OP";
+        case MSG_BANK_STATUS:
+            return "BANK_STATUS";
         case MSG_PROJECT_OP:
             return "PROJECT_OP";
         case MSG_PROJECT_STATUS:

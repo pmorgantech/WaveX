@@ -11,6 +11,7 @@ class UITrackPage : public UIPage {
     void onTrackChanged() override;
     void onInput(const InputEvent&) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
     size_t consoleState(char*, size_t, size_t) override;
     bool consoleCommand(const char*, char*, size_t) override;
 

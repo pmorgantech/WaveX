@@ -116,6 +116,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
 | MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
+| MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy and confirmed Track recall |
+| MSG_BANK_STATUS | 0x83 | D→E | `BankStatusMessage` | revisioned stable slot, storage availability and retained completion |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
@@ -137,7 +139,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x83 for Bank operations, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
@@ -575,3 +577,20 @@ only after callback release. The existing Project WXCF Song records are unchange
 Scoped Pattern pages also carry `read_only`, set while the callback borrows a Song;
 clients retain the grid picture but refuse Pattern edits. Both MCU images
 must be updated together for the extended scoped-page payload.
+
+## Bank management
+
+`BankOpMessage` (36 bytes) carries request ID, expected Bank revision, operation,
+stable slot (0–127), Track (0–15), confirmation flag and a 24-byte name.
+`BankStatusMessage` (72 bytes) returns the selected slot, Bank/Instrument names,
+revision, occupied/loaded flags, own busy/external blocked state and retained
+active/completed request IDs, operations and error. Unknown flags and invalid
+bounds are rejected; names use the Bank file codec's admission rules.
+
+GET is read-only and can recover a lost completion. Mutations never auto-replay;
+active/completed IDs are deduplicated. Open/New/Save/Store/Clear require a fresh
+revision. Store/Clear publish a new named copy, preserving the old file. Recall
+always requires explicit replacement confirmation, stages the selected document
+and sample dependencies, and commits only after the target Track's audio stop
+fence. Read/validation/memory failures preserve the live Track and Bank.
+See [Bank persistence](bank-persistence.md) for ownership and SD semantics.

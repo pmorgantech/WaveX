@@ -1,15 +1,16 @@
 # Bank persistence
 
-The Bank container and index codec are the storage foundation for Phase 2.5.
-The codec, index and SD file transactions are host-tested. The Bank page,
-working-copy session owner, Track recall, preload and MIDI Program Change
-handling remain unimplemented.
+Bank Manager, its foreground session owner and selected-Track recall are
+implemented for Phase 2.5. The codec, SD transactions, staged recall and UI are
+host-tested and both firmware images compile. Physical SD/audio acceptance is
+still open in HV-016. Preload and MIDI Program Change recall remain unimplemented.
 
 ## Contents
 
 - [Model and format](#model-and-format)
 - [Foreground transactions](#foreground-transactions)
 - [SD transaction adapter](#sd-transaction-adapter)
+- [Bank Manager and Track recall](#bank-manager-and-track-recall)
 - [Validation and remaining work](#validation-and-remaining-work)
 - [Related](#related)
 
@@ -69,7 +70,8 @@ because its FatFs sector windows must be DMA accessible. Read/write adapters
 transfer less than a sector; unchanged slot copies and index scans advance in
 128-byte slices. New Instrument encoding and selected-slot decoding process
 one bounded WXI document per foreground pump, so their worst-case service
-latency still needs measurement before UI/Program Change integration.
+latency still needs physical measurement before this integration is accepted
+for performance use or extended to Program Change recall.
 
 Saves calculate the resulting sparse-file size and call the existing free-space
 admission helper before creating directories or files. They use a unique
@@ -80,11 +82,48 @@ to be closed before [rename](https://elm-chan.org/fsw/ff/doc/rename.html), and
 [read-only seeks](https://elm-chan.org/fsw/ff/doc/lseek.html) can clip at EOF;
 the adapter verifies the actual position before reading a slot.
 
-Index/read success never installs a Track or replaces a live Bank. The future
-session owner publishes successful results, manages dirty working copies and
-sample admission, and schedules this job alongside Project/Instrument/card
-operations. This adapter is compiled into the device build but has no UI or
-console entry point yet; it has not been run against physical SD storage.
+Index/read success alone never installs a Track or replaces a live Bank.
+The foreground session publishes completed operations and serializes this job
+with Project, Instrument, Pattern and card operations.
+
+## Bank Manager and Track recall
+
+Project → Shift → Banks opens the Manager. Previous/Next or encoder rotation
+selects one of 128 stable slots. Recall targets the globally selected Track.
+Files/Shift exposes Open, New, Save copy and Clear copy. Enter a saved Bank's
+name to open it, or a new destination name to create/store/clear/save a copy.
+The initial UI opens files by name; it has no file-list or slot-grid browser.
+
+[`BankSession`](../../firmware/daisy/src/storage/bank_session.hpp) owns one active
+index and saved Bank name. This first version uses immutable named files:
+Store copy snapshots the selected Track into a slot of a new Bank, Clear copy
+empties that slot in a new Bank, and Save copy duplicates the active file.
+Only a successful write followed by an index reload changes the active Bank.
+There is no unsaved Bank working copy. Editing a recalled Track never updates
+the Bank; explicitly Store copy to keep those edits. Embedded Instrument labels
+may contain punctuation such as an imported `.sfz` name; the stricter safe-name
+rule applies to Bank filenames.
+
+Recall, Store copy and Clear copy require UI confirmation. Recall warns that
+the target Track's current Instrument and unsaved sound edits will be replaced.
+Cancellation before submission changes nothing. Changing Track or Bank revision
+cancels the draft; stale/disconnected status disables submission. Requests carry
+an identity and expected Bank revision, and reconnect never replays a mutation.
+There is no UI cancellation after a card operation starts.
+
+Recall decodes one WXI into allocator-backed SDRAM, clones the Pool ownership
+table, retains every other Track's ownership bits and loads dependencies into
+private candidate state. Missing/invalid samples or allocation failures leave
+the live Track and Pool untouched and release newly staged PCM. On success,
+the foreground stops only the target Track through the existing audio fence,
+installs its Instrument and commits Pool ownership before republishing prepared
+voices. Track mix and MIDI routing remain unchanged. A refused stop preserves
+the old Instrument. The callback performs no Bank I/O or allocation.
+
+Resident sequencing and MIDI clock continue while the foreground job runs.
+Sample audition closes and competing edits/new note requests are held off;
+note-off and clock/transport handling remain available. Worst-case foreground
+service latency and audible continuity require the physical checks below.
 
 ## Validation and remaining work
 
@@ -98,11 +137,17 @@ and failed reads using the byte-backed FatFs mock.
 No SD durability, recall latency or MIDI behavior is established by these
 tests.
 
-Device integration and its [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
-follow the expanded Instrument engine in the
-[roadmap](../roadmap.md). It must provide a working Bank/index owner, explicit
-Track replacement for UI recall, channel-routed Program Change recall,
-Pool admission and the Bank page.
+Session tests cover private Track copies, preserved routing/shared sample
+ownership, newly admitted PCM rollback, missing dependencies, full media,
+stale/busy requests and explicit replacement confirmation. Wire/dispatch tests
+reject malformed messages; real-LVGL tests cover confirmation, Track changes,
+stale/offline status, stable slot selection, no mutation replay and idle rendering.
+
+The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
+remains open. Next software work is preload and channel-routed MIDI Program
+Change recall, followed by slot-to-slot copy/move and a decision on deferred
+unsaved Bank working copies. Project save/load does not yet persist the selected
+Bank path; reopen it by name after reboot. See the [roadmap](../roadmap.md).
 
 ## Related
 

@@ -31,6 +31,21 @@ inline bool ValidName(const char* name) {
     return PatternFile::ValidName(name);
 }
 
+// Embedded Instrument names are labels, not Bank filenames. Imported SFZ
+// labels can contain punctuation (including the extension); preserve them.
+inline bool ValidInstrumentName(const char* name) {
+    if (!name || !name[0])
+        return false;
+    for (size_t i = 0; i < 24; ++i) {
+        const auto c = static_cast<unsigned char>(name[i]);
+        if (!c)
+            return true;
+        if (c < 32 || c == 127 || c == '/' || c == '\\')
+            return false;
+    }
+    return false;
+}
+
 // Sequential new-file writer. One whole Instrument per Append: caller must
 // schedule this foreground work and own its WXI scratch. Never callback-safe.
 // Copies of unchanged serialized slots belong to the SD transaction adapter.
@@ -53,7 +68,8 @@ class Encoder {
     Result Append(uint8_t slot, const Wxi::InstrumentFile& doc) {
         if (result_ != Result::More)
             return result_;
-        if (!started_ || copying_ || slot >= kSlots || seen_[slot] || !ValidName(doc.name))
+        if (!started_ || copying_ || slot >= kSlots || seen_[slot] ||
+            !ValidInstrumentName(doc.name))
             return Fail(Result::Invalid);
         const uint32_t bytes = Wxi::detail::TotalFileSize(doc);
         if (bytes > kMaxDocumentBytes || written_ > kMaxFileBytes - 8 - kSlotPrefixBytes - bytes)
@@ -77,8 +93,9 @@ class Encoder {
     Result BeginCopy(uint8_t slot, const Slot& metadata) {
         if (result_ != Result::More)
             return result_;
-        if (!started_ || copying_ || slot >= kSlots || seen_[slot] || !ValidName(metadata.name) ||
-            metadata.bytes < 12 || metadata.bytes > kMaxDocumentBytes ||
+        if (!started_ || copying_ || slot >= kSlots || seen_[slot] ||
+            !ValidInstrumentName(metadata.name) || metadata.bytes < 12 ||
+            metadata.bytes > kMaxDocumentBytes ||
             written_ > kMaxFileBytes - 8 - kSlotPrefixBytes - metadata.bytes)
             return Fail(Result::Invalid);
         uint8_t prefix[kSlotPrefixBytes]{};
@@ -191,7 +208,7 @@ class IndexDecoder {
             slot.offset = payload_start + kSlotPrefixBytes;
             slot.bytes = chunk.payload_len - kSlotPrefixBytes;
             const uint32_t length = Wxcf::detail::ReadU32LE(header + 8);
-            if (!ValidName(slot.name) || prefix[25] || prefix[26] || prefix[27] ||
+            if (!ValidInstrumentName(slot.name) || prefix[25] || prefix[26] || prefix[27] ||
                 std::memcmp(header, Wxcf::kMagic, 4) ||
                 Wxcf::detail::ReadU16LE(header + 4) != Wxi::kFileType ||
                 Wxcf::VersionMajor(Wxcf::detail::ReadU16LE(header + 6)) != 1 ||

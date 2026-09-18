@@ -4,7 +4,8 @@
 namespace WaveX::AudioEngine {
 // Foreground-only private ownership table for a whole-Project load. The live
 // pool must remain immutable while Active(); its payloads stay allocated.
-// Candidate Tracks begin empty and each is loaded at most once. This keeps
+// Candidate Tracks being replaced begin empty and load at most once.
+// A single-Track recall retains all other Tracks' ownership bits. This keeps
 // the loader's ordinary per-Track release from releasing a borrowed sample.
 class SamplePoolStage {
    public:
@@ -13,11 +14,12 @@ class SamplePoolStage {
     ~SamplePoolStage() { Rollback(); }
     SamplePoolStage(const SamplePoolStage&) = delete;
     SamplePoolStage& operator=(const SamplePoolStage&) = delete;
-    bool Begin() {
+    bool Begin(uint16_t retained_tracks = 0) {
         if (active_ || &live_ == &candidate_)
             return false;
         candidate_.CopyStateFrom(live_);
-        candidate_.ForEach([](SamplePool::Record& record) { record.used_by = 0; });
+        candidate_.ForEach(
+            [retained_tracks](SamplePool::Record& record) { record.used_by &= retained_tracks; });
         active_ = true;
         return true;
     }

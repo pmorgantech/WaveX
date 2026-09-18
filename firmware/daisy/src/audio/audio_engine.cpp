@@ -56,6 +56,7 @@ using q15_t = int16_t;
 #include "sequencer_voice_map.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
+#include "storage/bank_session.hpp"
 #include "storage/card_service.hpp"
 #include "storage/pattern_store.hpp"
 #include "storage/project_session.hpp"
@@ -700,6 +701,8 @@ static_assert(sizeof(SamplePool::Record) * WAVEX_SAMPLE_POOL_CAPACITY <=
 alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
 static SamplePool* s_pool = nullptr;
 static BssStatic<std::optional<Storage::ProjectSession>> s_project_session;
+static BssStatic<std::optional<Storage::BankSession>> s_bank_session;
+static bool StopBankTrack(uint8_t track);
 static bool StopProjectVoices();
 static void PublishProject();
 
@@ -2038,6 +2041,11 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
             s_sample_io,
             sizeof(s_sample_io),
             Storage::ProjectSession::Boundary{StopProjectVoices, PublishProject});
+        s_bank_session.Get().emplace(s_sample_mem_mgr,
+                                     *s_pool,
+                                     s_sample_io,
+                                     sizeof(s_sample_io),
+                                     Storage::BankSession::Boundary{StopBankTrack, PublishProject});
         void* memory = nullptr;
         if (s_sample_mem_mgr.alloc(sizeof(SequencerVoiceState), &s_seq_voice_storage) &&
             s_sample_mem_mgr.ptr(s_seq_voice_storage, &memory)) {
@@ -2675,9 +2683,10 @@ void OnSongOp(const SeqSongOpMessage& request) {
     if (!IsValidSeqSongOp(request))
         return;
     if (s_project_session.Get()) {
-        if (s_project_session.Get()->RequestSong(
-                request,
-                SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy()) &&
+        if (s_project_session.Get()->RequestSong(request,
+                                                 BankBusy() || SfzLoader::Busy() ||
+                                                     PatternStore::Busy() ||
+                                                     Storage::CardService::Busy()) &&
             request.op == SEQ_SONG_PLAY)
             PublishSequencerVoiceMap();
     } else {
@@ -2694,8 +2703,10 @@ void OnPatternSlotOp(const SeqSlotOpMessage& request) {
     if (!IsValidSeqSlotOp(request))
         return;
     if (s_project_session.Get()) {
-        s_project_session.Get()->RequestPattern(
-            request, SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
+        s_project_session.Get()->RequestPattern(request,
+                                                BankBusy() || SfzLoader::Busy() ||
+                                                    PatternStore::Busy() ||
+                                                    Storage::CardService::Busy());
     } else {
         SeqSlotStatusMessage status;
         status.request_id = request.request_id;
@@ -2719,7 +2730,8 @@ void OnProjectOp(const ProjectOpMessage& request) {
         return;
     }
     const bool accepted = s_project_session.Get()->Request(
-        request, SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
+        request,
+        BankBusy() || SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
     if (accepted) {
         CancelEnvelopeJob();
         CloseWav();
@@ -2733,7 +2745,42 @@ static void PublishProject() {
     PublishSequencerVoiceMap();
     PushTrackBinding(0xff);
 }
+bool BankBusy() {
+    return s_bank_session.Get() && s_bank_session.Get()->Busy();
+}
+void OnBankOp(const BankOpMessage& request) {
+    if (!IsValidBankOp(request))
+        return;
+    if (!s_bank_session.Get()) {
+        BankStatusMessage status;
+        status.request_id = request.request_id;
+        status.completed_request_id = request.op == BANK_GET ? 0 : request.request_id;
+        status.completed_op = request.op;
+        status.error = BANK_NO_MEMORY;
+        status.slot = request.slot;
+        Comm::LinkSend(MSG_BANK_STATUS, &status, sizeof(status));
+        return;
+    }
+    const bool external = (s_project_session.Get() && s_project_session.Get()->Busy()) ||
+                          PatternStore::Busy() || Storage::CardService::Busy() ||
+                          (!BankBusy() && SfzLoader::Busy());
+    if (s_bank_session.Get()->Request(request, external)) {
+        CancelEnvelopeJob();
+        CloseWav();
+    }
+}
+static bool StopBankTrack(uint8_t track) {
+    const auto mask = static_cast<uint16_t>(1u << track);
+    ClearSequencerVoiceMap(mask);
+    return StopTracksAndWait(mask);
+}
 void PumpProjectSession() {
+    if (auto& bank = s_bank_session.Get(); bank) {
+        bank->Pump();
+        if (bank->ReplyPending() &&
+            Comm::LinkSend(MSG_BANK_STATUS, &bank->Status(), sizeof(BankStatusMessage)) >= 0)
+            bank->ReplySent();
+    }
     auto& session = s_project_session.Get();
     if (!session)
         return;
@@ -2751,8 +2798,8 @@ void PumpProjectSession() {
         session->ReplySent();
 }
 bool StorageJobBusy() {
-    return (s_project_session.Get() && s_project_session.Get()->Busy()) || SfzLoader::Busy() ||
-           WaveX::PatternStore::Busy();
+    return BankBusy() || (s_project_session.Get() && s_project_session.Get()->Busy()) ||
+           SfzLoader::Busy() || WaveX::PatternStore::Busy();
 }
 bool PrepareCardFormat() {
     if (StorageJobBusy())
@@ -3284,7 +3331,7 @@ void OnInstrumentOp(const InstOpMessage& request) {
 }
 
 void PumpInstrumentLoad() {
-    if (ProjectBusy() || SfzLoader::ProjectLoadActive())
+    if (BankBusy() || ProjectBusy() || SfzLoader::ProjectLoadActive())
         return;
     SfzLoader::PumpEditorReply();
     if (!s_pool) {

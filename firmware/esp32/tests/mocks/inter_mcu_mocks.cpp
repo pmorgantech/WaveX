@@ -86,6 +86,11 @@ void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& pla
 void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status) {
     (void)status;
 }
+void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.bank_status_calls;
+    cap.bank_status = status;
+}
 void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage& status) {
     auto& cap = GetInterMcuCapture();
     ++cap.project_status_calls;
