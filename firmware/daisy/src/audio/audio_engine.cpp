@@ -2824,6 +2824,13 @@ void PumpMixMeters() {
 }
 
 void PumpSequencerState() {
+    SeqClockOutMessage clock;
+    for (unsigned i = 0; i < 8 && s_seq_transport.PopClockOut(clock); ++i) {
+        if (WaveX::Comm::LinkSend(MSG_SEQ_CLOCK_OUT, &clock, sizeof(clock)) < 0) {
+            s_seq_transport.ClockOutFailed(clock);
+            break;
+        }
+    }
     WaveX::PatternStore::Pump(s_pattern_exchange_storage.Get());
     auto& page = s_seq_page_pending_storage.Get();
     auto& head = s_seq_head_pending_storage.Get();
@@ -2852,6 +2859,8 @@ void OnSeqPatternOp(const SeqPatternOpMessage& m) {
 }
 
 void OnMidiClockEvent(const MidiClockEventMessage& m) {
+    if (!IsValidMidiClockEvent(m))
+        return;
     if (ProjectBusy() && (s_project_session.Get()->Status().active_op != PROJECT_SAVE_COPY ||
                           (m.event != MIDI_CLK_TICK && m.event != MIDI_CLK_STOP)))
         return;

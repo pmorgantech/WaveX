@@ -2037,13 +2037,14 @@ enum MidiClockEventType : uint8_t {
 };
 // MSG_MIDI_CLOCK_EVENT (E->D): a forwarded MIDI real-time/transport byte. Per
 // midi-sync-tempo-follower.md §2/§3 the ESP32 sends the DELTA since the
-// previous event from this source (never an absolute foreign timestamp), so
+// previous distinct CLOCK timestamp from this source, divided by its clock count
+// when USB groups clocks (never an absolute foreign timestamp), so
 // the Daisy's tempo follower cannot mix clock domains.
 struct MidiClockEventMessage {
     uint8_t event;          // MidiClockEventType
     uint8_t source;         // 0=DIN, 1=USB
     uint16_t tick_seq;      // wraps; gap detection for dropped ticks
-    uint32_t esp_delta_us;  // us since the previous event from this source (0 on first/START)
+    uint32_t esp_delta_us;  // per-clock us (batch mean); 0 without a distinct timestamp
     uint16_t spp_beats16;   // SPP payload in MIDI beats (16th notes); event==MIDI_CLK_SPP only
     uint16_t reserved;
 
@@ -2061,6 +2062,12 @@ struct MidiClockEventMessage {
           spp_beats16(spp_beats16_),
           reserved(0) {}
 } __attribute__((packed));
+
+inline bool IsValidMidiClockEvent(const MidiClockEventMessage& m) {
+    return m.source <= 1 && m.event <= MIDI_CLK_SPP && !m.reserved && m.spp_beats16 <= 0x3fff &&
+           (m.event == MIDI_CLK_SPP || !m.spp_beats16) &&
+           (m.event == MIDI_CLK_TICK || !m.esp_delta_us);
+}
 
 // MSG_MIDI_CC (E->D): a forwarded MIDI control change. The Daisy owns the
 // CC->modulation-source mapping (param-locks-and-modulation.md §6).

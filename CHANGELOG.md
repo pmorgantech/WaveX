@@ -13,13 +13,19 @@ versioning and release process.
 
 ### Added
 
+- End-to-end MIDI clock sync: Daisy 24-PPQN output, timestamped DIN/USB input,
+  single-source following, next-Clock Start/Continue and SPP Pattern/Song seek.
+  The sequencer has Internal/MIDI selection, measured tempo and an explicit Stop
+  control. USB batches preserve reception timestamps, and transport output
+  supersedes stale clock backlog. Host/build checks cover the implementation;
+  DAW drift, wire jitter and callback capacity remain open in HV-014.
+
 - MIDI clock/transport output queues, DIN UART TX and USB-MIDI event-packet
   serialization, connected to the existing inter-MCU clock-out message.
   `MIDIOUT` provides per-port diagnostics and bench event injection. USB input
   and output flags operate independently, and shutdown callbacks no longer
   target a task handle that may have been deleted. DIN remains disabled until
-  receiver wiring is confirmed; hardware checks are in HV-014. Daisy clock
-  generation and external-clock ingest remain pending.
+  receiver wiring is confirmed; hardware checks are in HV-014.
 
 - MCP3208 support for four RV112FF 20 kΩ endless pots, with DMA scans,
   verified per-pot calibration saved in NVS and Settings → Pots diagnostics.

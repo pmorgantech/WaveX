@@ -294,8 +294,9 @@ Driven entirely from navigator/page state — no page sets an LED directly:
   The real packet router delivers `MSG_SEQ_CLOCK_OUT` to both ports.
 - `MIDIOUT` console diagnostics and the bench procedure are in
   [HV-014](../hardware-validation.md#hv-014--midi-ports-and-clock-serialization).
-  Daisy clock generation and ESP32 external-clock ingest remain separate Phase 2
-  work; this stage alone does not synchronize a DAW.
+  Daisy clock generation and ESP32 external-clock/SPP ingest are implemented;
+  [MIDI sync](midi-sync-tempo-follower.md) defines transport/source behavior.
+  Physical DAW synchronization remains unverified.
 
 ## 5. Stages (each one commit, each independently buildable)
 
@@ -483,7 +484,7 @@ clocking. Each port exposes ready/pending/accepted/sent/dropped/expired/failed
 counters, and submission returns the mask actually accepted. Events already
 accepted by TinyUSB belong to its FIFO/endpoint; clearing the application queue
 cannot recall them. Host stalls/suspend may delay those accepted packets, which
-must be characterized before enabling end-to-end clock output. Physical timing and
+must be characterized before accepting end-to-end clock output. Physical timing and
 fault behavior remain HV-014 gates.
 
 References: [ESP-IDF UART driver](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/uart.html)

@@ -6,7 +6,7 @@ the matching Track's Instrument at the step's selected MIDI note. Velocity
 layers and crossfades use the step's velocity. Chords and melodic gate lanes
 remain future Phase 2.5 work.
 Voice-scoped parameter locks and their touch editor are implemented.
-Physical panel integration, MIDI clock output and
+Physical panel integration, MIDI clock hardware validation and
 song/project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
 Host tests and device compilation do not establish audible timing or the
 hardware phase gate.
@@ -54,18 +54,19 @@ are independent of the step-editor workflow.
 ## 2. Clocking
 
 The timebase is the audio frame count, with the current control tick at an
-audio-block boundary. `sequencer_scheduler.hpp` implements fixed-point
+audio-block boundary. `sequencer_scheduler.hpp` implements double-precision anchored
 musical timing with intra-block frame offsets, swing, microtiming, retriggers
 and seeded probability.
 
 `tempo_follower.hpp` and its transport integration are host-testable.
 [MIDI sync](midi-sync-tempo-follower.md) distinguishes the implemented core
-from the remaining ESP32 ingest/output and bench work. Wire deltas are in the
+from the remaining physical timing and bench work. Wire deltas are in the
 ESP32 clock domain; they must not be treated as absolute Daisy timestamps.
 
-Internal-mode Continue currently restarts the scheduler at the top. Stored
-song-position/input-mode fields do not imply implemented song resume or live
-recording.
+Internal Continue seeks to its SPP. MIDI Start/Continue wait for the following
+Clock; SPP relocates Patterns and Song sections/repeats while stopped. External
+Stop preserves the paused Song lease; local Stop releases it. Live recording
+remains separate work.
 
 ## 3. Pattern and voice models
 

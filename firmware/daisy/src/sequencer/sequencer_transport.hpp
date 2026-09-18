@@ -22,7 +22,7 @@
 //   INTERNAL: transport PLAY starts the scheduler immediately at the set
 //             tempo; MIDI clock events are ignored.
 //   MIDI:     transport PLAY arms; the scheduler actually starts when a MIDI
-//             START (or the first clock in CONTINUE) arrives, so sequencer
+//             START/CONTINUE is followed by its first CLOCK, so sequencer
 //             step 0 aligns to the master's downbeat. Each tick the scheduler
 //             tempo is set to the follower's servo-corrected instantaneous
 //             BPM so it tracks the external clock's phase correction rather
@@ -30,6 +30,7 @@
 
 #include "spi_protocol/protocol.h"
 
+#include "midi/event_ring.hpp"
 #include "pattern.hpp"
 #include "sequencer/project_data.hpp"
 #include "sequencer_scheduler.hpp"
@@ -46,6 +47,19 @@ class SequencerTransport {
     SequencerTransport(const SequencerTransport&) = delete;
     SequencerTransport& operator=(const SequencerTransport&) = delete;
     void Init(uint32_t sample_rate, uint16_t block_size) {
+        clock_out_.Init();
+        output_control_.store(0);
+        output_control_seen_ = 0;
+        output_continue_pending_ = false;
+        output_sequence_ = source_sequence_ = 0;
+        using_midi_ = armed_ = false;
+        clock_frame_ = 0;
+        clock_frame_published_.store(0);
+        source_ = -1;
+        source_sequence_valid_ = false;
+        midi_enabled_ = awaiting_clock_ = output_playing_ = false;
+        position_ = 0;
+        pending_output_ = 0;
         song_project_ = nullptr;
         pending_pattern_ = &pending_storage_;
         *pending_pattern_ = Pattern{};
@@ -78,7 +92,7 @@ class SequencerTransport {
         StopSong();
         scheduler_.Stop();
         follower_.OnStop();
-        armed_ = false;
+        armed_ = midi_enabled_ = awaiting_clock_ = false;
         *pending_pattern_ = pattern;
         pending_pattern_dirty_ = true;
         ++pattern_revision_;
@@ -90,7 +104,7 @@ class SequencerTransport {
         StopSong();
         scheduler_.Stop();
         follower_.OnStop();
-        armed_ = false;
+        armed_ = midi_enabled_ = awaiting_clock_ = false;
     }
     Protocol::SeqTransportMessage SessionSettings() const {
         return {Protocol::SEQ_TRANSPORT_STOP,
@@ -148,7 +162,7 @@ class SequencerTransport {
             return;
         scheduler_.Stop();
         follower_.OnStop();
-        armed_ = false;
+        armed_ = midi_enabled_ = awaiting_clock_ = false;
         *pending_pattern_ = song_project_->patterns[active_slot_].pattern;
         song_project_ = nullptr;
         ++pattern_revision_;
@@ -181,6 +195,18 @@ class SequencerTransport {
 
         const bool want_midi = (m.clock_source == Protocol::SEQ_CLOCK_MIDI);
         follower_.SetSyncSource(want_midi);
+        if (using_midi_ != want_midi) {
+            StopSong();
+            scheduler_.Stop();
+            follower_.OnStop();
+            armed_ = false;
+            source_ = -1;
+            source_sequence_valid_ = false;
+            midi_enabled_ = awaiting_clock_ = false;
+            if (output_playing_)
+                EmitClock(Protocol::MIDI_CLK_STOP);
+            output_playing_ = false;
+        }
         using_midi_ = want_midi;
 
         switch (m.command) {
@@ -188,31 +214,38 @@ class SequencerTransport {
                 scheduler_.Stop();
                 follower_.OnStop();
                 armed_ = false;
+                midi_enabled_ = awaiting_clock_ = false;
+                source_ = -1;
                 break;
             case Protocol::SEQ_TRANSPORT_PLAY:
                 CommitPendingPattern();
                 if (using_midi_) {
                     // Arm: wait for MIDI START to align step 0 to the downbeat.
-                    armed_ = true;
+                    armed_ = midi_enabled_ = true;
+                    awaiting_clock_ = false;
+                    source_ = -1;
+                    source_sequence_valid_ = false;
                     scheduler_.Stop();
                 } else {
                     scheduler_.Start();
                     follower_.OnStart();
+                    pending_output_ = 1;
                     armed_ = false;
                 }
                 break;
             case Protocol::SEQ_TRANSPORT_CONTINUE:
                 CommitPendingPattern();
+                position_ = std::min<uint16_t>(m.song_position, 0x3fff);
                 if (using_midi_) {
-                    armed_ = true;
+                    armed_ = midi_enabled_ = true;
+                    awaiting_clock_ = false;
+                    source_ = -1;
+                    source_sequence_valid_ = false;
                     scheduler_.Stop();
                 } else {
-                    // No native "resume from arbitrary step" in the scheduler
-                    // core yet; CONTINUE in internal mode restarts from the
-                    // top (documented limitation - song position resume rides
-                    // on the MIDI SPP path below when slaved).
-                    scheduler_.Start();
-                    follower_.OnContinue(m.song_position);
+                    scheduler_.Seek(static_cast<double>(position_) * 24.0);
+                    follower_.OnContinue(position_);
+                    pending_output_ = 2;
                     armed_ = false;
                 }
                 break;
@@ -348,32 +381,70 @@ class SequencerTransport {
     // ---- MIDI clock (MSG_MIDI_CLOCK_EVENT) ----
     void OnMidiClock(const Protocol::MidiClockEventMessage& m) {
         using namespace Protocol;
+        if (!using_midi_ || !IsValidMidiClockEvent(m))
+            return;
+        // First active source wins. Never switch a running/freewheeling song
+        // merely because a second port is connected. Local re-arm releases it.
+        if (source_ < 0) {
+            source_ = m.source;
+            source_sequence_valid_ = false;
+        }
+        if (source_ != m.source)
+            return;
         switch (m.event) {
-            case MIDI_CLK_TICK:
-                follower_.OnMidiClock(m.esp_delta_us);
+            case MIDI_CLK_TICK: {
+                uint16_t gap = source_sequence_valid_
+                                   ? static_cast<uint16_t>(m.tick_seq - source_sequence_)
+                                   : 1;
+                if (!gap || gap >= 0x8000)
+                    return;
+                source_sequence_ = m.tick_seq;
+                source_sequence_valid_ = true;
+                if (awaiting_clock_ && midi_enabled_) {
+                    if (!LocatePosition(position_)) {
+                        awaiting_clock_ = armed_ = false;
+                        return;
+                    }
+                    follower_.OnMidiClock(m.esp_delta_us, gap, true);
+                    follower_.OnContinue(position_);
+                    awaiting_clock_ = armed_ = false;
+                    break;
+                }
+                follower_.OnMidiClock(m.esp_delta_us, gap, true);
                 break;
+            }
             case MIDI_CLK_START:
-                follower_.OnStart();
-                if (using_midi_ && armed_) {
-                    scheduler_.Start();
-                    armed_ = false;
+                if (midi_enabled_) {
+                    position_ = 0;
+                    scheduler_.Stop();
+                    follower_.OnStop();
+                    armed_ = awaiting_clock_ = true;
+                    source_sequence_valid_ = false;
                 }
                 break;
             case MIDI_CLK_CONTINUE:
-                follower_.OnContinue(m.spp_beats16);
-                if (using_midi_ && armed_) {
-                    scheduler_.Start();
-                    armed_ = false;
+                if (midi_enabled_) {
+                    scheduler_.Stop();
+                    follower_.OnStop();
+                    armed_ = awaiting_clock_ = true;
+                    source_sequence_valid_ = false;
                 }
                 break;
             case MIDI_CLK_STOP:
-                StopSong();
-                armed_ = false;
-                follower_.OnStop();
+                if (scheduler_.IsPlaying())
+                    position_ =
+                        static_cast<uint16_t>(std::min(16383.0, scheduler_.PositionTicks() / 24.0));
                 scheduler_.Stop();
+                follower_.OnStop();
+                awaiting_clock_ = false;
+                armed_ = midi_enabled_;  // preserve a paused Song's immutable lease
                 break;
             case MIDI_CLK_SPP:
-                follower_.OnContinue(m.spp_beats16);
+                // SPP is a locate while stopped, never an implicit play command.
+                if (!scheduler_.IsPlaying()) {
+                    position_ = m.spp_beats16;
+                    follower_.Locate(position_);
+                }
                 break;
             default:
                 break;
@@ -398,11 +469,13 @@ class SequencerTransport {
         if (!scheduler_.IsPlaying() && pending_pattern_dirty_) {
             CommitPendingPattern();
         }
+        clock_frame_ += block_size_;
+        clock_frame_published_.store(clock_frame_, std::memory_order_relaxed);
         if (using_midi_) {
+            scheduler_.SetTempo(static_cast<float>(follower_.InstantaneousBpm()));
             follower_.Tick();
-            if (scheduler_.IsPlaying())
-                scheduler_.SetTempo(static_cast<float>(follower_.InstantaneousBpm()));
         }
+        ServiceClockOutput();
         if (song_project_ && scheduler_.IsPlaying() && !scheduler_.HasQueuedPattern())
             ArmSongBoundary();
         const size_t count = scheduler_.Process(out_events, max_events);
@@ -432,6 +505,49 @@ class SequencerTransport {
         return count;
     }
 
+    // Main-loop consumer. Stale ticks cannot become a catch-up burst after SD I/O.
+    bool PopClockOut(Protocol::SeqClockOutMessage& out) {
+        // Latest transport state has priority over a congested clock ring.
+        // A newer Start/Continue/Stop invalidates clocks from the old run.
+        const auto control = output_control_.load(std::memory_order_acquire);
+        if (control != output_control_seen_) {
+            output_control_seen_ = control;
+            output_continue_pending_ = (control & 3) == 2;
+            const uint8_t event = (control & 3) == 1   ? Protocol::MIDI_CLK_START
+                                  : (control & 3) == 2 ? Protocol::MIDI_CLK_SPP
+                                                       : Protocol::MIDI_CLK_STOP;
+            out = {event,
+                   0,
+                   static_cast<uint16_t>(event == Protocol::MIDI_CLK_SPP ? (control >> 2) & 0x3fff
+                                                                         : 0)};
+            return true;
+        }
+        if (output_continue_pending_) {
+            output_continue_pending_ = false;
+            out = {Protocol::MIDI_CLK_CONTINUE, 0, 0};
+            return true;
+        }
+        ClockEntry entry;
+        for (unsigned i = 0; i < 64 && clock_out_.Pop(entry); ++i) {
+            if (entry.control != control ||
+                clock_frame_published_.load(std::memory_order_relaxed) - entry.frame >
+                    sample_rate_ / 20)
+                continue;
+            out = entry.message;
+            return true;
+        }
+        return false;
+    }
+    // Foreground only: retry the latest transport state after link congestion.
+    // Ticks expire/drop; a failed SPP/Continue restarts the ordered pair.
+    void ClockOutFailed(const Protocol::SeqClockOutMessage& message) {
+        if (message.event != Protocol::MIDI_CLK_TICK) {
+            output_control_seen_ = 0;
+            output_continue_pending_ = false;
+        }
+    }
+    uint32_t ClockOutputDrops() const { return clock_out_.Dropped(); }
+
     // Coalesced playhead snapshot for MSG_SEQ_PLAYHEAD. sync_state maps the
     // follower state to the wire encoding (0=internal,1=acquiring,2=locked,
     // 3=freewheel); in internal mode it is always 0.
@@ -454,7 +570,7 @@ class SequencerTransport {
             }
         }
         double bpm = using_midi_ ? follower_.MeasuredBpm() : tempo_bpm_;
-        uint16_t bpm_x100 = static_cast<uint16_t>(bpm * 100.0 + 0.5);
+        uint16_t bpm_x100 = static_cast<uint16_t>(std::clamp(bpm * 100.0 + 0.5, 0.0, 65535.0));
         return Protocol::SeqPlayheadMessage(active_slot_,
                                             scheduler_.PlayheadStep(),
                                             scheduler_.IsPlaying() ? 1 : 0,
@@ -521,6 +637,81 @@ class SequencerTransport {
     const TempoFollower& follower() const { return follower_; }
 
    private:
+    void EmitClock(uint8_t event, uint16_t spp = 0) {
+        auto control = output_control_.load(std::memory_order_relaxed);
+        if (event == Protocol::MIDI_CLK_TICK) {
+            ++output_sequence_;
+            clock_out_.Push({{event, output_sequence_, 0}, clock_frame_, control});
+        } else if (event != Protocol::MIDI_CLK_SPP) {
+            const uint32_t kind = event == Protocol::MIDI_CLK_START      ? 1
+                                  : event == Protocol::MIDI_CLK_CONTINUE ? 2
+                                                                         : 3;
+            control = ((control + 0x10000u) & 0xffff0000u) | (uint32_t(spp) << 2) | kind;
+            output_control_.store(control, std::memory_order_release);
+        }
+    }
+    void ServiceClockOutput() {
+        if (using_midi_) {
+            pending_output_ = 0;
+            return;
+        }  // no clock THRU/feedback loop
+        if (!scheduler_.IsPlaying()) {
+            if (output_playing_)
+                EmitClock(Protocol::MIDI_CLK_STOP);
+            output_playing_ = false;
+            pending_output_ = 0;
+            return;
+        }
+        if (pending_output_ || !output_playing_) {
+            if (pending_output_ == 2) {
+                EmitClock(Protocol::MIDI_CLK_CONTINUE, position_);
+            } else
+                EmitClock(Protocol::MIDI_CLK_START);
+            next_output_tick_ = scheduler_.PositionTicks();
+            output_playing_ = true;
+            pending_output_ = 0;
+        }
+        // 4 internal ticks = one 24-PPQN MIDI clock. Absolute scheduler phase
+        // supplies tempo changes without a second independently drifting clock.
+        for (unsigned i = 0; i < 16 && next_output_tick_ < scheduler_.BlockEndTick(); ++i) {
+            EmitClock(Protocol::MIDI_CLK_TICK);
+            next_output_tick_ += 4.0;
+        }
+    }
+    bool LocatePosition(uint16_t spp) {
+        const double tick = static_cast<double>(spp) * 24.0;
+        if (!song_project_) {
+            scheduler_.Seek(tick);
+            return true;
+        }
+        const auto& song = song_project_->songs[song_slot_];
+        double total = 0;
+        for (uint8_t i = 0; i < song.length; ++i) {
+            const auto& entry = song.entries[i];
+            const auto& pattern = song_project_->patterns[entry.pattern].pattern;
+            total += pattern.length * StepIntervalTicks(pattern.scale) * entry.repeats;
+        }
+        if (total <= 0 || (!song_loop_ && tick >= total)) {
+            StopSong();
+            return false;
+        }
+        const double local = song_loop_ ? std::fmod(tick, total) : tick;
+        double origin = 0;
+        for (uint8_t i = 0; i < song.length; ++i) {
+            const auto& entry = song.entries[i];
+            const auto& pattern = song_project_->patterns[entry.pattern].pattern;
+            const double length = pattern.length * StepIntervalTicks(pattern.scale) * entry.repeats;
+            if (local < origin + length) {
+                song_entry_ = i;
+                InstallSongEntry();
+                scheduler_.Seek(tick, tick - local + origin);
+                return true;
+            }
+            origin += length;
+        }
+        return false;
+    }
+
     static bool StepValid(uint8_t track, uint8_t step) {
         return track < kMaxTracks && step < kMaxSteps;
     }
@@ -557,7 +748,11 @@ class SequencerTransport {
     }
     void ArmSongBoundary() {
         const auto& song = song_project_->songs[song_slot_];
-        const auto repeats = song.entries[song_entry_].repeats;
+        const auto repeats = static_cast<uint8_t>(
+            std::max(1u,
+                     unsigned(song.entries[song_entry_].repeats) -
+                         std::min<unsigned>(song.entries[song_entry_].repeats - 1u,
+                                            scheduler_.PlayheadLoop())));
         const auto next = static_cast<uint16_t>(song_entry_ + 1);
         if (next == song.length && !song_loop_)
             scheduler_.QueueStop(repeats);
@@ -598,11 +793,28 @@ class SequencerTransport {
     SequencerScheduler scheduler_;
     TempoFollower follower_;
 
+    struct ClockEntry {
+        Protocol::SeqClockOutMessage message;
+        uint32_t frame, control;
+    };
+    Midi::EventRing<ClockEntry, 64> clock_out_;
+    std::atomic<uint32_t> clock_frame_published_{0}, output_control_{0};
+    // Foreground-owned cursor for the transport mailbox.
+    uint32_t output_control_seen_ = 0;
+    bool output_continue_pending_ = false;
+    uint32_t clock_frame_ = 0;
+    double next_output_tick_ = 0;
+    uint16_t output_sequence_ = 0, position_ = 0, source_sequence_ = 0;
+    int8_t source_ = -1;
+    uint8_t pending_output_ = 0;
+    bool source_sequence_valid_ = false, midi_enabled_ = false, awaiting_clock_ = false,
+         output_playing_ = false;
+
     uint32_t sample_rate_ = 48000;
     uint16_t block_size_ = 48;
     double tempo_bpm_ = 120.0;
     bool using_midi_ = false;
-    bool armed_ = false;  // MIDI mode: PLAY received, waiting for START
+    bool armed_ = false;  // MIDI mode: armed or externally paused
     uint8_t input_mode_ = 0;
     uint8_t quantize_ = 0;
 

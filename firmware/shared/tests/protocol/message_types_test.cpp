@@ -1983,3 +1983,30 @@ TEST_F(MessageTypeTest, SampleAuditionRoundTripPreservesPoolId) {
         EXPECT_EQ(parsed.sample_id, id);
     }
 }
+
+TEST_F(MessageTypeTest, MidiSppRoundTripAndInputValidation) {
+    MidiClockEventMessage original(MIDI_CLK_SPP, 1, 65535, 0, 16383), parsed;
+    ASSERT_TRUE(IsValidMidiClockEvent(original));
+    ASSERT_GT(
+        ProtocolHandler::CreatePacket(
+            buffer_.data(), buffer_.size(), MSG_MIDI_CLOCK_EVENT, &original, sizeof(original)),
+        0u);
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_MIDI_CLOCK_EVENT, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.spp_beats16, 16383);
+    EXPECT_EQ(parsed.tick_seq, 65535);
+    original.spp_beats16 = 16384;
+    EXPECT_FALSE(IsValidMidiClockEvent(original));
+    original.spp_beats16 = 0;
+    original.source = 2;
+    EXPECT_FALSE(IsValidMidiClockEvent(original));
+    original.source = 0;
+    original.reserved = 1;
+    EXPECT_FALSE(IsValidMidiClockEvent(original));
+    original.reserved = 0;
+    original.esp_delta_us = 1;
+    EXPECT_FALSE(IsValidMidiClockEvent(original));
+    original.esp_delta_us = 0;
+    original.event = 255;
+    EXPECT_FALSE(IsValidMidiClockEvent(original));
+}

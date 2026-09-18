@@ -60,9 +60,44 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
         lv_obj_add_flag(tiles_[i].bar_track, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(tiles_[i].knob, LV_OBJ_FLAG_HIDDEN);
     }
+    const int controls_x = UI_MARGIN_X + 3 * (width + UI_GUTTER);
+    const int button_width = (width - UI_GUTTER) / 2;
+    clock_button_ = lv_button_create(root_);
+    stop_button_ = lv_button_create(root_);
+    for (auto* button: {clock_button_, stop_button_}) {
+        ui_theme_apply_button_style(button, false);
+        lv_obj_set_style_shadow_width(button, 0, 0);
+        lv_obj_set_size(button, button_width, UI_SEQ_DETAIL_HEIGHT / 2);
+    }
+    lv_obj_set_pos(clock_button_, controls_x, UI_SEQ_DETAIL_TOP);
+    lv_obj_set_pos(stop_button_, controls_x + button_width + UI_GUTTER, UI_SEQ_DETAIL_TOP);
+    clock_label_ = lv_label_create(clock_button_);
+    lv_obj_set_style_text_font(clock_label_, UI_FONT_SMALL, 0);
+    lv_obj_center(clock_label_);
+    auto* stop_label = lv_label_create(stop_button_);
+    lv_label_set_text(stop_label, "Stop");
+    lv_obj_set_style_text_font(stop_label, UI_FONT_SMALL, 0);
+    lv_obj_center(stop_label);
+    lv_obj_add_event_cb(
+        clock_button_,
+        [](lv_event_t* event) {
+            auto* page = static_cast<UISequencerPage*>(lv_event_get_user_data(event));
+            page->clockSource(page->settings_.clock_source == SEQ_CLOCK_MIDI ? SEQ_CLOCK_INTERNAL
+                                                                             : SEQ_CLOCK_MIDI);
+        },
+        LV_EVENT_CLICKED,
+        this);
+    lv_obj_add_event_cb(
+        stop_button_,
+        [](lv_event_t* event) {
+            static_cast<UISequencerPage*>(lv_event_get_user_data(event))->stop();
+        },
+        LV_EVENT_CLICKED,
+        this);
     status_ = lv_label_create(root_);
     ui_theme_apply_label_style(status_, false);
-    lv_obj_set_pos(status_, UI_MARGIN_X + 3 * (width + UI_GUTTER), UI_SEQ_DETAIL_TOP);
+    lv_obj_set_pos(
+        status_, controls_x, UI_SEQ_DETAIL_TOP + UI_SEQ_DETAIL_HEIGHT / 2 + UI_PADDING_SMALL);
     lv_obj_set_width(status_, width);
     lv_obj_set_style_text_font(status_, UI_FONT_SMALL, 0);
     lv_label_set_long_mode(status_, LV_LABEL_LONG_WRAP);
@@ -250,12 +285,21 @@ void UISequencerPage::render() {
     if (!root_)
         return;
     char value[192];
+    const bool midi = settings_.clock_source == SEQ_CLOCK_MIDI;
+    text(clock_label_, midi ? "MIDI" : "Internal");
+    const bool can_change_clock =
+        link_alive_ && settings_.valid && !playhead_.playing && !model_.ReadOnly();
+    if (can_change_clock)
+        lv_obj_remove_state(clock_button_, LV_STATE_DISABLED);
+    else
+        lv_obj_add_state(clock_button_, LV_STATE_DISABLED);
+    if (link_alive_ && settings_.valid)
+        lv_obj_remove_state(stop_button_, LV_STATE_DISABLED);
+    else
+        lv_obj_add_state(stop_button_, LV_STATE_DISABLED);
+    const auto bpm = midi ? playhead_.measured_bpm_x100 : settings_.tempo_bpm_x100;
     if (!locks_mode_) {
-        std::snprintf(value,
-                      sizeof(value),
-                      "%u.%02u",
-                      settings_.tempo_bpm_x100 / 100,
-                      settings_.tempo_bpm_x100 % 100);
+        std::snprintf(value, sizeof(value), "%u.%02u", bpm / 100, bpm % 100);
         tileText(tiles_[0], value);
         std::snprintf(value, sizeof(value), "%u", settings_.swing);
         tileText(tiles_[1], value);
@@ -374,10 +418,14 @@ void UISequencerPage::render() {
                       trackDisplayNumber(getCurrentTrack()),
                       selected_step_ + 1,
                       !link_alive_         ? "Audio engine disconnected"
-                      : clear_armed_       ? "Clear this Track's steps? Choose Confirm or Cancel."
-                      : model_.ReadOnly()  ? "Song playing: stop Song to edit Patterns"
+                      : clear_armed_       ? "Confirm clear?"
+                      : model_.ReadOnly()  ? "Stop Song to edit"
                       : !model_.AllReady() ? "Reading pattern..."
-                                           : "Tap steps; drag values. Notes 60-75 play Pads 1-16.");
+                      : midi               ? (playhead_.sync_state == 2   ? "Clock locked"
+                                              : playhead_.sync_state == 3 ? "Freewheel"
+                                              : playhead_.sync_state == 1 ? "Acquiring clock"
+                                                                          : "Waiting for clock")
+                                           : "Internal clock");
         text(status_, value);
     }
     if (locks_mode_)
@@ -389,7 +437,7 @@ void UISequencerPage::render() {
         for (uint8_t i = 0; i < 7; ++i) {
             text(tiles_[i].label, labels[i]);
             if (i < 6)
-                text(tiles_[i].unit, units[i]);
+                text(tiles_[i].unit, i == 0 && midi ? "BPM MIDI" : units[i]);
         }
     }
     char context[sizeof(context_)];
@@ -468,6 +516,8 @@ void UISequencerPage::adjust(uint8_t parameter, int delta) {
         return;
     }
     if (parameter == 0) {
+        if (settings_.clock_source == SEQ_CLOCK_MIDI)
+            return;
         const int bpm =
             std::clamp(static_cast<int>(settings_.tempo_bpm_x100) + delta * 100, 2000, 30000);
         if (inter_mcu_send_seq_transport({SEQ_TRANSPORT_CONFIGURE,
@@ -619,8 +669,33 @@ void UISequencerPage::renderLocks() {
                   value,
                   !link_alive_ ? "Audio engine disconnected"
                   : !ready     ? "Reading step..."
-                               : "Drag Slot, Parameter, then Value. * marks a locked step.");
+                               : "* marks a locked step");
     text(status_, status);
+}
+bool UISequencerPage::clockSource(uint8_t source) {
+    if (!link_alive_ || !settings_.valid || playhead_.playing || model_.ReadOnly() ||
+        source > SEQ_CLOCK_MIDI)
+        return false;
+    if (inter_mcu_send_seq_transport({SEQ_TRANSPORT_STOP,
+                                      source,
+                                      settings_.input_mode,
+                                      settings_.quantize,
+                                      settings_.tempo_bpm_x100,
+                                      0}) != ESP_OK)
+        return false;
+    settings_.valid = 0;  // wait for authoritative source readback before another command
+    model_.Invalidate();
+    requestRow(0);
+    return true;
+}
+void UISequencerPage::stop() {
+    if (link_alive_ && settings_.valid)
+        inter_mcu_send_seq_transport({SEQ_TRANSPORT_STOP,
+                                      settings_.clock_source,
+                                      settings_.input_mode,
+                                      settings_.quantize,
+                                      settings_.tempo_bpm_x100,
+                                      0});
 }
 void UISequencerPage::transport() {
     if (!link_alive_ || !model_.AllReady())
@@ -729,7 +804,9 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
         keys[2] = {"Lock -", [this] { adjustLock(4, -1); }, lock_slot_ > 0, "First lock"};
         keys[3] = {"Lock +", [this] { adjustLock(4, 1); }, lock_slot_ < 3, "Last lock"};
         keys[4] = {"Clear lock", [this] { setLock(0, 0); }, editable(), "Reading step"};
-        keys[5] = {playhead_.playing ? "Stop" : "Play",
+        keys[5] = {playhead_.playing                          ? "Stop"
+                   : settings_.clock_source == SEQ_CLOCK_MIDI ? "Arm"
+                                                              : "Play",
                    [this] { transport(); },
                    ready,
                    "Waiting for the audio engine"};
@@ -745,7 +822,9 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
         keys[2] = {"Confirm", [this] { clearRow(); }, ready, "Waiting for the audio engine"};
         return keys;
     }
-    keys[1] = {playhead_.playing ? "Stop" : "Play",
+    keys[1] = {playhead_.playing                          ? "Stop"
+               : settings_.clock_source == SEQ_CLOCK_MIDI ? "Arm"
+                                                          : "Play",
                [this] { transport(); },
                ready,
                "Waiting for the audio engine"};
@@ -840,6 +919,9 @@ size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "seqpage", model_.FirstStep() + 1);
     len = AppendKvInt(out, cap, len, "seqlen", settings_.length);
     len = AppendKvInt(out, cap, len, "seqtempo", settings_.tempo_bpm_x100);
+    len = AppendKvInt(out, cap, len, "seqclock", settings_.clock_source);
+    len = AppendKvInt(out, cap, len, "seqsync", playhead_.sync_state);
+    len = AppendKvInt(out, cap, len, "seqmeasured", playhead_.measured_bpm_x100);
     len = AppendKvInt(out, cap, len, "seqswing", settings_.swing);
     uint16_t bits = 0;
     if (model_.Ready(selectedRow())) {
@@ -888,8 +970,13 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
                       static_cast<long>((area.y1 + area.y2) / 2));
         return true;
     }
-    if (count == 3 && locks_mode_ && std::strcmp(verb, "LOCK") == 0 && a >= 0 && a <= 255 &&
-        b >= 0 && b <= 65535) {
+    if (count == 2 && std::strcmp(verb, "CLOCK") == 0 && a >= 0 && a <= 1) {
+        if (!clockSource(static_cast<uint8_t>(a)))
+            return false;
+    } else if (count == 1 && std::strcmp(verb, "STOP") == 0 && link_alive_ && settings_.valid) {
+        stop();
+    } else if (count == 3 && locks_mode_ && std::strcmp(verb, "LOCK") == 0 && a >= 0 && a <= 255 &&
+               b >= 0 && b <= 65535) {
         if (!setLock(static_cast<uint8_t>(a), static_cast<uint16_t>(b)))
             return false;
     } else if (count == 2 && locks_mode_ && std::strcmp(verb, "SLOT") == 0 && a >= 1 && a <= 4) {

@@ -75,7 +75,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× RV112FF 20 kΩ endless pots via MCP3208 | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3208 driver/calibration/bindings implemented (2.P.4), HV-013 open |
 | LEDs | 2× TLC5947 chained, temporary | SPI2 DMA, `panel_task` only | implemented (2.P.3), HV-012 open; chip-independent frames, PCA9956B stub for later board |
-| MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB note input implemented; clock/transport output ports and route implemented (2.P.5), HV-014 open; Daisy clock generation/external-clock ingest pending |
+| MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB note input implemented; clock/transport output ports and route implemented (2.P.5), HV-014 open; Daisy clock generation, external-clock ingest and SPP implemented; physical sync unverified |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
 | Multi-out DAC | PCM1690 8-ch | SAI2 TDM-8 + I2C control | planned (Phase: analog voice board) |
@@ -484,8 +484,8 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 1. **Sequencer integration**: the scheduler drives sample-offset triggers
    through prepared immutable zones. The touch grid edits each step's note
-   and velocity; MIDI clock out, parameter-lock application, persistence and
-   the full hardware Phase 2 gate remain open.
+   and velocity; clock sync/SPP, parameter locks and persistence are implemented.
+   The full hardware Phase 2 gate remains open.
 2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
    while streamed playback remains a singleton path outside `VoiceManager`.
 3. **Sampler Instrument workflow**: the Zone model, SFZ import, the shared
@@ -505,8 +505,8 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    fixes are implemented for the opt-in experiment. The remaining production
    hardware gates are in `spi-notes.md`. UART is the transport of record (§4.4).
 8. **MIDI**: DIN/USB input forwarding reaches the Daisy note path, pending
-   hardware verification; MIDI clock in/out and tempo-following integration
-   remain open for the Phase 2 gate.
+   hardware verification; MIDI clock in/out, SPP and tempo-following are
+   implemented, with the physical timing gate still open.
 9. **Persistence**: the WXCF container exists, but Instrument (`.wxi`), Bank
    (`.wxb`) and Project serializers plus atomic kit/Pattern/Song save and
    reload are not implemented.

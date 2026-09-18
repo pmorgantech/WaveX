@@ -78,7 +78,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-011 | Keypad interrupt and recovery | Blocked | Firmware/host checks; physical matrix and INT wiring needed |
 | HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
-| HV-014 | MIDI ports and clock serialization | Blocked | Port code/host checks; wiring, enumeration, latency and end-to-end clock work open |
+| HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
 
 ## HV-001 — SD card formatting
 
@@ -582,7 +582,7 @@ revision, host and USB negotiated speed. Never infer port wiring from this doc.
 - [ ] **014b — Input notes:** Send notes/chords, velocity-zero NoteOn, explicit
   NoteOff and running status over DIN and USB. Verify selected Track MIDI input
   routing, including Off/Omni, sustained input, no spurious notes while idle and
-  no regressions with both ports active. This does not test external clock ingest.
+  no regressions with both ports active. External clock ingest is exercised separately in 014f.
 - [ ] **014c — Output bytes:** With a MIDI monitor/analyzer attached, send console
   commands such as `WAVEX-DBG 1 MIDIOUT USB START`, `WAVEX-DBG 2 MIDIOUT USB CLOCK`,
   `WAVEX-DBG 3 MIDIOUT USB SPP 16383`, `WAVEX-DBG 4 MIDIOUT USB CONTINUE`, and
@@ -605,12 +605,41 @@ revision, host and USB negotiated speed. Never infer port wiring from this doc.
   queue high-water observations, loss counters and Daisy underruns. No audio or
   UI regression; any clock jitter concern is measured before choosing a different
   hardware output owner. Console command round trips are not latency evidence.
-- [ ] **014f — End-to-end clock (blocked on implementation):** Once Daisy clock
-  event generation and ESP32 timestamped input/source selection exist, verify
-  24 PPQN, Start/Continue/Stop/SPP behavior, tempo changes, tick loss and source
-  switching. Run the ten-minute DAW drift test from the MIDI-sync design and the
-  full Phase 2 gate. Port loopback or injected events cannot close this check.
+- [ ] **014f — End-to-end clock (implemented, unrun):** In Sequencer select
+  Internal; capture 24 PPQN at 20/120/300 BPM through both ports. Change tempo
+  during playback and verify continuity. Stop must halt output. Select MIDI,
+  press Arm, then send Start without Clock: no step may sound until the
+  first Clock. Repeat with SPP 0, 8, 32 and 16383 followed by Continue. Verify
+  the corresponding Pattern step for different lengths/scales; no earlier notes
+  or retriggers may replay. SPP alone must stay silent. Repeat with a multi-section
+  Song, seeking inside a repeated section and beyond the end, with looping both
+  off and on. External Stop retains the paused Song; local Stop releases it and
+  cancels the arm. Local Stop must work without any incoming clock.
+  Supply simultaneous different DIN/USB tempos: only the first selected source
+  may control the session. Re-arm to select the other source. Exercise duplicate,
+  missing, grouped and out-of-order Clock delivery, a 300-ms dropout, tempo ramps,
+  peer reboot and USB reconnect. MIDI-follow mode must not echo clocks.
+  Run a ten-minute audio capture against the DAW metronome: drift within ±3 ms,
+  no audible drift/breathing; record start offset separately. Repeat under
+  display, panel and SD/save load. Port loopback/injected events cannot close
+  this test or the full Phase 2 gate.
+- [ ] **014g — Panel and callback checkpoint:** Confirm the Internal/MIDI and
+  Stop buttons fit and respond after page exit/re-entry. Measured BPM and
+  acquiring/locked/freewheel status must agree with the master. Idle polls and
+  unchanged replies must not cause full-screen redraws; record RENDER/sysmon
+  mean/peak and submitted pixels using the UI profiling guide. Compare DWT
+  callback/control-tick mean/peak against the preceding image under the same
+  stereo/mono voice, modulation, lock, SD and UI workload. Include maximum SPP
+  seeks into a 128-section Song, busy MIDI input, dropped clocks, Start/Stop and
+  full output queues. Record dated paired image hashes, callback cost and zero
+  underruns using the performance guide's acceptance thresholds. Host tests
+  and successful firmware builds do not establish real-time headroom.
 
 **Pass:** Record date, both image identities and monitor/scope/audio evidence for
 all applicable checks. Partial port validation remains partial; 014f and the
-Phase 2 gate stay open until end-to-end implementation and measurement exist.
+Phase 2 gate stay open until the required physical measurements pass.
+
+**2026-09-17 software checkpoint:** Clock input/output, source selection, SPP
+Pattern/Song seeking and UI controls implemented. Parser/queue/protocol and
+transport/follower host tests added or updated. No board flashed and no new
+hardware result recorded; all checks above remain open.

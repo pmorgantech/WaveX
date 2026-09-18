@@ -34,6 +34,8 @@ typedef void (*wavex_cv_cal_cb_t)(const WaveX::Protocol::CvCalMessage& cal, void
 void inter_mcu_set_cv_cal_listener(wavex_cv_cal_cb_t cb, void* user_data);
 void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal);
 
+esp_err_t inter_mcu_send_midi_clock(const WaveX::Protocol::MidiClockEventMessage& message);
+
 // Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
 

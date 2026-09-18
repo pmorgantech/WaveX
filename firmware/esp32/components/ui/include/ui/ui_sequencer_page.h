@@ -39,6 +39,8 @@ class UISequencerPage : public UIPage {
     bool edit(const WaveX::Protocol::SeqPatternOpMessage& message);
     void adjust(uint8_t parameter, int delta);
     void transport();
+    void stop();
+    bool clockSource(uint8_t source);
     void clearRow();
     // Solo is frontend-owned: it sends one MIX_OP_SET_SOLO_MASK so the
     // engine never passes through a wrong intermediate mute set. The state
@@ -75,6 +77,9 @@ class UISequencerPage : public UIPage {
     lv_obj_t* row_labels_[4]{};
     uint8_t drawn_rows_[4]{};
     lv_obj_t* status_ = nullptr;
+    lv_obj_t* clock_button_ = nullptr;
+    lv_obj_t* clock_label_ = nullptr;
+    lv_obj_t* stop_button_ = nullptr;
     lv_timer_t* timer_ = nullptr;
     ValueTile tiles_[7]{};
     WaveX::Protocol::SeqPatternSyncMessage settings_{};

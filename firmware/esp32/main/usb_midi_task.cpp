@@ -16,7 +16,12 @@
 #include "usb_midi_task.h"
 
 #include "config/hardware_config.h"
+#include "esp_timer.h"
+#include "inter_mcu.h"
 #include "midi_out.h"
+
+#include "midi/clock_input.hpp"
+#include "midi/event_ring.hpp"
 
 #if WAVEX_ESP_USB_MIDI_ENABLED && (WAVEX_USB_MIDI_INPUT_ENABLED || WAVEX_USB_MIDI_OUTPUT_ENABLED)
 
@@ -41,6 +46,34 @@ static std::atomic<bool> s_usb_midi_running{false};
 static bool s_driver_installed = false;
 static StaticSemaphore_t s_rx_signal_storage;
 static SemaphoreHandle_t s_rx_signal = nullptr;
+
+struct RxChunk {
+    uint32_t at_us = 0, generation = 0, sequence = 0;
+    uint8_t size = 0;
+    uint8_t bytes[64]{};
+};
+// TinyUSB callback is the sole producer, USB worker is the sole consumer.
+static WaveX::Midi::EventRing<RxChunk, 16> s_rx_chunks;
+static std::atomic<uint32_t> s_usb_generation{0};
+static uint32_t s_rx_sequence = 0;  // TinyUSB producer only
+static void usb_device_event(tinyusb_event_t*, void*) {
+    s_usb_generation.fetch_add(1);
+}
+// esp_tinyusb owns configured lifecycle callbacks. Older configurations leave
+// suspend/resume to TinyUSB's weak hooks, so cover those without redefining
+// the wrapper's mount/unmount functions.
+#ifndef CONFIG_TINYUSB_SUSPEND_CALLBACK
+extern "C" void tud_suspend_cb(bool remote_wakeup) {
+    (void)remote_wakeup;
+    s_usb_generation.fetch_add(1);
+}
+#endif
+#ifndef CONFIG_TINYUSB_RESUME_CALLBACK
+extern "C" void tud_resume_cb() {
+    s_usb_generation.fetch_add(1);
+}
+
+#endif
 
 // --- TinyUSB descriptors (tusb_midi example layout) ---
 
@@ -109,26 +142,40 @@ static void usb_midi_task(void* arg) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // publish handle before any exit
     WaveX::Midi::StreamParser parser;
     WaveX::Midi::Event ev;
-    uint8_t buf[64];
+    WaveX::Midi::ClockInput clock(1);
+    uint32_t generation = s_usb_generation.load(), sequence = 0;
     bool connected_before = false;
     ESP_LOGI(TAG, "USB MIDI I/O running");
     while (s_usb_midi_running) {
         const bool connected = tud_mounted() && !tud_suspended();
-        if (connected != connected_before)
+        const auto current_generation = s_usb_generation.load();
+        if (connected != connected_before || generation != current_generation) {
             parser.Reset();
+            clock.Reset();
+            wavex_midi::Ready(wavex_midi::Port::Usb, false);
+        }
+        generation = current_generation;
         connected_before = connected;
         wavex_midi::Ready(wavex_midi::Port::Usb, connected && WAVEX_USB_MIDI_OUTPUT_ENABLED);
-        // Always drain OUT, even in output-only builds. Bound each pass so
-        // host floods cannot starve output or the shutdown handshake.
-        const auto count = tud_midi_stream_read(buf, sizeof(buf));
+        RxChunk chunk;
+        for (unsigned pass = 0; pass < 4 && s_rx_chunks.Pop(chunk); ++pass) {
+            if (chunk.sequence != sequence + 1) {
+                parser.Reset();
+                clock.Reset();
+            }
+            sequence = chunk.sequence;
+            if (!connected || chunk.generation != generation)
+                continue;
 #if WAVEX_USB_MIDI_INPUT_ENABLED
-        for (uint32_t i = 0; i < count; ++i)
-            if (connected && parser.Feed(buf[i], ev))
-                midi_forward_event(ev);
-#else
-        (void)count;
-        (void)ev;
+            for (uint8_t i = 0; i < chunk.size; ++i) {
+                WaveX::Protocol::MidiClockEventMessage message;
+                if (clock.Feed(chunk.bytes[i], chunk.at_us, message))
+                    inter_mcu_send_midi_clock(message);
+                if (parser.Feed(chunk.bytes[i], ev))
+                    midi_forward_event(ev);
+            }
 #endif
+        }
 #if WAVEX_USB_MIDI_OUTPUT_ENABLED
         WaveX::Midi::ClockPacket packet;
         if (connected && wavex_midi::Take(wavex_midi::Port::Usb, packet)) {
@@ -147,7 +194,20 @@ static void usb_midi_task(void* arg) {
 
 extern "C" void tud_midi_rx_cb(uint8_t itf) {
     (void)itf;
-    // Installed only after the permanent semaphore has been initialized.
+    // Timestamp at reception, before worker/link batching. All bytes within a
+    // USB transfer share this timestamp; zero-spaced clocks are not fabricated
+    // into artificial intervals by the follower.
+    RxChunk chunk;
+    chunk.at_us = static_cast<uint32_t>(esp_timer_get_time());
+    chunk.generation = s_usb_generation.load();
+    for (unsigned pass = 0; pass < 8; ++pass) {
+        const auto count = tud_midi_stream_read(chunk.bytes, sizeof(chunk.bytes));
+        if (!count)
+            break;
+        chunk.size = static_cast<uint8_t>(count);
+        chunk.sequence = ++s_rx_sequence;
+        s_rx_chunks.Push(chunk);
+    }
     xSemaphoreGive(s_rx_signal);
 }
 
@@ -162,7 +222,9 @@ extern "C" esp_err_t usb_midi_task_start(void) {
         s_rx_signal = xSemaphoreCreateBinaryStatic(&s_rx_signal_storage);
     if (!s_rx_signal)
         return ESP_ERR_NO_MEM;
+    s_rx_chunks.Init();
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    tusb_cfg.event_cb = usb_device_event;
     tusb_cfg.descriptor.string = s_str_desc;
     tusb_cfg.descriptor.string_count = sizeof(s_str_desc) / sizeof(s_str_desc[0]);
     tusb_cfg.descriptor.full_speed_config = s_midi_fs_cfg_desc;

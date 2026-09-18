@@ -133,6 +133,38 @@ class SequencerScheduler {
         }
     }
 
+    // Relocate without replaying prior notes/retriggers. The frame epoch restarts
+    // at this control block, while musical position remains absolute.
+    void Seek(double tick, double pattern_origin = 0) {
+        Start();
+        tick_anchor_ = std::max(0.0, tick);
+        pattern_origin_tick_ = pattern_origin;
+        // Preserve Start's first-downbeat clamp for negative microtiming.
+        if (!pattern_ || (tick_anchor_ == 0 && pattern_origin == 0))
+            return;
+        const auto interval = StepIntervalTicks(pattern_->scale);
+        const uint64_t grid =
+            static_cast<uint64_t>(std::max(0.0, tick_anchor_ - pattern_origin) / interval);
+        playhead_step_ = static_cast<uint8_t>(grid % PatternLength());
+        playhead_loop_ = static_cast<uint32_t>(grid / PatternLength());
+        for (uint8_t t = 0; t < kMaxTracks; ++t) {
+            auto step = playhead_step_;
+            auto loop = playhead_loop_;
+            // At most one pattern traversal; never replay elapsed steps.
+            for (uint8_t n = 0; n < kMaxSteps; ++n) {
+                if (ComputeTriggerTick(t, step, loop) >= tick_anchor_)
+                    break;
+                if (++step >= PatternLength()) {
+                    step = 0;
+                    ++loop;
+                }
+            }
+            RescheduleTrack(t, step, loop);
+        }
+    }
+    double PositionTicks() const { return CurrentTick(); }
+    double BlockEndTick() const { return CurrentTick() + block_size_ / frames_per_tick_; }
+
     void Stop() {
         playing_ = false;
         queued_pattern_ = nullptr;

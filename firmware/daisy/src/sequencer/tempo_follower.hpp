@@ -76,6 +76,8 @@ class TempoFollower {
         use_midi_ = use_midi;
         if (use_midi_) {
             ResetAcquisition();
+            state_ = SyncLockState::Unlocked;
+            effective_bpm_ = nominal_bpm_;
         } else {
             state_ = SyncLockState::Unlocked;
             effective_bpm_ = nominal_bpm_;
@@ -84,12 +86,8 @@ class TempoFollower {
 
     bool UsingMidiSync() const { return use_midi_; }
 
-    // MIDI Start: establishes Φ=0 as the downbeat. Simplification versus a
-    // literal reading of the MIDI spec (where the *following* clock byte
-    // is the true downbeat): this class resets phase immediately rather
-    // than deferring the reset to the next OnMidiClock() call. The servo's
-    // own error-correction pulls in any resulting sub-tick offset within
-    // the first few clocks, which is what the servo exists to do anyway.
+    // Establish the downbeat. The transport calls this (or OnContinue) only
+    // when the first clock after a MIDI Start/Continue arrives.
     void OnStart() {
         playing_ = true;
         phase_ = 0.0;
@@ -99,6 +97,12 @@ class TempoFollower {
     }
 
     void OnStop() { playing_ = false; }
+
+    void Locate(uint16_t spp) {
+        phase_ = anchor_phase_ = static_cast<double>(spp) * 24.0;
+        clock_index_since_anchor_ = 0;
+        phase_error_ = 0;
+    }
 
     // MIDI Continue with a Song Position Pointer, in MIDI beats (16th
     // notes). Internal ticks per 16th note = kInternalPpqn/4 = 24.
@@ -116,14 +120,22 @@ class TempoFollower {
     // call (a dropped byte), pass the count in `clocks_elapsed` so the
     // period estimate divides out the gap correctly instead of reading a
     // sudden tempo change.
-    void OnMidiClock(uint32_t esp_delta_us, uint16_t clocks_elapsed = 1) {
+    void OnMidiClock(uint32_t esp_delta_us,
+                     uint16_t clocks_elapsed = 1,
+                     bool per_tick_interval = false) {
         if (!use_midi_)
             return;
         if (clocks_elapsed == 0)
             clocks_elapsed = 1;
-        const double delta =
-            static_cast<double>(esp_delta_us) / static_cast<double>(clocks_elapsed);
+        const double delta = static_cast<double>(esp_delta_us) /
+                             (per_tick_interval ? 1.0 : static_cast<double>(clocks_elapsed));
         last_clock_frame_ = frame_counter_;
+        // First/batched clocks still carry position, but no usable period.
+        if (delta < 3800.0 || delta > 2500000.0) {
+            if (state_ == SyncLockState::Locked)
+                clock_index_since_anchor_ += clocks_elapsed;
+            return;
+        }
 
         if (state_ == SyncLockState::Unlocked) {
             ResetAcquisition();
@@ -183,7 +195,7 @@ class TempoFollower {
 
         // Phase servo: how far is our free-running phase from where this
         // clock "should" be, given the anchor established at lock time?
-        ++clock_index_since_anchor_;
+        clock_index_since_anchor_ += clocks_elapsed;
         const double expected_phase =
             anchor_phase_ +
             kInternalTicksPerMidiClock * static_cast<double>(clock_index_since_anchor_);

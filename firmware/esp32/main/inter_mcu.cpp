@@ -1187,6 +1187,14 @@ esp_err_t inter_mcu_send_mix_op(uint8_t op, uint8_t track, uint16_t value) {
                : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_midi_clock(const WaveX::Protocol::MidiClockEventMessage& message) {
+    if (!WaveX::Protocol::IsValidMidiClockEvent(message))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_MIDI_CLOCK_EVENT, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage& message) {
     return send_link_message(WaveX::Protocol::MSG_SEQ_TRANSPORT, &message, sizeof(message)) >= 0
                ? ESP_OK

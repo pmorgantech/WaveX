@@ -80,7 +80,7 @@ TEST_F(SongPlaybackTest, LoopSeekAndPatternEditsHaveExplicitLifetimes) {
     EXPECT_EQ(transport.pattern().tracks[0].steps[0].note, 99);
     EXPECT_EQ(project->patterns[1].pattern.tracks[0].steps[0].note, 61);
 }
-TEST_F(SongPlaybackTest, MidiArmStartsAtFirstSectionAndStopReturnsOwnership) {
+TEST_F(SongPlaybackTest, MidiStopPausesAndLocalStopReturnsOwnership) {
     transport.ApplyTransport(
         {SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0});
     Start();
@@ -93,10 +93,19 @@ TEST_F(SongPlaybackTest, MidiArmStartsAtFirstSectionAndStopReturnsOwnership) {
     clock.event = MIDI_CLK_START;
     transport.OnMidiClock(clock);
     Block(events);
+    EXPECT_TRUE(events.empty());
+    clock.event = MIDI_CLK_TICK;
+    clock.tick_seq = 1;
+    transport.OnMidiClock(clock);
+    Block(events);
     ASSERT_EQ(events.size(), 1u);
     EXPECT_EQ(events[0].frame, 0u);
     clock.event = MIDI_CLK_STOP;
     transport.OnMidiClock(clock);
+    Block(events);
+    EXPECT_TRUE(transport.SongActive());
+    EXPECT_TRUE(transport.IsArmed());
+    exchange.StopSong();
     Block(events);
     EXPECT_FALSE(transport.SongActive());
     EXPECT_FALSE(transport.IsArmed());
@@ -120,4 +129,41 @@ TEST_F(SongPlaybackTest, LastSectionOfFullArrangementAndMaximumRepeatAreBounded)
     EXPECT_EQ(events.back().note, 61);
     EXPECT_FALSE(transport.SongActive());
     EXPECT_EQ((exchange.SongPosition() >> 8) & 0x7f, 127u);
+}
+
+TEST_F(SongPlaybackTest, SppLocatesSectionAndRemainingRepeats) {
+    transport.ApplyTransport({SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_MIDI, 0, 0, 12300, 0});
+    Start();
+    transport.OnMidiClock({MIDI_CLK_SPP, 0, 0, 0, 3});  // second repeat of section 2
+    transport.OnMidiClock({MIDI_CLK_CONTINUE, 0, 0, 0, 0});
+    transport.OnMidiClock({MIDI_CLK_TICK, 0, 1, 0, 0});
+    std::vector<TriggerEvent> events;
+    for (int i = 0; i < 1000 && transport.SongActive(); ++i)
+        Block(events);
+    ASSERT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].note, 61);
+    EXPECT_EQ(events[1].note, 61);
+    EXPECT_FALSE(transport.SongActive());
+}
+
+TEST_F(SongPlaybackTest, SppAtEndStopsFiniteSongAndWrapsLoopingSong) {
+    transport.ApplyTransport({SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_MIDI, 0, 0, 12300, 0});
+    Start(true);
+    transport.OnMidiClock({MIDI_CLK_SPP, 0, 0, 0, 8});  // length 5: section 2 repeat 2
+    transport.OnMidiClock({MIDI_CLK_CONTINUE, 0, 0, 0, 0});
+    transport.OnMidiClock({MIDI_CLK_TICK, 0, 1, 0, 0});
+    std::vector<TriggerEvent> events;
+    Block(events);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].note, 61);
+    EXPECT_EQ((transport.SongPosition() >> 16) & 255, 2u);
+    exchange.StopSong();
+    Block(events);
+    exchange.Retire();
+    Start();
+    transport.OnMidiClock({MIDI_CLK_SPP, 0, 1, 0, 5});
+    transport.OnMidiClock({MIDI_CLK_CONTINUE, 0, 1, 0, 0});
+    transport.OnMidiClock({MIDI_CLK_TICK, 0, 2, 0, 0});
+    EXPECT_FALSE(transport.SongActive());
+    EXPECT_FALSE(transport.IsPlaying());
 }

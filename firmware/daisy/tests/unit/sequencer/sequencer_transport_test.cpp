@@ -262,10 +262,8 @@ TEST(SequencerTransportTest, TempoIsClampedToOneBpmMinimum) {
     EXPECT_DOUBLE_EQ(t.TempoBpm(), 1.0) << "tempo_bpm_x100 = 0 must clamp, not stop time";
 }
 
-// CONTINUE in internal mode restarts from the top (documented limitation:
-// no native mid-pattern resume in the scheduler core yet). Pinning it keeps
-// the eventual real resume an intentional change.
-TEST(SequencerTransportTest, InternalContinueRestartsFromStepZero) {
+// SPP is measured in sixteenths, independently of the Pattern scale.
+TEST(SequencerTransportTest, InternalContinueLocatesRequestedPosition) {
     auto t = MakeTransport();
     t.pattern().length = 4;
     t.pattern().scale = StepScale::Quarter;
@@ -284,13 +282,13 @@ TEST(SequencerTransportTest, InternalContinueRestartsFromStepZero) {
     EXPECT_TRUE(t.IsPlaying());
     auto events = RunTicks(t, 10);
     ASSERT_FALSE(events.empty());
-    EXPECT_EQ(events[0].step, 0) << "internal CONTINUE restarts at step 0";
+    EXPECT_EQ(events[0].step, 2) << "SPP 8 is quarter-note step 2";
     EXPECT_EQ(events[0].frame, 0u) << "and the downbeat fires immediately";
 }
 
 // CONTINUE in MIDI mode arms (like PLAY) and starts on the master's
 // MIDI CONTINUE, not by itself.
-TEST(SequencerTransportTest, MidiContinueArmsAndStartsOnClockContinue) {
+TEST(SequencerTransportTest, MidiContinueWaitsForFirstClockAtSpp) {
     auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
@@ -302,7 +300,10 @@ TEST(SequencerTransportTest, MidiContinueArmsAndStartsOnClockContinue) {
     EXPECT_FALSE(t.IsPlaying());
 
     // MIDI CONTINUE with SPP 8 (sixteenths) = 8 * 24 internal ticks.
-    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_CONTINUE, 0, 0, 0, /*spp_beats16=*/8));
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_SPP, 0, 0, 0, 8));
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_CONTINUE, 0, 0, 0, 0));
+    EXPECT_FALSE(t.IsPlaying());
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_TICK, 0, 1, 0, 0));
     EXPECT_TRUE(t.IsPlaying());
     EXPECT_FALSE(t.IsArmed());
     EXPECT_DOUBLE_EQ(t.follower().PhaseTicks(), 8.0 * 24.0);
@@ -360,7 +361,7 @@ TEST(SequencerTransportTest, PlayheadReportsStepAndBpm) {
 
 // ---- MIDI-slave transport ----
 
-TEST(SequencerTransportTest, MidiPlayArmsAndStartsOnMidiStart) {
+TEST(SequencerTransportTest, MidiPlayWaitsForClockAfterStart) {
     auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
@@ -376,8 +377,10 @@ TEST(SequencerTransportTest, MidiPlayArmsAndStartsOnMidiStart) {
     RunTicks(t, 10);
     EXPECT_FALSE(t.IsPlaying());
 
-    // MIDI START begins playback.
+    // MIDI START prepares playback; the next clock is the downbeat.
     t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_START, 0, 0, 0, 0));
+    EXPECT_FALSE(t.IsPlaying());
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_TICK, 0, 1, 0, 0));
     EXPECT_TRUE(t.IsPlaying());
     EXPECT_FALSE(t.IsArmed());
 }
@@ -436,4 +439,143 @@ TEST(SequencerTransportTest, InputModeStoredFromTransport) {
     t.ApplyTransport(SeqTransportMessage(
         SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0));
     EXPECT_EQ(t.InputMode(), SEQ_INPUT_LIVE_RECORD);
+}
+
+TEST(SequencerTransportTest, InternalClockHas24PpqnAndStopWinsOverBacklog) {
+    for (uint16_t bpm: {2000, 12000, 30000}) {
+        auto t = MakeTransport();
+        t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, 0, 0, bpm, 0});
+        unsigned ticks = 0, starts = 0;
+        TriggerEvent events[32];
+        SeqClockOutMessage out;
+        for (unsigned ms = 0; ms < 60000; ++ms) {
+            t.Tick(events, 32);
+            while (t.PopClockOut(out)) {
+                ticks += out.event == MIDI_CLK_TICK;
+                starts += out.event == MIDI_CLK_START;
+            }
+        }
+        EXPECT_EQ(starts, 1u);
+        EXPECT_NEAR(ticks, bpm * 24.0 / 100, 1.0);
+        RunTicks(t, 10000);  // foreground blocked: clocks fill the ring
+        EXPECT_GT(t.ClockOutputDrops(), 0u);
+        t.ApplyTransport({SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, 0, 0, bpm, 0});
+        t.Tick(events, 32);
+        ASSERT_TRUE(t.PopClockOut(out));
+        EXPECT_EQ(out.event, MIDI_CLK_STOP);
+        EXPECT_FALSE(t.PopClockOut(out));
+    }
+}
+
+TEST(SequencerTransportTest, ContinuePublishesSppBeforeContinueAndClock) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_CONTINUE, SEQ_CLOCK_INTERNAL, 0, 0, 12000, 16383});
+    RunTicks(t, 1);
+    SeqClockOutMessage out;
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_SPP);
+    EXPECT_EQ(out.spp_beats16, 16383);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_CONTINUE);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_TICK);
+    EXPECT_FALSE(t.PopClockOut(out));
+}
+
+TEST(SequencerTransportTest, MidiSourceIsPinnedAndProjectStopDisarms) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, 0, 0, 12000, 0});
+    t.OnMidiClock({MIDI_CLK_START, 1, 0, 0, 0});
+    t.OnMidiClock({MIDI_CLK_TICK, 0, 1, 20833, 0});
+    EXPECT_FALSE(t.IsPlaying());
+    t.OnMidiClock({MIDI_CLK_TICK, 1, 1, 0, 0});
+    EXPECT_TRUE(t.IsPlaying());
+    t.OnMidiClock({MIDI_CLK_STOP, 0, 1, 0, 0});
+    EXPECT_TRUE(t.IsPlaying());
+    RunTicks(t, 50);
+    SeqClockOutMessage out;
+    EXPECT_FALSE(t.PopClockOut(out));  // never echo the master
+    t.StopForProject();
+    t.OnMidiClock({MIDI_CLK_START, 1, 1, 0, 0});
+    t.OnMidiClock({MIDI_CLK_TICK, 1, 2, 0, 0});
+    EXPECT_FALSE(t.IsPlaying());
+}
+
+TEST(SequencerTransportTest, SppContinueSkipsHistoryAndPreservesLocateAcrossDuplicateStop) {
+    auto t = MakeTransport();
+    t.pattern().length = 16;
+    for (auto& step: t.pattern().tracks[0].steps)
+        step.on = true;
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, 0, 0, 12000, 0});
+    t.OnMidiClock({MIDI_CLK_SPP, 0, 0, 0, 16383});
+    t.OnMidiClock({MIDI_CLK_STOP, 0, 0, 0, 0});
+    t.OnMidiClock({MIDI_CLK_CONTINUE, 0, 0, 0, 0});
+    EXPECT_TRUE(RunTicks(t, 10).empty());
+    t.OnMidiClock({MIDI_CLK_TICK, 0, 1, 0, 0});
+    const auto notes = RunTicks(t, 1);
+    ASSERT_EQ(notes.size(), 1u);
+    EXPECT_EQ(notes[0].step, 15);
+    EXPECT_EQ(notes[0].frame, 0u);
+    EXPECT_EQ(t.scheduler().PlayheadLoop(), 1023u);
+}
+
+TEST(SequencerTransportTest, ClockSequenceGapDoesNotDivideAdjacentInterval) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, 0, 0, 12000, 0});
+    t.OnMidiClock({MIDI_CLK_START, 0, 0, 0, 0});
+    FeedMidiClocks(t, 24, 120);
+    RunTicks(t, 42);
+    t.OnMidiClock({MIDI_CLK_TICK, 0, 25, 20833, 0});
+    EXPECT_NEAR(t.follower().MeasuredBpm(), 120, 0.1);
+    const auto phase = t.follower().PhaseErrorTicks();
+    t.OnMidiClock({MIDI_CLK_TICK, 0, 25, 10000, 0});
+    EXPECT_DOUBLE_EQ(t.follower().PhaseErrorTicks(), phase);
+}
+
+TEST(SequencerTransportTest, FailedTransportRetriesLatestStateAndContinuePair) {
+    auto t = MakeTransport();
+    SeqClockOutMessage out;
+    t.ApplyTransport({SEQ_TRANSPORT_CONTINUE, SEQ_CLOCK_INTERNAL, 0, 0, 12000, 99});
+    RunTicks(t, 1);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_SPP);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_CONTINUE);
+    t.ClockOutFailed(out);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_SPP);
+    EXPECT_EQ(out.spp_beats16, 99);
+    t.ClockOutFailed(out);
+    t.ApplyTransport({SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, 0, 0, 12000, 0});
+    RunTicks(t, 1);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_STOP);
+    t.ClockOutFailed(out);
+    ASSERT_TRUE(t.PopClockOut(out));
+    EXPECT_EQ(out.event, MIDI_CLK_STOP);
+    EXPECT_FALSE(t.PopClockOut(out));
+}
+
+TEST(SequencerTransportTest, MidiStartPreservesEarlyFirstStepAtDownbeat) {
+    auto t = MakeTransport();
+    t.pattern().tracks[0].steps[0].on = true;
+    t.pattern().tracks[0].steps[0].micro_offset = -6;
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, 0, 0, 12000, 0});
+    t.OnMidiClock({MIDI_CLK_START, 0, 0, 0, 0});
+    t.OnMidiClock({MIDI_CLK_TICK, 0, 1, 0, 0});
+    const auto events = RunTicks(t, 1);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].step, 0);
+    EXPECT_EQ(events[0].frame, 0u);
+}
+
+TEST(SequencerTransportTest, ExtremeInputTempoSaturatesWireReadback) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, 0, 0, 12000, 0});
+    t.OnMidiClock({MIDI_CLK_START, 0, 0, 0, 0});
+    for (uint16_t i = 1; i <= 10; ++i) {
+        RunTicks(t, 4);
+        t.OnMidiClock({MIDI_CLK_TICK, 0, i, 3800, 0});
+    }
+    EXPECT_EQ(t.BuildPlayhead().measured_bpm_x100, 65535);
 }

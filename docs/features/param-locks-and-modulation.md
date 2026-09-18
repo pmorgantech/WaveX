@@ -164,3 +164,15 @@ enum as retired-but-reserved and reads 0.
 - MIDI CC/channel-pressure source wiring, live lock recording, global LFO
   editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.
+
+
+### LFO rate control follow-up
+
+Requested 2026-09-17: expose Sync as a mode, with the Rate field showing Hz when
+Off and a musical duration when On (including 1/4 and 3/16). Existing per-voice
+sync divisions remain implemented; this field behavior and the 3/16 division
+are pending. Preserve the independent Hz setting across mode changes. Centralize
+the division mapping across UI, engine, wire validation and WXI serialization;
+add dotted/triplet choices deliberately without reinterpreting saved enum values.
+Use the current internal or followed tempo. Specify phase restart/SPP response
+separately from rate synchronization, and add hardware validation when implemented.

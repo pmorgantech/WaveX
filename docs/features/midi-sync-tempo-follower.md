@@ -1,124 +1,146 @@
-# MIDI Clock Sync & Tempo Follower — Design
+# MIDI clock sync and tempo follower
 
-**Status**: Mixed implementation/target design. The follower core and Daisy
-transport integration exist; ESP32 clock-out encoding, port queues and routing
-were added 2026-09-17. Daisy event generation, ESP32 timestamped ingest/source
-arbitration and full sync acceptance remain open. The design below is the target,
-not evidence that the end-to-end path works. Required for the Phase 2 gate ("MIDI-clock-synced to a DAW without audible drift over 10 minutes"). Expands `sequencer.md` §1–2.
-**Dependencies**: sequencer engine clocking core and the built ESP32 MIDI input path.
-**Placement**: MIDI real-time bytes arrive on the ESP32 (DIN UART2 / USB), are timestamped at ingest, and forwarded over the UART link. The Daisy runs the tempo follower and is always the sequencer's timing authority.
+**Status (2026-09-17):** Implemented and host-tested; physical timing and the
+Phase 2 DAW gate remain open in [HV-014](../hardware-validation.md#hv-014--midi-ports-and-clock-serialization)
+and [the roadmap](../roadmap.md). No firmware has been flashed for this change.
+DIN remains disabled until its wiring is confirmed. Configuration and pins live
+only in the [canonical headers](../../firmware/shared/config/).
 
----
+## Timing ownership
 
-## 1. The numbers (get these right — the whole design hangs off them)
+The Daisy audio-frame clock owns scheduling. The existing HAL-free scheduler
+uses double-precision musical anchors and integer frame positions; the follower
+estimates tempo and slews the scheduler rate. ESP32 tasks handle physical MIDI
+ports and forward values over the current UART inter-MCU link. No MIDI driver,
+link send, allocation or logging runs inside the audio callback.
 
-- MIDI clock = **24 PPQN**. Tick period at BPM *b*: `T_us = 60e6 / (24·b) = 2.5e6 / b`.
-  - 120 BPM → 20 833 µs (~20.8 ms), 48 ticks/s. 60 BPM → 41 667 µs. 300 BPM → 8 333 µs.
-- BPM from measured spacing: `b = 2.5e6 / T_us`.
-- Sequencer internal resolution is **96 PPQN** (`sequencer.md` §2) → exactly **4 internal ticks per MIDI clock**.
-- Tempo advance per 1 kHz control tick, 32.32 fixed point: `dphase = 96·b / 60000` internal ticks per ms (0.192 at 120 BPM). Accumulated in 64-bit; never floats (drift rule from `sequencer.md`).
+MIDI uses 24 clocks per quarter note; the scheduler uses 96 internal ticks per
+quarter. One MIDI clock therefore spans four internal ticks. SPP is a 14-bit
+count of sixteenth notes (six MIDI clocks, or 24 internal ticks per unit),
+independent of Pattern step scale. The wire definitions remain centralized in
+[`protocol.h`](../../firmware/shared/spi_protocol/protocol.h), with routes in
+[the protocol guide](inter-mcu-protocol.md). See the MIDI Association's
+[message reference](https://midi.org/expanded-midi-1-0-messages-list) and
+[system-message overview](https://midi.org/about-midi-part-3midi-messages).
 
-Link load: 48 msg/s at 120 BPM in 32 B packets ≈ 1.5 KB/s + framing — negligible at 2 Mbaud.
+## Input and clock domains
 
-## 2. The clock-domain problem (why the naive design fails)
+Each port owns a `ClockInput` parser alongside its note parser. It recognizes
+Clock, Start, Continue, Stop and complete SPP, including real-time bytes inside
+an SPP message. A new status abandons an incomplete SPP. Sequence numbers advance
+for every parsed Clock, even if subsequent inter-MCU admission fails.
 
-The ESP32's `esp_timer_get_time()` and the Daisy's audio-frame counter are **different clock domains** with independent crystal error (±tens of ppm) and no shared epoch. An ESP32 timestamp is meaningless as an absolute time on the Daisy. What each domain is good for:
+DIN timestamps bytes in the UART consumer task. USB timestamps transfers in the
+TinyUSB RX callback and hands bounded, immutable chunks to its worker through an
+SPSC ring. These are software reception timestamps, not hardware wire timestamps:
+DIN backlog and USB transfer grouping limit accuracy. No sub-millisecond ingress
+latency is claimed. USB lifecycle generations and chunk sequence gaps reset
+partial parser state; data from an old connection cannot complete a new message.
+Espressif attach/detach events use its supported
+[`event_cb` hook](https://github.com/espressif/esp-usb/blob/master/docs/device/migration-guides/v2/tinyusb.md).
 
-- **ESP32 ingest timestamps** (µs, taken in the UART event handler / USB callback, *before* any batching): differences between consecutive timestamps are a low-jitter measurement of the **master's tick period** — jitter sources upstream of them are only DIN wire time (320 µs/byte at 31 250 baud, constant) and ISR-to-task latency (~100 µs class).
-- **Daisy arrival times** (audio-frame counter captured when the link message is dispatched): jittery (link TX queue, main-loop cadence — ms class) but in the **same domain as the audio stream**, which is the only domain phase ultimately matters in.
+`esp_delta_us` is a per-clock period measured entirely in the ESP32 domain.
+Normally it is the interval between adjacent received Clock bytes. Equal USB
+batch timestamps produce zero deltas; the next distinct timestamp yields the
+mean period across the preceding group's clock count. This estimates period
+without inventing individual arrival times. The first clock after parser reset,
+Start or Continue has no period sample. Period samples below 3.8 ms or above
+2.5 seconds do not enter the estimator.
 
-**Design consequence**: estimate *period* from ESP32 timestamp deltas (precise), and servo *phase* from Daisy arrival times (noisy but unbiased — constant link latency shifts phase by a constant, which the musician cancels when nudging start alignment, and which stays constant so it never causes drift). Never mix the domains in one subtraction.
+The Daisy never subtracts an ESP32 timestamp from an audio-frame timestamp.
+Inter-MCU sequence gaps advance phase accounting by the number of missing clocks;
+they **do not divide the period again**, because the wire already carries a
+per-clock interval. Duplicate/backward clock sequences are ignored. Raw USB-ring
+loss cannot reconstruct unparsed clock bytes; a lost transport command or peer
+restart may require local Stop/re-arm and a fresh master Start.
 
-## 3. Protocol
+## Transport and source selection
 
-One message, reserved ID from the 0x50 block:
+The sequencer's Internal/MIDI button selects the source while stopped. Tempo is
+editable in Internal mode; MIDI mode displays measured BPM and lock/freewheel
+status. The Arm softkey enables MIDI following. The separate Stop button always cancels the
+arm, including while no external clock is arriving. Console `PAGE CLOCK 0|1`
+and `PAGE STOP` provide the same controls; page state includes `seqclock`,
+`seqsync` and `seqmeasured`.
 
-| Type | ID | Dir | Payload |
-|---|---|---|---|
-| MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage` |
+- Internal Play starts immediately from zero. Internal Continue locates its
+  explicit SPP and emits SPP, Continue, then the first Clock.
+- MIDI Play/Continue arms without sounding. An external Start selects zero;
+  external Continue uses the last accepted SPP or stopped sixteenth position.
+  Playback begins on the **next Clock**, not on Start/Continue itself.
+- SPP alone never plays. It is accepted while stopped and ignored while running.
+  Seeking skips elapsed notes/retriggers. A standalone Pattern wraps naturally;
+  a Song resolves the corresponding section and repeat, wrapping a looping Song
+  or stopping beyond the end of a finite Song.
+- External Stop pauses a Song while retaining its immutable Project lease, so
+  SPP/Continue can resume it. Local Stop, project replacement or source changes
+  release that lease and disarm external restart. UI edits remain read-only
+  during an externally paused Song until local Stop.
+- The first valid clock/transport event selects DIN or USB. Other-port events
+  cannot stop, reposition or retime that session. Local arm, local Stop or source
+  change releases the selection. There is no automatic failover.
+- MIDI-follow mode does not echo clocks to either output port. This prevents a
+  feedback loop when a DAW routes both directions.
 
-```cpp
-struct MidiClockEventMessage {            // packed, named ctor per protocol.h conventions
-    uint8_t  event;        // 0=CLOCK(0xF8) 1=START(0xFA) 2=CONTINUE(0xFB) 3=STOP(0xFC) 4=SPP(0xF2)
-    uint8_t  source;       // 0=DIN, 1=USB (Daisy follows one source at a time; first-active wins)
-    uint16_t tick_seq;     // wraps; gap detection for dropped CLOCK messages
-    uint32_t esp_delta_us; // µs since the PREVIOUS event from this source (0 on first/START)
-    uint16_t spp_beats16;  // SPP payload: MIDI beats (16th notes), event==SPP only
-    uint16_t reserved;
-};
-```
+Local Song starts from a selected section establish a new output-clock origin
+there. External SPP addresses the whole loaded Song from its first section.
+Continue without SPP currently resumes at the stored sixteenth boundary;
+sub-sixteenth pause preservation is not implemented. These are explicit limits,
+not sample-accurate resume claims.
 
-Sending deltas instead of absolute ESP32 timestamps bakes the clock-domain rule into the wire contract — the Daisy *cannot* misuse an absolute foreign timestamp because it never receives one. ESP32 rules: timestamp in the ingest context (per-byte RX path of `midi_task.cpp` / tinyusb callback in `usb_midi_task.cpp`), enqueue immediately, never coalesce CLOCK events.
+## Tempo follower
 
-`MSG_SEQ_TRANSPORT` (0x50, `sequencer.md` §4) gains `clock_source` (0=internal, 1=MIDI) and `MSG_SEQ_PLAYHEAD` (0x53) gains `sync_state` (0=internal, 1=acquiring, 2=locked, 3=freewheel) + `measured_bpm_x100` for the UI.
+Five mutually consistent period samples acquire lock. The locked estimator uses
+an EMA (alpha 1/8), rejects isolated deviations over 25%, and re-acquires after
+three consistent tempo-change samples. Phase error is measured on the Daisy
+arrival timeline and slews rate by at most 0.5%; routine clock updates do not
+jump scheduler phase. Two missing periods enter freewheel at the last rate.
+Returning clocks re-acquire. Explicit Start/SPP/Continue are transport relocations.
 
-## 4. Tempo follower (Daisy, control-tick context)
+The existing jitter, crystal-offset, ramp, tempo-jump and dropout host tests
+exercise the follower. Constant transport latency and variable UART/SD/USB
+congestion still need physical measurement. Host lock is not evidence of DAW
+alignment or audio stability on the boards.
 
-Module: `firmware/daisy/src/sequencer/tempo_follower.hpp` — HAL-free, host-testable: inputs are `(event, esp_delta_us, daisy_frame_now)` tuples, output is the 32.32 phase increment + state.
+## Output and congestion
 
-### 4.1 Period estimator
+Internal playback emits Clock at each four-tick boundary from scheduler phase,
+so tempo changes do not introduce a second independent clock. The callback
+publishes ticks to a fixed ring and transport state to a lock-free mailbox.
+The latest Start/Continue/Stop supersedes old-run ticks; a full clock ring cannot
+hide Stop. Foreground publication is bounded to eight events per pass, and ticks
+older than 50 ms are discarded. Link-admission failure drops ticks but retries
+the latest transport state, including the ordered SPP/Continue pair.
 
-- Keep the last 5 CLOCK deltas (`esp_delta_us`); take the **median** (kills single outliers from USB batching or a dropped-then-doubled delivery), then EMA with α = 1/8 into `period_us`.
-- Reject deltas outside ±25% of current `period_us` once locked (they update a "tempo-jump detector" instead: 3 consecutive rejected-but-mutually-consistent deltas ⇒ hard re-acquire at the new tempo — handles a DAW tempo change without wallowing through the EMA).
-- `tick_seq` gaps: a missing CLOCK means the next delta covers *n* periods; divide by the gap count before feeding the estimator.
-
-### 4.2 Phase servo
-
-- The sequencer's master phase `Φ` (internal 96-PPQN ticks, 32.32) normally advances by `dphase(period_us)` per control tick.
-- Each CLOCK event *k* should land at `Φ_expected = 4k` (+ start offset from START/SPP). Measure `err = Φ_at_arrival − 4k` using the Daisy arrival tick, smoothed with a 1-pole (α = 1/8, ≈150 ms at 48 ticks/s).
-- Correct by **slewing the rate, never stepping the phase**: `dphase_effective = dphase · (1 + clamp(−Kp·err, ±0.005))` — a ±0.5% rate trim erases 1 ms of phase error in ~200 ms without any audible lurch. Start with `Kp = 0.02` per internal tick of error; tune in the host jitter harness, not on stage.
-- Because the trim also absorbs crystal-ppm mismatch between the domains, there is no separate drift term.
-
-### 4.3 State machine
-
-```
-INTERNAL ──(transport clock_source=MIDI)──► ACQUIRING
-ACQUIRING ──(5 consistent deltas, ±2%)────► LOCKED
-LOCKED ────(no CLOCK for 2× period)───────► FREEWHEEL   (keep playing at last rate)
-FREEWHEEL ─(CLOCK resumes)────────────────► ACQUIRING → LOCKED (phase re-anchored to next CLOCK)
-FREEWHEEL ─(STOP received / user stop)────► stopped
-any ───────(clock_source=internal)────────► INTERNAL
-```
-
-Freewheel is deliberate (Elektron behavior): a flaky cable pauses sync, not the music. START resets `Φ` to 0 effective at the *next* CLOCK (MIDI spec: F8 after FA marks the downbeat). CONTINUE resumes at the SPP-derived position: `Φ = spp_beats16 · 24` internal ticks.
-
-## 5. MIDI clock OUT (Daisy → world)
-
-The Daisy is the timing master; the ESP32 is a dumb serializer:
-
-- Sequencer emits a compact `MSG_SEQ_CLOCK_OUT` (0x57, D→E) `{uint8_t event; uint16_t tick_seq;}` at each 24-PPQN boundary (plus START/STOP/CONTINUE/SPP on transport changes); ESP32 writes 0xF8/0xFA/… to DIN UART and USB immediately on receipt, bypassing any TX coalescing.
-- Expected jitter = link + task latency, ~1–2 ms class. `sequencer.md` §1 already flags the fallback: if measured jitter exceeds ~1 ms and it matters musically, move DIN out to a spare Daisy UART pin (decision point, bench-measured, Phase 2 gate). The message design above is transport-agnostic so the fallback doesn't change the sequencer.
-
-## 6. Test plan
-
-Host (`firmware/daisy/tests`, follower is HAL-free):
-
-1. **Clean lock**: 120 BPM synthetic stream → LOCKED within 5 ticks; `measured_bpm` within ±0.1.
-2. **Jitter**: ±2 ms uniform jitter on Daisy arrivals + ±200 µs on deltas → phase error RMS < 0.5 internal tick; no state flapping over 10 000 ticks.
-3. **Drift**: master at 120.000, follower domain clock scaled by +50 ppm → zero accumulated beat drift over a simulated hour (the rate trim absorbs it).
-4. **Tempo jump**: 120→140 step → re-lock < 1 bar; ramp 120→140 over 8 bars → tracks within ±1 BPM.
-5. **Dropout**: 300 ms clock gap → FREEWHEEL, playback phase continues advancing monotonically; resume → re-lock without phase step > 1 internal tick.
-6. **Transport**: START/CONTINUE+SPP position math golden tests.
-
-Hardware (Phase 2 gate): DAW at 120 BPM, 10-minute recording of WaveX audio against the DAW's own metronome — beat alignment drift < ±3 ms over the run; audible check for tempo "breathing" during deliberate cable-wiggle dropouts.
-
-## 7. Implementation stages (one verified commit each)
-
-1. `tempo_follower.hpp` + full host-test suite above (no protocol yet).
-2. `MidiClockEventMessage` + `MSG_SEQ_CLOCK_OUT` structs, round-trip tests, `inter-mcu-protocol.md` rows.
-3. ESP32 ingest: timestamp + forward path in `midi_task.cpp` / `usb_midi_task.cpp` (real-time bytes currently parsed-and-dropped by `midi_stream_parser` interleave handling — tap them there).
-4. Daisy wiring: dispatcher route (extend `message_dispatch_test.cpp` — the C1 lesson: a dispatch-level test per routed type, so a silent stub can't recur), follower feeding the sequencer phase.
-5. Clock out + ESP32 serializer; bench jitter measurement recorded in this doc.
-
-
-## 8. ESP32 output status (2026-09-17)
-
-The port serializer is implemented as described in
+The ESP32 port queues/driver serializers are described in
 [panel controls](panel-controls.md#midi-port-implementation-stage-5-2026-09-17).
-It routes the existing clock-out message and supports diagnostic event injection.
-It does not manufacture periodic clocks from ESP32 UI/playhead polling. Daisy
-has not yet been wired to publish these messages at its 24-PPQN boundaries;
-real-time input bytes also remain unforwarded. Before adding ingest, reconcile
-source arbitration and tick-gap handling with the current follower integration.
+Port queue or driver failure can still lose an event after link admission;
+`MIDIOUT` exposes those counters. Already accepted UART/USB packets cannot be
+recalled. Neither a 50-ms expiry nor a successful enqueue promises bounded wire
+jitter or lossless delivery. Under congestion, restart transport after recovery;
+do not infer correct sync from counters alone.
+
+## Validation
+
+Host coverage includes parser interleaving/wrap/batching, fixed SPSC ordering,
+wire validation/round trips, 24-PPQN output at 20/120/300 BPM, transport retry and
+Stop priority, source isolation, first-Clock starts, maximum SPP Pattern seeking,
+Song section/repeat/end/loop seeking, and the follower's synthetic jitter/drift
+suite. Both firmware builds and enabled/disabled port variants are required.
+
 [HV-014](../hardware-validation.md#hv-014--midi-ports-and-clock-serialization)
-tracks port tests; no jitter/DAW drift measurements have been recorded.
+owns the unrun panel, DIN/USB, DAW drift, fault and DWT/underrun procedures.
+The ten-minute drift target is ±3 ms against the DAW metronome, without audible
+drift. If output jitter is unacceptable, measure before reconsidering which MCU
+owns DIN output. The complete Phase 2 gate remains open.
+
+## LFO sync follow-up
+
+Instrument per-voice LFOs already support basic tempo divisions. The requested
+next UI change is a Sync option that changes **Rate** from Hz to musical duration
+(for example 1/4 or 3/16), retaining the saved Hz rate when Sync is turned off.
+Add dotted/fractional divisions through one shared mapping used by UI, runtime,
+protocol validation and WXI persistence. Define tempo synchronization separately
+from phase restart/SPP policy. This UX/division extension is queued in
+[the modulation design](param-locks-and-modulation.md#lfo-rate-control-follow-up);
+it is not part of this transport implementation.

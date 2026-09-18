@@ -21,6 +21,7 @@
 #include "inter_mcu.h"
 #include "midi_out.h"
 
+#include "midi/clock_input.hpp"
 #include <atomic>
 
 static const char* TAG = "midi_task";
@@ -82,6 +83,7 @@ static void midi_task(void* arg) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // start publishes the handle before service
     wavex_midi::Ready(wavex_midi::Port::Din, true);
     WaveX::Midi::StreamParser parser;
+    WaveX::Midi::ClockInput clock(0);
     WaveX::Midi::Event ev;
     uint8_t buf[64];
 
@@ -137,6 +139,9 @@ static void midi_task(void* arg) {
             if (extra > 0)
                 n += extra;
             for (int i = 0; i < n; ++i) {
+                WaveX::Protocol::MidiClockEventMessage message;
+                if (clock.Feed(buf[i], static_cast<uint32_t>(esp_timer_get_time()), message))
+                    inter_mcu_send_midi_clock(message);
                 if (parser.Feed(buf[i], ev)) {
                     ++events_this_window;
                     midi_forward_event(ev);
