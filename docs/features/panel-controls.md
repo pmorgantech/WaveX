@@ -1,6 +1,6 @@
 # Panel Controls — Buttons, LEDs, Endless Pots, and MIDI I/O
 
-**Status**: Design with stages 0–4 implemented; keypad, LED and pot firmware added 2026-09-17.
+**Status**: Design with stages 0–4 and MIDI port output implemented; panel firmware added 2026-09-17.
 Physical panel validation remains open. Pin numbers live only in `firmware/shared/config/pin_config.h`; feature
 flags and table sizes only in `hardware_config.h`. This document names the
 functions those pins carry and the rules that produced the allocation — never
@@ -28,8 +28,8 @@ references are the audit trail; re-verify before trusting):
 | Shift | Latched-and-sticky global modifier in `InputDispatcher::processAll()` with a header chip. Works, driven by keycode 4 today. |
 | LEDs (temporary TLC5947) | `panel_task` owns SPI2 DMA and complete-frame latching; logical policy and diagnostics implemented. HV-012 open. |
 | Pot ADC (MCP3208) | Eight-channel DMA scans, RV112FF 20 kΩ decoder, calibration and page bindings implemented; HV-013 open. |
-| DIN MIDI | Compiled out since 2026-09-04: RX sat on the USB-Serial/JTAG D- pin. Pins moved 2026-09-05; still off until rewired (§5). TX ring is zero-length — no MIDI out. |
-| USB MIDI | Device on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Input only; `WAVEX_USB_MIDI_OUTPUT_ENABLED` is read by nothing. |
+| DIN MIDI | Compiled out since 2026-09-04: RX sat on the USB-Serial/JTAG D- pin. Pins moved 2026-09-05; still off until rewired (§5). UART2 RX/TX rings and clock/transport serializer implemented; enable only after wiring confirmation (HV-014). |
+| USB MIDI | Device on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Note input plus queued clock/transport output; input/output flags work independently. Enumeration and timing remain unverified (HV-014). |
 | Input plumbing | `InputEvent` → `InputDispatcher` queue (64 deep) → drained on the UI task under the LVGL lock → global Shift/Back → `UIPage::onInput()`. The debug console injects the same events (`KEY`, `ENC`, `POT`). |
 
 The good news is that everything downstream of `InputDispatcher::post()` is
@@ -283,14 +283,19 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 
 ### 4.7 MIDI software
 
-- DIN: re-enable `WAVEX_ESP_DIN_MIDI_ENABLED` once the receiver is on the
-  new RX pin; keep the storm detector. Give UART2 a TX ring and a
-  `midi_out_send()` used by both DIN and USB — Phase 2 item 2 (clock out) is
-  a consumer of this, not a place to grow it.
-- USB: implement the output half (`tud_midi_stream_write`), which
-  `WAVEX_USB_MIDI_OUTPUT_ENABLED` already claims. Bench-confirm the device
-  enumerates on the 4-pin HS connector, not the Type-C.
-- Both inputs already funnel into `midi_forward_event()`; unchanged.
+- DIN: input/output share one UART owner with RX/TX rings. The receiver remains
+  disabled by default until its wiring is confirmed. Existing note forwarding
+  and the storm warning remain; no MIDI THRU is enabled.
+- USB: one I/O task drains input and emits complete USB-MIDI event packets.
+  Either input or output may be compiled independently. The RX callback signals
+  a permanent semaphore, avoiding notifications to a deleted task during stop.
+- `midi_out.h` accepts the existing clock-out message and a destination mask.
+  Callers only enqueue values; each port task alone touches its output driver.
+  The real packet router delivers `MSG_SEQ_CLOCK_OUT` to both ports.
+- `MIDIOUT` console diagnostics and the bench procedure are in
+  [HV-014](../hardware-validation.md#hv-014--midi-ports-and-clock-serialization).
+  Daisy clock generation and ESP32 external-clock ingest remain separate Phase 2
+  work; this stage alone does not synchronize a DAW.
 
 ## 5. Stages (each one commit, each independently buildable)
 
@@ -301,7 +306,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 | 2 | **Keypad INT** — implemented 2026-09-17: CFG, ISR notification, fallback, error recovery. | FIFO/configuration/race/backpressure tests | HV-011: latency, key rolls, shared-bus recovery |
 | 3 | **LED output** — implemented 2026-09-17: temporary TLC5947 backend, PCNT service, replaceable output interface, blanking, policy and diagnostics. | Policy/packing tests and firmware compile; HIL still open | HV-012: mapping, startup, sleep, timing; shared-pot traffic covered by HV-013 |
 | 4 | **MCP3208 + RV112FF 20 kΩ pots** — implemented 2026-09-17: decoder, NVS calibration, Settings → Pots, page bindings, strip, Shift fine mode. Play and Instrument Filter/Amp are first consumers. | Decoder/service/binding/widget tests and firmware compile | HV-013: waveform, acquisition settling, calibration, feel, latency and rendering |
-| 5 | **MIDI** — DIN on, TX ring, USB out, latency measured (closes the roadmap's "MIDI latency" row). | — | DIN in → sound, USB in → sound, both < 5 ms |
+| 5 | **MIDI ports** — output queues, UART TX ring, USB output and clock-out route implemented 2026-09-17. DIN enable awaits wiring. | Packet/queue/routing tests; enabled DIN and USB flag variants compile | HV-014: enumeration, I/O, lifecycle and latency; timing gate remains open |
 
 **Gate**: from the panel alone (no touch), jump to Instrument, change the
 filter cutoff on a pot and hear it, latch Shift and fire a shifted softkey,
@@ -450,3 +455,36 @@ its existing content bounds. Hardware rendering and feel remain unverified.
 - [Alpha RV112FF catalog](https://www.taiwanalpha.com/downloads?id=79&target=products)
   (mechanical/terminal drawing; no electrical phase waveform supplied)
 - [ESP-IDF 5.5 SPI master](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/spi_master.html)
+
+
+## MIDI port implementation (stage 5, 2026-09-17)
+
+`main/midi_out.cpp` owns two fixed 32-entry queues under a short SMP lock.
+The shared HAL-free `midi/clock_output.hpp` validates/encodes the central
+protocol message. Each queue carries complete bytes and an enqueue timestamp;
+no output occurs under the lock. No new protocol type or production dependency
+is introduced. The supported output messages are Clock, Start, Continue, Stop
+and Song Position Pointer; note/CC output and MIDI THRU are not added here.
+
+DIN's existing task owns both directions, priority/stack from `hardware_config.h`,
+with at most 64 input bytes and one output message per pass. It waits at most one
+RTOS tick for RX and checks previous TX completion before writing at most three
+bytes into the TX ring. USB's existing task uses the same bounded pass, wakes on
+RX or a one-tick timeout for output service, and uses TinyUSB's all-or-none packet
+API. USB OUT is drained even when note input is disabled. Both tasks are unpinned,
+allocate only at initialization and wait for worker exit before removing drivers.
+The application serializes start/stop calls.
+
+Queued non-Stop events older than 50 ms expire; Start/Stop replace pending
+backlog. Observed disconnect/suspend or shutdown clears that port's queue. A full
+queue rejects new events; a full USB endpoint counts a failed write rather than
+replaying delayed clocks. These are reported losses, not a claim of lossless
+clocking. Each port exposes ready/pending/accepted/sent/dropped/expired/failed
+counters, and submission returns the mask actually accepted. Events already
+accepted by TinyUSB belong to its FIFO/endpoint; clearing the application queue
+cannot recall them. Host stalls/suspend may delay those accepted packets, which
+must be characterized before enabling end-to-end clock output. Physical timing and
+fault behavior remain HV-014 gates.
+
+References: [ESP-IDF UART driver](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/uart.html)
+and the pinned TinyUSB MIDI class in `firmware/esp32/managed_components/`.

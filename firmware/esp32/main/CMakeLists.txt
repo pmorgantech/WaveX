@@ -15,6 +15,7 @@ idf_component_register(
         "panel/led_backend.cpp"
         "panel/panel_led_service.cpp"
         "midi_task.cpp"
+        "midi_out.cpp"
         "usb_midi_task.cpp"
         "comm/packet_router.cpp"
         "comm/statistics.cpp"

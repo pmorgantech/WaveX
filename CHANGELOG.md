@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- MIDI clock/transport output queues, DIN UART TX and USB-MIDI event-packet
+  serialization, connected to the existing inter-MCU clock-out message.
+  `MIDIOUT` provides per-port diagnostics and bench event injection. USB input
+  and output flags operate independently, and shutdown callbacks no longer
+  target a task handle that may have been deleted. DIN remains disabled until
+  receiver wiring is confirmed; hardware checks are in HV-014. Daisy clock
+  generation and external-clock ingest remain pending.
+
 - MCP3208 support for four RV112FF 20 kΩ endless pots, with DMA scans,
   verified per-pot calibration saved in NVS and Settings → Pots diagnostics.
   Pots default disabled until saved; failed saves preserve active calibration.

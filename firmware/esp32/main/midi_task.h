@@ -1,11 +1,12 @@
 /**
  * @file midi_task.h
- * @brief DIN MIDI input task (roadmap Phase 1 item 8)
+ * @brief DIN MIDI I/O task (roadmap Phase 2.P.5)
  *
  * Reads the 31250-baud serial MIDI stream on UART2 (pins/baud in
  * pin_config.h), parses it with the shared WaveX::Midi::StreamParser, and
  * forwards note on/off events to the Daisy backend over the inter-MCU
- * link (MSG_NOTE_ON/MSG_NOTE_OFF).
+ * link (MSG_NOTE_ON/MSG_NOTE_OFF). Serializes queued clock/transport output
+ * from midi_out.h through its own UART TX ring.
  *
  * Compiled out entirely when WAVEX_ESP_DIN_MIDI_ENABLED is 0 - the init
  * function then exists as a no-op returning ESP_OK.
@@ -20,7 +21,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Install the MIDI UART driver and start the reader task.
+ * @brief Install the MIDI UART driver and start its sole reader/writer task.
  *
  * Requires inter_mcu_init()/inter_mcu_start() to have run - forwarded
  * notes are dropped (with a log) until the link is up.

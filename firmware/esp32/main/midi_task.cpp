@@ -1,6 +1,6 @@
 /**
  * @file midi_task.cpp
- * @brief DIN MIDI input task (roadmap Phase 1 item 8)
+ * @brief DIN MIDI I/O task (roadmap Phase 2.P.5)
  *
  * Latency shape (item 8 budget: < 5 ms MIDI-in to sound): a 3-byte note
  * message takes ~960 us on the wire at 31250 baud. The UART RX-full
@@ -19,6 +19,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "inter_mcu.h"
+#include "midi_out.h"
+
+#include <atomic>
 
 static const char* TAG = "midi_task";
 
@@ -76,6 +79,8 @@ static std::atomic<bool> s_midi_running{false};
 
 static void midi_task(void* arg) {
     (void)arg;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // start publishes the handle before service
+    wavex_midi::Ready(wavex_midi::Port::Din, true);
     WaveX::Midi::StreamParser parser;
     WaveX::Midi::Event ev;
     uint8_t buf[64];
@@ -114,25 +119,35 @@ static void midi_task(void* arg) {
             events_this_window = 0;
             window_start_us = now_us;
         }
-        // Block for one byte, then drain the backlog without blocking so
-        // bursts (chords, running-status streams) are processed in one pass.
-        // The wait is bounded rather than portMAX_DELAY purely so the loop
-        // notices a stop request; an idle wakeup every 100 ms costs nothing
-        // next to being unable to shut down without undefined behaviour.
-        int n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, 1, pdMS_TO_TICKS(100));
-        while (n > 0) {
+        // Only this task writes UART2. A completed prior TX guarantees room
+        // for one <=3-byte message in the configured driver ring; never park
+        // the link/UI task behind UART wire time or a full TX queue.
+        if (uart_wait_tx_done(WAVEX_ESP_MIDI_UART_NUM, 0) == ESP_OK) {
+            WaveX::Midi::ClockPacket packet;
+            if (wavex_midi::Take(wavex_midi::Port::Din, packet))
+                wavex_midi::Complete(
+                    wavex_midi::Port::Din,
+                    uart_write_bytes(WAVEX_ESP_MIDI_UART_NUM, packet.bytes.data(), packet.size) ==
+                        packet.size);
+        }
+        // Bound each RX pass so a continuous stream cannot starve output/stop.
+        int n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, 1, pdMS_TO_TICKS(1));
+        if (n > 0) {
+            const int extra = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf + 1, sizeof(buf) - 1, 0);
+            if (extra > 0)
+                n += extra;
             for (int i = 0; i < n; ++i) {
                 if (parser.Feed(buf[i], ev)) {
                     ++events_this_window;
                     midi_forward_event(ev);
                 }
             }
-            n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, sizeof(buf), 0);
         }
     }
 
     // Publish the exit before self-deleting: stop() waits on this, and only
     // then is it safe to delete the driver this task was reading from.
+    wavex_midi::Ready(wavex_midi::Port::Din, false);
     s_midi_task_handle = nullptr;
     vTaskDelete(nullptr);
 }
@@ -141,6 +156,8 @@ extern "C" esp_err_t midi_task_start(void) {
     if (s_midi_task_handle) {
         return ESP_OK;  // already running
     }
+    if (s_driver_installed)
+        return ESP_ERR_INVALID_STATE;
 
     uart_config_t cfg = {};
     cfg.baud_rate = WAVEX_ESP_MIDI_BAUD;
@@ -150,10 +167,13 @@ extern "C" esp_err_t midi_task_start(void) {
     cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     cfg.source_clk = UART_SCLK_DEFAULT;
 
-    // RX-only ring (TX ring 0: MIDI out is not part of item 8; the TX pin
-    // is still claimed in pin_config for later MIDI clock out, Phase 2).
-    esp_err_t err =
-        uart_driver_install(WAVEX_ESP_MIDI_UART_NUM, WAVEX_DIN_MIDI_RX_BUF_SIZE, 0, 0, nullptr, 0);
+    // RX/TX rings belong to the one DIN I/O task.
+    esp_err_t err = uart_driver_install(WAVEX_ESP_MIDI_UART_NUM,
+                                        WAVEX_DIN_MIDI_RX_BUF_SIZE,
+                                        WAVEX_DIN_MIDI_TX_BUF_SIZE,
+                                        0,
+                                        nullptr,
+                                        0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "uart_driver_install failed: %s", esp_err_to_name(err));
         return err;
@@ -168,13 +188,8 @@ extern "C" esp_err_t midi_task_start(void) {
                            UART_PIN_NO_CHANGE,
                            UART_PIN_NO_CHANGE);
     }
-    // No pull on the RX pin. The obvious move for a floating UART input is
-    // an internal pull-up, and it was tried on 2026-09-04: WAVEX_ESP_MIDI_RX
-    // is GPIO24, which on the ESP32-P4 is also USB D- of the built-in
-    // USB-Serial/JTAG PHY, and the pull-up took that port off the bus while
-    // the app ran. That shared pin is the reason for the storm detector
-    // below and for WAVEX_ESP_DIN_MIDI_ENABLED defaulting to 0 in
-    // hardware_config.h until the input is re-pinned.
+    // Receiver wiring is still a physical gate; keep the compile-time enable
+    // in hardware_config.h off until confirmed. No implicit GPIO pull changes.
     // Per-byte delivery for latency: ISR fires on every RX byte (threshold
     // 1) and the idle timeout is 1 symbol, so nothing sits in the FIFO.
     if (err == ESP_OK) {
@@ -205,11 +220,13 @@ extern "C" esp_err_t midi_task_start(void) {
         midi_task_stop();
         return ESP_ERR_NO_MEM;
     }
+    xTaskNotifyGive(handle);
     return ESP_OK;
 }
 
 extern "C" esp_err_t midi_task_stop(void) {
     s_midi_running = false;
+    wavex_midi::Ready(wavex_midi::Port::Din, false);
     // Wait for the task to leave its loop and self-delete rather than killing
     // it: vTaskDelete() on a task blocked inside uart_read_bytes() leaves the
     // driver's internals inconsistent, and the uart_driver_delete() below then
@@ -224,7 +241,9 @@ extern "C" esp_err_t midi_task_stop(void) {
         return ESP_ERR_TIMEOUT;
     }
     if (s_driver_installed) {
-        uart_driver_delete(WAVEX_ESP_MIDI_UART_NUM);
+        const auto result = uart_driver_delete(WAVEX_ESP_MIDI_UART_NUM);
+        if (result != ESP_OK)
+            return result;
         s_driver_installed = false;
     }
     return ESP_OK;

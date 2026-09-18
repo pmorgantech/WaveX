@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "inter_mcu.h"
 #include "lvgl.h"
+#include "midi_out.h"
 #include "ui/current_track.h"
 #include "ui/input_dispatcher.h"
 #include "ui/panel_key.h"
@@ -393,6 +394,52 @@ void dispatch(const Command& c) {
         touch_enqueue(static_cast<int16_t>(x), static_cast<int16_t>(y), pressed)
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
+    } else if (!strcmp(c.verb, "MIDIOUT")) {
+        uint8_t accepted = 0;
+        if (*p) {
+            char port[8]{}, event[12]{};
+            NextWord(&p, port, sizeof(port));
+            NextWord(&p, event, sizeof(event));
+            const uint8_t mask = !strcmp(port, "DIN")    ? wavex_midi::kDin
+                                 : !strcmp(port, "USB")  ? wavex_midi::kUsb
+                                 : !strcmp(port, "BOTH") ? wavex_midi::kBoth
+                                                         : 0;
+            const uint8_t kind = !strcmp(event, "CLOCK")      ? WaveX::Protocol::MIDI_CLK_TICK
+                                 : !strcmp(event, "START")    ? WaveX::Protocol::MIDI_CLK_START
+                                 : !strcmp(event, "CONTINUE") ? WaveX::Protocol::MIDI_CLK_CONTINUE
+                                 : !strcmp(event, "STOP")     ? WaveX::Protocol::MIDI_CLK_STOP
+                                 : !strcmp(event, "SPP")      ? WaveX::Protocol::MIDI_CLK_SPP
+                                                              : 255;
+            long spp = 0;
+            if (!mask || kind == 255 ||
+                (kind == WaveX::Protocol::MIDI_CLK_SPP &&
+                 (!NextInt(&p, &spp) || spp < 0 || spp > 16383)) ||
+                *detail::SkipSpaces(p)) {
+                reply_err(seq, "badarg");
+                return;
+            }
+            accepted = wavex_midi::SendClock({kind, 0, static_cast<uint16_t>(spp)}, mask);
+        }
+        char out[512];
+        size_t len = FormatOk(seq, out, sizeof(out));
+        len = AppendKvInt(out, sizeof(out), len, "accepted", accepted);
+        for (auto port: {wavex_midi::Port::Din, wavex_midi::Port::Usb}) {
+            const auto state = wavex_midi::Status(port);
+            char value[128];
+            snprintf(value,
+                     sizeof(value),
+                     "%u,%u,%lu,%lu,%lu,%lu,%lu",
+                     state.ready,
+                     state.pending,
+                     static_cast<unsigned long>(state.accepted),
+                     static_cast<unsigned long>(state.sent),
+                     static_cast<unsigned long>(state.dropped),
+                     static_cast<unsigned long>(state.expired),
+                     static_cast<unsigned long>(state.failed));
+            len = AppendKv(
+                out, sizeof(out), len, port == wavex_midi::Port::Din ? "din" : "usb", value);
+        }
+        printf("%s\n", out);
     } else if (!strcmp(c.verb, "STATE") || !strcmp(c.verb, "PAGE") || !strcmp(c.verb, "TRACK") ||
                !strcmp(c.verb, "HOME") || !strcmp(c.verb, "LEDS") || !strcmp(c.verb, "PANEL")
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED

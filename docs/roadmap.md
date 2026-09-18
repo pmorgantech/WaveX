@@ -93,7 +93,9 @@ Phase 2.5 work. Open work:
 
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate, including the prepared note/velocity resolution.
-2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
+2. ESP32 DIN/USB clock serialization is implemented (2.P.5, 2026-09-17).
+   Next: generate the events from Daisy audio time and complete ESP32 external
+   clock ingest/source policy; then measure jitter and DAW sync in HV-014/HV-005.
 3. Validate TLC5947 LED feedback on hardware (HV-012). Per-pad cutoff and amp attack/decay/sustain
    editing with inheritance reset is implemented. The
    touch kit editor provides creation, naming, assignment, choke and new-copy
@@ -251,8 +253,12 @@ Stages, one commit each:
    bindings and strip in Instrument Filter/Amp and Play. Shift selects fine
    changes. Pots default disabled until calibrated and saved. Hardware waveform,
    settling, feel and shared-bus/render timing remain open in HV-013.
-5. MIDI: DIN back on at its new pins, UART2 TX ring shared with USB MIDI
-   out, DIN/USB latency measured.
+5. MIDI port output implemented 2026-09-17: bounded per-port queues, UART2
+   TX ring, USB event-packet output, existing `MSG_SEQ_CLOCK_OUT` route and
+   `MIDIOUT` diagnostics. DIN stays disabled pending receiver wiring confirmation;
+   the enabled build compiles. USB input/output flags work independently.
+   DIN/USB latency, enumeration and output timing remain unmeasured in HV-014.
+   This does not yet generate sequencer clock events or forward external clock.
 
 Stage 0 (pin reconciliation against the ESP32-P4-WIFI6 header, MIDI pins
 moved, CD74HC4067 dropped) and stage 1 (`PanelKey`/`PanelLed`, the key

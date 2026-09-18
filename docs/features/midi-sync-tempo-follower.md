@@ -1,6 +1,10 @@
 # MIDI Clock Sync & Tempo Follower — Design
 
-**Status**: Target design (unimplemented). Required for the Phase 2 gate ("MIDI-clock-synced to a DAW without audible drift over 10 minutes"). Expands `sequencer.md` §1–2.
+**Status**: Mixed implementation/target design. The follower core and Daisy
+transport integration exist; ESP32 clock-out encoding, port queues and routing
+were added 2026-09-17. Daisy event generation, ESP32 timestamped ingest/source
+arbitration and full sync acceptance remain open. The design below is the target,
+not evidence that the end-to-end path works. Required for the Phase 2 gate ("MIDI-clock-synced to a DAW without audible drift over 10 minutes"). Expands `sequencer.md` §1–2.
 **Dependencies**: sequencer engine clocking core and the built ESP32 MIDI input path.
 **Placement**: MIDI real-time bytes arrive on the ESP32 (DIN UART2 / USB), are timestamped at ingest, and forwarded over the UART link. The Daisy runs the tempo follower and is always the sequencer's timing authority.
 
@@ -105,3 +109,16 @@ Hardware (Phase 2 gate): DAW at 120 BPM, 10-minute recording of WaveX audio agai
 3. ESP32 ingest: timestamp + forward path in `midi_task.cpp` / `usb_midi_task.cpp` (real-time bytes currently parsed-and-dropped by `midi_stream_parser` interleave handling — tap them there).
 4. Daisy wiring: dispatcher route (extend `message_dispatch_test.cpp` — the C1 lesson: a dispatch-level test per routed type, so a silent stub can't recur), follower feeding the sequencer phase.
 5. Clock out + ESP32 serializer; bench jitter measurement recorded in this doc.
+
+
+## 8. ESP32 output status (2026-09-17)
+
+The port serializer is implemented as described in
+[panel controls](panel-controls.md#midi-port-implementation-stage-5-2026-09-17).
+It routes the existing clock-out message and supports diagnostic event injection.
+It does not manufacture periodic clocks from ESP32 UI/playhead polling. Daisy
+has not yet been wired to publish these messages at its 24-PPQN boundaries;
+real-time input bytes also remain unforwarded. Before adding ingest, reconcile
+source arbitration and tick-gap handling with the current follower integration.
+[HV-014](../hardware-validation.md#hv-014--midi-ports-and-clock-serialization)
+tracks port tests; no jitter/DAW drift measurements have been recorded.

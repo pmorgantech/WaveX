@@ -1,14 +1,15 @@
 /**
  * @file usb_midi_task.h
- * @brief USB MIDI device input task (roadmap Phase 1 item 8)
+ * @brief USB MIDI device I/O task (roadmap Phase 2.P.5)
  *
  * Presents the ESP32-P4's native USB-OTG port as a class-compliant USB
  * MIDI device (via the esp_tinyusb device stack), so a host DAW/computer
  * can send notes into WaveX. Received events go through the same shared
- * parser and inter-MCU forwarding as DIN MIDI (midi_task.cpp).
+ * parser and inter-MCU forwarding as DIN MIDI (midi_task.cpp). Queued clock
+ * output (midi_out.h) uses complete USB-MIDI event packets.
  *
- * Compiled out when WAVEX_ESP_USB_MIDI_ENABLED or
- * WAVEX_USB_MIDI_INPUT_ENABLED is 0 - the init function then exists as a
+ * Compiled out when USB MIDI is disabled or both input and output are off;
+ * the init function then exists as a
  * no-op returning ESP_OK. Also requires CONFIG_TINYUSB_MIDI_COUNT=1
  * (sdkconfig) to compile the TinyUSB MIDI class in.
  */

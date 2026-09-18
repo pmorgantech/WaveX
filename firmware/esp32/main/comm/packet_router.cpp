@@ -1,6 +1,7 @@
 #include "packet_router.h"
 
 #include "inter_mcu.h"
+#include "midi_out.h"
 
 #include <cstring>
 #include <functional>
@@ -94,6 +95,14 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
         (int)payload_size,
         (int)packet_len);
 
+    // The fixed-size envelope exposes padding as payload. This new fixed
+    // message admits only zero padding; raw UART payloads stay exact-sized.
+    if (msg_type == MSG_SEQ_CLOCK_OUT && payload_size > sizeof(SeqClockOutMessage)) {
+        for (size_t i = sizeof(SeqClockOutMessage); i < payload_size; ++i)
+            if (payload[i] != 0)
+                return;
+        payload_size = sizeof(SeqClockOutMessage);
+    }
     route_by_message_type(msg_type, payload, payload_size, flags, sequence_number);
 
     if (m_stats_callback) {
@@ -123,6 +132,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     }
 
     switch (msg_type) {
+        case MSG_SEQ_CLOCK_OUT: {
+            SeqClockOutMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SEQ_CLOCK_OUT"))
+                wavex_midi::SendClock(message);
+            break;
+        }
+
         case WaveX::Protocol::MSG_SAMPLE_PLAYHEAD: {
             WaveX::Protocol::SamplePlayheadMessage message;
             if (payload_len == sizeof(message) &&

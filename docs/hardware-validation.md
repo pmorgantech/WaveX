@@ -23,6 +23,7 @@ this document owns the runnable checks and their validation status.
 - [HV-011 — Keypad interrupt and recovery](#hv-011--keypad-interrupt-and-recovery)
 - [HV-012 — Panel LED output](#hv-012--panel-led-output)
 - [HV-013 — MCP3208 and endless pots](#hv-013--mcp3208-and-endless-pots)
+- [HV-014 — MIDI ports and clock serialization](#hv-014--midi-ports-and-clock-serialization)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -77,6 +78,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-011 | Keypad interrupt and recovery | Blocked | Firmware/host checks; physical matrix and INT wiring needed |
 | HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
+| HV-014 | MIDI ports and clock serialization | Blocked | Port code/host checks; wiring, enumeration, latency and end-to-end clock work open |
 
 ## HV-001 — SD card formatting
 
@@ -559,3 +561,56 @@ suffix, wiring revision and scope/log evidence for every result.
 **Pass:** All checks above pass with dated image identities and evidence. Host
 coverage establishes synthetic decoder/calibration behavior and UI binding/redraw
 logic only; the physical panel and Phase 2 gates remain open until measured.
+
+## HV-014 — MIDI ports and clock serialization
+
+**Status:** Blocked on DIN wiring confirmation and MIDI bench setup; no hardware
+results recorded. USB can be tested independently.
+**Design / gate:** [Panel controls stage 5](features/panel-controls.md#midi-port-implementation-stage-5-2026-09-17),
+[roadmap 2.P](roadmap.md#2p--panel-controls-and-midi-io-physical-integration),
+[MIDI sync](features/midi-sync-tempo-follower.md).
+**Setup:** Paired firmware identities, current canonical config headers, correctly
+wired isolated DIN receiver and buffered transmitter, USB host/DAW connected to
+the board's HS OTG connector, MIDI monitor/analyzer and oscilloscope/audio capture.
+Enable DIN only after confirming the receiver wiring; record image flags, wiring
+revision, host and USB negotiated speed. Never infer port wiring from this doc.
+
+- [ ] **014a — Enumeration and flags:** Confirm USB MIDI enumerates independently
+  of the USB-Serial/JTAG flash port. Exercise input-only, output-only and disabled
+  builds. Output-only must drain host OUT traffic without sounding notes; disabled
+  output must reject submissions. Confirm no DIN GPIO activity with DIN disabled.
+- [ ] **014b — Input notes:** Send notes/chords, velocity-zero NoteOn, explicit
+  NoteOff and running status over DIN and USB. Verify selected Track MIDI input
+  routing, including Off/Omni, sustained input, no spurious notes while idle and
+  no regressions with both ports active. This does not test external clock ingest.
+- [ ] **014c — Output bytes:** With a MIDI monitor/analyzer attached, send console
+  commands such as `WAVEX-DBG 1 MIDIOUT USB START`, `WAVEX-DBG 2 MIDIOUT USB CLOCK`,
+  `WAVEX-DBG 3 MIDIOUT USB SPP 16383`, `WAVEX-DBG 4 MIDIOUT USB CONTINUE`, and
+  `WAVEX-DBG 5 MIDIOUT USB STOP`; repeat with DIN and BOTH. Check correct status,
+  SPP low/high seven-bit bytes, USB cable/CIN and message order. Plain `MIDIOUT`
+  reports per-port tuples ready,pending,accepted,sent,dropped,expired,failed.
+  Accepted means queued; sent means accepted by the driver, not observed on wire.
+- [ ] **014d — Congestion and lifecycle:** Saturate one output, stall host reads,
+  suspend/unplug/reconnect USB and stop/restart port tasks while RX is active.
+  No crash, stale callback, cross-port blockage or delayed tick burst is acceptable.
+  Distinguish application backlog from packets already accepted by TinyUSB;
+  measure any delayed driver-buffered output before accepting clock behavior.
+  Verify queue-full/expired/failed counters and that Start/Stop replace queued
+  backlog; an old queued Stop remains eligible. Observe that disconnect clears
+  pending data. A failed USB packet write is reported and not retried. Confirm
+  new submissions work after recovery; use fresh transport commands to restart.
+- [ ] **014e — Latency and stability:** Measure DIN/USB note-input-to-audio latency
+  (target under 5 ms) and output enqueue-to-wire delay/jitter, baseline and under
+  display, SD/UART, panel-pot and LED load. Record median/p95/max, task stack and
+  queue high-water observations, loss counters and Daisy underruns. No audio or
+  UI regression; any clock jitter concern is measured before choosing a different
+  hardware output owner. Console command round trips are not latency evidence.
+- [ ] **014f — End-to-end clock (blocked on implementation):** Once Daisy clock
+  event generation and ESP32 timestamped input/source selection exist, verify
+  24 PPQN, Start/Continue/Stop/SPP behavior, tempo changes, tick loss and source
+  switching. Run the ten-minute DAW drift test from the MIDI-sync design and the
+  full Phase 2 gate. Port loopback or injected events cannot close this check.
+
+**Pass:** Record date, both image identities and monitor/scope/audio evidence for
+all applicable checks. Partial port validation remains partial; 014f and the
+Phase 2 gate stay open until end-to-end implementation and measurement exist.

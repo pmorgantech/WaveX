@@ -398,7 +398,7 @@
 #define WAVEX_ESP_USB_MIDI_ENABLED 1
 #endif
 
-// DIN MIDI Input (ESP32 UART2 - pins/baud in pin_config.h)
+// DIN MIDI I/O (ESP32 UART2 - pins/baud in pin_config.h)
 //
 // OFF since 2026-09-04: WAVEX_ESP_MIDI_RX was GPIO24, which on the ESP32-P4
 // is also USB D- of the chip's built-in USB-Serial/JTAG port - the fast flash
@@ -844,6 +844,10 @@
 // worst-case backlog, far more than the task ever lets accumulate.
 #ifndef WAVEX_DIN_MIDI_RX_BUF_SIZE
 #define WAVEX_DIN_MIDI_RX_BUF_SIZE 256
+#endif
+
+#ifndef WAVEX_DIN_MIDI_TX_BUF_SIZE
+#define WAVEX_DIN_MIDI_TX_BUF_SIZE 256
 #endif
 #endif
 

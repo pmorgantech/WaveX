@@ -121,6 +121,7 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/../main/wavex_applicatio
 add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/application_context.cpp  # Include for testing
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/wavex_application.cpp  # Application lifecycle
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/midi_out.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/packet_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
@@ -211,3 +212,6 @@ target_compile_definitions(led_backend_stub_test PRIVATE
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/widget/CMakeLists.txt)
     add_subdirectory(widget)
 endif()
+
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/../main/midi_out.cpp PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/mocks/panel_lock_host.h")

@@ -1,6 +1,6 @@
 /**
  * @file usb_midi_task.cpp
- * @brief USB MIDI device input task (roadmap Phase 1 item 8)
+ * @brief USB MIDI device I/O (roadmap Phase 2.P.5)
  *
  * Descriptor layout follows the ESP-IDF tusb_midi example (esp_tinyusb
  * >= 2.0): one MIDI interface pair (control + streaming) on endpoint 1,
@@ -8,23 +8,22 @@
  * is high-speed-capable, so both FS and HS configuration descriptors are
  * provided and TinyUSB picks by negotiated speed.
  *
- * Latency: no polling - TinyUSB's device task invokes tud_midi_rx_cb()
- * on reception (task context), which notifies the reader task; the
- * reader drains tud_midi_stream_read() (the class driver's re-assembled
- * plain MIDI byte stream) through the shared StreamParser and forwards
- * notes via midi_forward_event(). Same < 5 ms in-to-sound shape as DIN,
- * minus the 31250-baud wire time.
+ * RX callbacks wake the I/O task through a permanent semaphore. A bounded
+ * service pass drains input and serializes queued clock/transport messages.
+ * Physical latency and jitter remain a hardware validation gate (HV-014).
  */
 
 #include "usb_midi_task.h"
 
 #include "config/hardware_config.h"
+#include "midi_out.h"
 
-#if WAVEX_ESP_USB_MIDI_ENABLED && WAVEX_USB_MIDI_INPUT_ENABLED
+#if WAVEX_ESP_USB_MIDI_ENABLED && (WAVEX_USB_MIDI_INPUT_ENABLED || WAVEX_USB_MIDI_OUTPUT_ENABLED)
 
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "midi_task.h"  // midi_forward_event()
 #include "tinyusb.h"
@@ -35,14 +34,13 @@
 
 static const char* TAG = "usb_midi";
 
-// Shutdown handshake; see midi_task.cpp for the reasoning. Here the extra
-// hazard is tud_midi_rx_cb() notifying a handle that vTaskDelete() has freed:
-// both s_usb_midi_task_handle and s_usb_midi_running are atomic so the
-// callback's read-then-notify in tud_midi_rx_cb() below sees a consistent
-// value rather than racing the task that clears it just before self-deleting.
+// Lifecycle calls are serialized by the application. The callback signals a
+// permanent semaphore, never a task handle that shutdown could free.
 static std::atomic<TaskHandle_t> s_usb_midi_task_handle{nullptr};
 static std::atomic<bool> s_usb_midi_running{false};
 static bool s_driver_installed = false;
+static StaticSemaphore_t s_rx_signal_storage;
+static SemaphoreHandle_t s_rx_signal = nullptr;
 
 // --- TinyUSB descriptors (tusb_midi example layout) ---
 
@@ -108,50 +106,62 @@ static const uint8_t s_midi_hs_cfg_desc[] = {
 
 static void usb_midi_task(void* arg) {
     (void)arg;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // publish handle before any exit
     WaveX::Midi::StreamParser parser;
     WaveX::Midi::Event ev;
     uint8_t buf[64];
-
-    ESP_LOGI(TAG, "USB MIDI reader running");
-
+    bool connected_before = false;
+    ESP_LOGI(TAG, "USB MIDI I/O running");
     while (s_usb_midi_running) {
-        // Woken by tud_midi_rx_cb() below on every received packet, and by
-        // stop(); the read must fully drain regardless (the MIDI interface
-        // always has an OUT endpoint, and unread data would stall the host
-        // side).
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (!s_usb_midi_running) {
-            break;
+        const bool connected = tud_mounted() && !tud_suspended();
+        if (connected != connected_before)
+            parser.Reset();
+        connected_before = connected;
+        wavex_midi::Ready(wavex_midi::Port::Usb, connected && WAVEX_USB_MIDI_OUTPUT_ENABLED);
+        // Always drain OUT, even in output-only builds. Bound each pass so
+        // host floods cannot starve output or the shutdown handshake.
+        const auto count = tud_midi_stream_read(buf, sizeof(buf));
+#if WAVEX_USB_MIDI_INPUT_ENABLED
+        for (uint32_t i = 0; i < count; ++i)
+            if (connected && parser.Feed(buf[i], ev))
+                midi_forward_event(ev);
+#else
+        (void)count;
+        (void)ev;
+#endif
+#if WAVEX_USB_MIDI_OUTPUT_ENABLED
+        WaveX::Midi::ClockPacket packet;
+        if (connected && wavex_midi::Take(wavex_midi::Port::Usb, packet)) {
+            const auto usb = packet.Usb();
+            // Packet API accepts all four bytes or none. A full endpoint drops
+            // this event with a counter; never replay clock bursts later.
+            wavex_midi::Complete(wavex_midi::Port::Usb, tud_midi_packet_write(usb.data()));
         }
-        uint32_t n;
-        while ((n = tud_midi_stream_read(buf, sizeof(buf))) > 0) {
-            for (uint32_t i = 0; i < n; ++i) {
-                if (parser.Feed(buf[i], ev)) {
-                    midi_forward_event(ev);
-                }
-            }
-        }
+#endif
+        xSemaphoreTake(s_rx_signal, pdMS_TO_TICKS(1));
     }
-
+    wavex_midi::Ready(wavex_midi::Port::Usb, false);
     s_usb_midi_task_handle = nullptr;
     vTaskDelete(nullptr);
 }
 
-// TinyUSB weak-symbol override: called from the TinyUSB device task (not
-// ISR) whenever MIDI data arrives, so the plain task-notify API is safe.
 extern "C" void tud_midi_rx_cb(uint8_t itf) {
     (void)itf;
-    TaskHandle_t handle = s_usb_midi_task_handle;
-    if (handle) {
-        xTaskNotifyGive(handle);
-    }
+    // Installed only after the permanent semaphore has been initialized.
+    xSemaphoreGive(s_rx_signal);
 }
 
 extern "C" esp_err_t usb_midi_task_start(void) {
     if (s_usb_midi_task_handle) {
         return ESP_OK;  // already running
     }
+    if (s_driver_installed)
+        return ESP_ERR_INVALID_STATE;
 
+    if (!s_rx_signal)
+        s_rx_signal = xSemaphoreCreateBinaryStatic(&s_rx_signal_storage);
+    if (!s_rx_signal)
+        return ESP_ERR_NO_MEM;
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     tusb_cfg.descriptor.string = s_str_desc;
     tusb_cfg.descriptor.string_count = sizeof(s_str_desc) / sizeof(s_str_desc[0]);
@@ -186,19 +196,16 @@ extern "C" esp_err_t usb_midi_task_start(void) {
         usb_midi_task_stop();
         return ESP_ERR_NO_MEM;
     }
+    xTaskNotifyGive(handle);
     return ESP_OK;
 }
 
 extern "C" esp_err_t usb_midi_task_stop(void) {
     s_usb_midi_running = false;
-    // Wake it out of ulTaskNotifyTake so it can observe the flag and leave.
-    if (TaskHandle_t handle = s_usb_midi_task_handle) {
-        xTaskNotifyGive(handle);
-    }
-    // Wait for the task to self-delete before uninstalling the driver. The
-    // ordering matters twice over: TinyUSB's device task calls
-    // tud_midi_rx_cb(), which notifies this handle, so killing the task first
-    // left a live callback notifying freed memory.
+    wavex_midi::Ready(wavex_midi::Port::Usb, false);
+    if (s_rx_signal)
+        xSemaphoreGive(s_rx_signal);
+    // Wait before uninstalling TinyUSB: the worker may still be in its API.
     for (int waited_ms = 0; s_usb_midi_task_handle && waited_ms < 300; waited_ms += 10) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -207,13 +214,15 @@ extern "C" esp_err_t usb_midi_task_stop(void) {
         return ESP_ERR_TIMEOUT;
     }
     if (s_driver_installed) {
-        tinyusb_driver_uninstall();
+        const auto result = tinyusb_driver_uninstall();
+        if (result != ESP_OK)
+            return result;
         s_driver_installed = false;
     }
     return ESP_OK;
 }
 
-#else  // !(WAVEX_ESP_USB_MIDI_ENABLED && WAVEX_USB_MIDI_INPUT_ENABLED)
+#else  // USB MIDI disabled
 
 extern "C" esp_err_t usb_midi_task_start(void) {
     return ESP_OK;
@@ -223,4 +232,4 @@ extern "C" esp_err_t usb_midi_task_stop(void) {
     return ESP_OK;
 }
 
-#endif  // WAVEX_ESP_USB_MIDI_ENABLED && WAVEX_USB_MIDI_INPUT_ENABLED
+#endif  // USB MIDI input or output
