@@ -121,3 +121,50 @@ TEST(VoiceLfo, EditingDelayFadeUsesActualNoteAgeAndNeverRestartsPhase) {
     l.Advance(125, beat);
     EXPECT_NEAR(l.Phase(), next + .25f, 1e-5);
 }
+
+TEST(VoiceLfo, ExtendedHzRangeAndPitchFollowClampReachAudibleRuntime) {
+    for (float rate: {.01f, .1f, 100.f}) {
+        InstLfoSettings s;
+        s.rate_hz = rate;
+        VoiceLfo l;
+        l.Start(s, 48000, 1, 0, 0, 0, 0, 1, 0);
+        const auto frames = static_cast<uint32_t>(12000.0 / rate);
+        l.Advance(frames, 0);
+        EXPECT_NEAR(l.Phase(), .25f, .0003f) << rate;
+    }
+    InstLfoSettings s;
+    s.rate_hz = 100;
+    s.pitch_follow = 1;
+    VoiceLfo l;
+    l.Start(s, 48000, 4, 0, 0, 0, 0, 1, 0);
+    l.Advance(120, 0);
+    EXPECT_NEAR(l.Phase(), .25f, 1e-5);
+}
+TEST(VoiceLfo, ExistingDivisionIdentitiesAndThreeSixteenthsHaveCorrectPeriods) {
+    const double beats_per_cycle[] = {0, .25, .5, 1, 2, 4, 8, 16, .75};
+    for (uint8_t id = 1; id <= 8; ++id) {
+        InstLfoSettings s;
+        s.sync_div = id;
+        s.pitch_follow = 1;
+        VoiceLfo l;
+        const auto beat = VoiceLfo::BeatStep(120, 48000);
+        l.Start(s, 48000, 4, 0, 0, beat, 0, 1, 0);
+        l.Advance(static_cast<uint32_t>(6000 * beats_per_cycle[id]), beat);
+        EXPECT_NEAR(l.Phase(), .25f, .00002f) << unsigned(id);
+    }
+}
+TEST(VoiceLfo, SyncModeEditPreservesHeldPhaseAndUsesCurrentTempo) {
+    InstLfoSettings s;
+    s.rate_hz = 100;
+    VoiceLfo l;
+    l.Start(s, 48000, 1, 0, 0, 0, 0, 1, 0);
+    l.Advance(120, 0);
+    const auto phase = l.Phase();
+    s.sync_div = 8;
+    l.UpdateSettings(s, 48000, 1);
+    EXPECT_FLOAT_EQ(l.Phase(), phase);
+    l.Advance(9000, VoiceLfo::BeatStep(120, 48000));
+    EXPECT_NEAR(l.Phase(), .75f, .00002f);
+    l.Advance(9000, VoiceLfo::BeatStep(60, 48000));
+    EXPECT_NEAR(std::min(l.Phase(), 1.f - l.Phase()), 0, .00002f);
+}

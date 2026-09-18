@@ -24,6 +24,7 @@ this document owns the runnable checks and their validation status.
 - [HV-012 — Panel LED output](#hv-012--panel-led-output)
 - [HV-013 — MCP3208 and endless pots](#hv-013--mcp3208-and-endless-pots)
 - [HV-014 — MIDI ports and clock serialization](#hv-014--midi-ports-and-clock-serialization)
+- [HV-015 — LFO range and musical rate controls](#hv-015--lfo-range-and-musical-rate-controls)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -79,6 +80,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
 | HV-013 | MCP3208 and endless pots | Blocked | Firmware/host checks; RV112FF waveform, wiring and measurements needed |
 | HV-014 | MIDI ports and clock serialization | Blocked | Clock/SPP code and host checks; wiring, enumeration, latency and DAW timing open |
+| HV-015 | LFO range and musical rate controls | Unrun | Host/build checks; slow/fast modulation, saved settings, UI and callback cost open |
 
 ## HV-001 — SD card formatting
 
@@ -643,3 +645,39 @@ Phase 2 gate stay open until the required physical measurements pass.
 Pattern/Song seeking and UI controls implemented. Parser/queue/protocol and
 transport/follower host tests added or updated. No board flashed and no new
 hardware result recorded; all checks above remain open.
+
+
+## HV-015 — LFO range and musical rate controls
+
+**Status:** Unrun; no board flashed or hardware result recorded for this change.
+**Design / gate:** [LFO controls](features/param-locks-and-modulation.md#lfo-rate-controls),
+[Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
+**Setup:** Paired image hashes, a sustained sample with an Instrument LFO routed
+at a modest depth to an audible destination, audio capture or scope, DAW MIDI
+clock and a known older saved Instrument. Use the existing performance guide
+for DWT/callback and UI RENDER/sysmon measurements.
+
+- [ ] **015a — Hz range and adjustment:** With Sync Off, select 0.01, 0.1, 1,
+  20 and 100 Hz. Measure periods (100 s, 10 s, 1 s, 50 ms, 10 ms) within 1%.
+  Check slow-end fine adjustment, monotonic logarithmic movement, endpoint
+  clamps and readable precision. Listen for unintended clicks/aliasing and
+  characterize control-rate stepping at 100 Hz for each waveform/destination.
+- [ ] **015b — Mode and tempo:** Set 0.1 Hz, switch Sync On, choose 1/4 then
+  3/16. At 120 BPM measure cycles of 500 ms and 375 ms; at 60 BPM they double.
+  Repeat while following external MIDI clock. Switching Sync Off restores
+  0.1 Hz; held-note phase must not restart during these edits. Verify Gate/Free
+  note admission behavior separately. Start/SPP do not reset held LFO phase.
+- [ ] **015c — Persistence and recovery:** Apply/Revert and save/reload both LFOs
+  with 0.01/100 Hz retained under Sync, including 3/16. Reboot and reload, then
+  turn Sync Off and confirm the saved Hz rates. Recall the older Instrument:
+  original division durations and Hz values must retain their identities.
+- [ ] **015d — UI and callback:** Check value/unit changes, focus, fine controls,
+  unchanged polling and page re-entry; record RENDER/sysmon submitted pixels
+  and mean/peak. Compare DWT mean/peak to the prior image with identical
+  stereo/mono voices, two LFOs per voice, modulation, locks, streaming and live
+  edits. Exercise 3/16 at fast transport tempo and unsynced 100 Hz. Pass only
+  within the performance guide's callback thresholds with zero underruns.
+
+**Pass:** All applicable steps pass with date, both image identities, saved-file
+identities and capture/profile evidence. Host tests cover numeric timing,
+mode behavior and wire/WXI retention; they do not close these physical gates.

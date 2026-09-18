@@ -353,7 +353,10 @@ bars. The capture is local at logs/key-map-20260911.png (gitignored).
 
 Instrument → LFO presents two selectable per-voice LFOs. Each selection uses
 eight value tiles arranged in two rows of four: the LFO selector plus waveform,
-rate in Hz, sync division, retrigger, delay, fade and pitch-follow. The page
+rate (0.01–100 Hz or musical duration), Sync Off/On, retrigger, delay, fade and
+pitch-follow. Rate adjustment is logarithmic in Hz; synchronized durations
+include 3/16. Switching Sync preserves Hz. These extended controls require
+HV-015; the earlier two-board result below covers the prior control set. The page
 uses the shared revisioned transport and common sound Apply/Revert actions, so
 edits preview automatically and a WXI save persists the audible working copy.
 Navigation waits for an outstanding delivery but does not require Apply/Revert

@@ -89,3 +89,47 @@ TEST(LfoModel, RejectionAndExternalReplacementRestoreAuthoritativeSettings) {
     EXPECT_FALSE(m.Dirty());
     EXPECT_EQ(m.Value(0), 3);
 }
+
+TEST(LfoModel, SyncRateSelectsMusicalDurationAndRetainsHz) {
+    LfoModel m;
+    m.Expect(1);
+    InstLfoSyncMessage s;
+    s.request_id = s.revision = s.valid = 1;
+    s.values[0].rate_hz = .01f;
+    ASSERT_TRUE(m.Accept(s));
+    ASSERT_TRUE(m.SetSync(true));
+    EXPECT_EQ(m.Value(2), 3);  // default quarter note
+    ASSERT_TRUE(m.AdjustRate(1));
+    EXPECT_EQ(m.Value(2), 8);  // 3/16 between eighth and quarter
+    EXPECT_FLOAT_EQ(m.Request(2).value.rate_hz, .01f);
+    EXPECT_STREQ(WaveX::LfoControl::DivisionLabel(8), "3/16");
+    ASSERT_TRUE(m.SetSync(false));
+    EXPECT_EQ(m.Value(2), 0);
+    EXPECT_FLOAT_EQ(m.RateHz(), .01f);
+    EXPECT_TRUE(m.Set(1, 100000));
+    EXPECT_FALSE(m.Set(1, 100001));
+    EXPECT_FALSE(m.Set(1, 9));
+}
+TEST(LfoModel, LogarithmicRateAdjustmentSpansFourDecadesAndDoesNotStickAtMinimum) {
+    LfoModel m;
+    m.Expect(1);
+    InstLfoSyncMessage s;
+    s.request_id = s.revision = s.valid = 1;
+    s.values[0].rate_hz = .01f;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FLOAT_EQ(m.RateFill(), 0);
+    ASSERT_TRUE(m.AdjustRate(1, 10));
+    EXPECT_GT(m.RateHz(), .01f);
+    EXPECT_LT(m.RateHz(), .0101f);
+    ASSERT_TRUE(m.Set(1, 10));
+    ASSERT_TRUE(m.AdjustRate(100));
+    EXPECT_NEAR(m.RateHz(), .1f, .00001f);
+    EXPECT_NEAR(m.RateFill(), .25f, .00001f);
+    ASSERT_TRUE(m.AdjustRate(300));
+    EXPECT_FLOAT_EQ(m.RateHz(), 100.f);
+    EXPECT_FLOAT_EQ(m.RateFill(), 1);
+    ASSERT_TRUE(m.AdjustRate(INT32_MIN));
+    EXPECT_FLOAT_EQ(m.RateHz(), .01f);
+    ASSERT_TRUE(m.AdjustRate(INT32_MAX));
+    EXPECT_FLOAT_EQ(m.RateHz(), 100.f);
+}

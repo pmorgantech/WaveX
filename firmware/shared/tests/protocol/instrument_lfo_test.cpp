@@ -60,7 +60,7 @@ TEST(InstrumentLfoProtocol, RejectsInvalidIdentityAndSettings) {
     bad.value.wave = 5;
     EXPECT_FALSE(IsValidInstLfoOp(bad));
     bad = m;
-    bad.value.sync_div = 8;
+    bad.value.sync_div = WaveX::LfoControl::kDivisionCount;
     EXPECT_FALSE(IsValidInstLfoOp(bad));
     bad = m;
     bad.value.pitch_follow = 2;
@@ -77,4 +77,24 @@ TEST(InstrumentLfoProtocol, RejectsInvalidIdentityAndSettings) {
     bad = m;
     bad.value.delay_s = std::numeric_limits<float>::infinity();
     EXPECT_FALSE(IsValidInstLfoOp(bad));
+}
+
+TEST(InstrumentLfoProtocol, ExtendedRatesAndDottedDivisionRoundTrip) {
+    for (float rate: {.01f, .1f, 100.f}) {
+        InstLfoOpMessage in;
+        in.request_id = in.revision = 1;
+        in.op = INST_LFO_SET;
+        in.value.rate_hz = rate;
+        in.value.sync_div = 8;
+        ASSERT_TRUE(IsValidInstLfoOp(in));
+        std::array<uint8_t, 512> bytes{};
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      bytes.data(), bytes.size(), MSG_INST_LFO_OP, &in, sizeof(in)),
+                  0u);
+        InstLfoOpMessage out;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(bytes.data(), MSG_INST_LFO_OP, &out, sizeof(out)));
+        EXPECT_FLOAT_EQ(out.value.rate_hz, rate);
+        EXPECT_EQ(out.value.sync_div, 8);
+    }
 }

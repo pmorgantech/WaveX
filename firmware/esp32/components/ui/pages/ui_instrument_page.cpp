@@ -175,7 +175,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
                 add(lfoFields[i],
                     kParamModulator,
                     lfo_.Value(i),
-                    i == 1             ? "Hz (Sync off)"
+                    i == 1             ? (lfo_.Synced() ? "note" : "Hz")
                     : i == 4 || i == 5 ? "ms"
                                        : "");
             break;
@@ -873,17 +873,22 @@ void UIInstrumentPage::stepParam(int steps, int divisor) {
             selectLfo(std::clamp<int64_t>(static_cast<int64_t>(lfo_.Index()) + steps, 0, 1));
         else if (alive_) {
             const uint8_t field = static_cast<uint8_t>(param_ - 1);
-            const int old = lfo_.Value(field);
-            const int step = field == 1                 ? (old < 1000 ? 10 : 100)
-                             : field == 4 || field == 5 ? (old < 100    ? 1
-                                                           : old < 1000 ? 10
-                                                                        : 100)
-                                                        : 1;
-            lfo_.Set(field,
-                     static_cast<int>(std::clamp<int64_t>(
-                         static_cast<int64_t>(old) + static_cast<int64_t>(steps) * step,
-                         field == 1 ? 20 : 0,
-                         LfoModel::Maximum(field))));
+            if (field == 1)
+                lfo_.AdjustRate(steps, divisor);
+            else if (field == 2)
+                lfo_.SetSync(steps > 0);
+            else {
+                const int old = lfo_.Value(field);
+                const int step = field == 4 || field == 5 ? (old < 100    ? 1
+                                                             : old < 1000 ? 10
+                                                                          : 100)
+                                                          : 1;
+                lfo_.Set(field,
+                         static_cast<int>(std::clamp<int64_t>(
+                             static_cast<int64_t>(old) + static_cast<int64_t>(steps) * step,
+                             0,
+                             LfoModel::Maximum(field))));
+            }
             refreshLfo();
             UINavigator::instance().refreshSoftkeys();
         }
@@ -1468,7 +1473,6 @@ void UIInstrumentPage::selectLfo(int index) {
 }
 void UIInstrumentPage::refreshLfo() {
     const char* waves[] = {"Sine", "Triangle", "Saw", "Square", "S & H"};
-    const char* sync[] = {"Off", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars"};
     for (int i = 0; i < 8; ++i) {
         auto& tile = tiles_[static_cast<int>(Stage::Lfo)][i];
         if (!tile.card)
@@ -1485,16 +1489,39 @@ void UIInstrumentPage::refreshLfo() {
             fill = std::clamp(static_cast<float>(v) / LfoModel::Maximum(i - 1), 0.f, 1.f);
             if (i == 1)
                 snprintf(value, sizeof(value), "%s", v <= 4 ? waves[v] : "Unknown");
-            else if (i == 2)
-                snprintf(value, sizeof(value), "%.2f", static_cast<double>(v) / 1000);
-            else if (i == 3)
-                snprintf(value, sizeof(value), "%s", v <= 7 ? sync[v] : "Unknown");
-            else if (i == 4)
+            else if (i == 2) {
+                if (lfo_.Synced())
+                    snprintf(value,
+                             sizeof(value),
+                             "%s",
+                             WaveX::LfoControl::DivisionLabel(static_cast<uint8_t>(lfo_.Value(2))));
+                else
+                    snprintf(value,
+                             sizeof(value),
+                             lfo_.RateHz() < .1f ? "%.4f"
+                             : lfo_.RateHz() < 1 ? "%.3f"
+                                                 : "%.2f",
+                             static_cast<double>(lfo_.RateHz()));
+                fill = lfo_.RateFill();
+            } else if (i == 3) {
+                snprintf(value,
+                         sizeof(value),
+                         "%s",
+                         !WaveX::LfoControl::ValidDivision(static_cast<uint8_t>(v)) ? "Unknown"
+                         : v                                                        ? "On"
+                                                                                    : "Off");
+                fill = v ? 1.f : 0.f;
+            } else if (i == 4)
                 snprintf(value, sizeof(value), "%s", v ? "Gate" : "Free");
             else if (i == 7)
                 snprintf(value, sizeof(value), "%s", v ? "On (Hz)" : "Off");
             else
                 snprintf(value, sizeof(value), "%d", v);
+        }
+        if (i == 2) {
+            const char* unit = lfo_.Synced() ? "note" : "Hz";
+            if (std::strcmp(lv_label_get_text(tile.unit), unit))
+                lv_label_set_text(tile.unit, unit);
         }
         valueTileSetValue(tile, value);
         valueTileSetFill(tile, fill);

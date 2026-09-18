@@ -398,7 +398,8 @@ modulation quality, physical controls or the one-hour phase soak.
 Each Instrument now retains two per-voice LFO settings. The backend evaluates
 the LFOs with a Q32 free-running frame/beat epoch and supports waveform, Hz or
 tempo-division rate, sync, retrigger, pitch-follow, delay and fade. Hz rates
-are clamped to 0.02–20 Hz; tempo divisions cover 1/16 through 4 bars, and
+are clamped to 0.01–100 Hz; tempo divisions cover 1/16 through 4 bars,
+including 3/16, and
 pitch-follow applies only in Hz mode. The first per-voice source remains the
 existing source id; the second is appended, while the retired global source id
 continues to read zero for wire compatibility.

@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- LFO Sync Off/On with Rate switching between logarithmic **0.01–100 Hz**
+  adjustment and musical durations, including 3/16. Sync preserves the Hz
+  setting; existing saved division IDs retain their meanings. Both per-voice
+  and global runtime limits use the wider range. Held-note phase is preserved;
+  physical quality, rendering and callback checks are tracked in HV-015.
+
 - End-to-end MIDI clock sync: Daisy 24-PPQN output, timestamped DIN/USB input,
   single-source following, next-Clock Start/Continue and SPP Pattern/Song seek.
   The sequencer has Internal/MIDI selection, measured tempo and an explicit Stop

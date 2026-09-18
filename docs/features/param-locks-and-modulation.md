@@ -114,8 +114,8 @@ per-voice LFOs owned by the Instrument plus one engine-global LFO.** The
 earlier "2 global + 1 per-voice" split is withdrawn; `SRC_LFO2` stays in the
 enum as retired-but-reserved and reads 0.
 
-- **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.02–20) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
-- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.02–20) or tempo divisions (1/16 … 4 bars); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend, typed transport and two-row eight-tile LFO page are implemented; edits use the common automatic-preview Apply/Revert path and WXI save retains the audible working copy. Live rate/wave/delay/fade edits preserve held-note LFO phase and age; gate/free admission policy applies to the next note.
+- **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.01–100) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
+- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.01–100) or tempo divisions (1/16 … 4 bars, including 3/16); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend, typed transport and two-row eight-tile LFO page are implemented; edits use the common automatic-preview Apply/Revert path and WXI save retains the audible working copy. Live rate/wave/delay/fade edits preserve held-note LFO phase and age; gate/free admission policy applies to the next note.
 - Why the Instrument owns them: an `.wxi` must sound the same on any Track and in any Project. Slot 3's wobble must not change because slot 5 loaded a new Instrument, and it must not depend on an engine setting the file does not carry.
 
 ## 6. Protocol
@@ -166,13 +166,31 @@ enum as retired-but-reserved and reads 0.
   gestures and protocol extensions above describe targets, not current controls.
 
 
-### LFO rate control follow-up
+### LFO rate controls
 
-Requested 2026-09-17: expose Sync as a mode, with the Rate field showing Hz when
-Off and a musical duration when On (including 1/4 and 3/16). Existing per-voice
-sync divisions remain implemented; this field behavior and the 3/16 division
-are pending. Preserve the independent Hz setting across mode changes. Centralize
-the division mapping across UI, engine, wire validation and WXI serialization;
-add dotted/triplet choices deliberately without reinterpreting saved enum values.
-Use the current internal or followed tempo. Specify phase restart/SPP response
-separately from rate synchronization, and add hardware validation when implemented.
+Implemented 2026-09-17: Sync is an Off/On control. Rate displays Hz when Off
+and a musical duration when On, including 1/4 and 3/16. Unsynced rate spans
+**0.01–100 Hz**, adjusted logarithmically (100 normal steps per decade; Shift
+uses the existing fine-adjust divisor). Small changes retain float precision;
+the display uses extra decimals at slow rates. Increasing Rate selects faster
+cycles in both modes. One 0.01-Hz cycle takes 100 s.
+
+Sync does not overwrite the independent Hz setting; turning it off restores
+that rate. Enabling Sync from Off starts at 1/4; Rate then selects the duration.
+The shared `audio/lfo_config.hpp` owns runtime bounds and division identities.
+Existing wire/WXI IDs retain their meanings; 3/16 is appended. WXI still retains
+the broader 0–1000-Hz storage domain for compatibility, while runtime and UI
+adjustment clamp to 0.01–100. Both Instrument and global LFO runtimes use these
+bounds; the global LFO editor/sync remain separate work.
+
+Instrument LFOs follow the current internal or MIDI-followed tempo. Sync changes
+rate only: held voices keep phase across rate/mode edits and transport/SPP
+relocation. Gate restarts on note-on; Free takes the continuously advancing
+engine frame/beat epoch at admission. SPP phase resetting is not implemented.
+Modulation stays at control rate, including at 100 Hz; this is not a new
+audio-rate modulation path. Audible quality and callback headroom are unverified
+in [HV-015](../hardware-validation.md#hv-015--lfo-range-and-musical-rate-controls).
+
+The bench console retains its existing raw commands: `RATE` uses millihertz
+(10–100000), and `SYNC` uses the shared division ID (0 disables sync). The
+visible Rate/Sync controls use the mode-aware behavior above.

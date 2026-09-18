@@ -134,13 +134,11 @@ The ten-minute drift target is ±3 ms against the DAW metronome, without audible
 drift. If output jitter is unacceptable, measure before reconsidering which MCU
 owns DIN output. The complete Phase 2 gate remains open.
 
-## LFO sync follow-up
+## LFO sync controls
 
-Instrument per-voice LFOs already support basic tempo divisions. The requested
-next UI change is a Sync option that changes **Rate** from Hz to musical duration
-(for example 1/4 or 3/16), retaining the saved Hz rate when Sync is turned off.
-Add dotted/fractional divisions through one shared mapping used by UI, runtime,
-protocol validation and WXI persistence. Define tempo synchronization separately
-from phase restart/SPP policy. This UX/division extension is queued in
-[the modulation design](param-locks-and-modulation.md#lfo-rate-control-follow-up);
-it is not part of this transport implementation.
+Instrument per-voice LFO Rate switches between 0.01–100 Hz and musical durations
+when Sync is toggled. 3/16 joins the existing divisions without changing saved
+IDs, and Hz is retained independently. This follows transport tempo while
+preserving held-note phase across Start/SPP and edits. See
+[the modulation design](param-locks-and-modulation.md#lfo-rate-controls) and
+[HV-015](../hardware-validation.md#hv-015--lfo-range-and-musical-rate-controls).

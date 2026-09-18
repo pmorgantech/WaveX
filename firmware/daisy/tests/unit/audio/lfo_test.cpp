@@ -192,3 +192,16 @@ TEST(LfoRetrigger, ResetsPhaseAndTheEnvelope) {
 }
 
 }  // namespace
+
+TEST(LfoRange, GlobalRuntimeAcceptsExpandedRange) {
+    Lfo lfo;
+    lfo.Init(1000);
+    lfo.SetRateHz(.01f);
+    EXPECT_FLOAT_EQ(lfo.RateHz(), .01f);
+    lfo.SetRateHz(100);
+    EXPECT_FLOAT_EQ(lfo.RateHz(), 100);
+    lfo.Tick();
+    EXPECT_NEAR(lfo.Phase(), .1f, 1e-6);
+    lfo.SetRateHz(1000);
+    EXPECT_FLOAT_EQ(lfo.RateHz(), 100);
+}

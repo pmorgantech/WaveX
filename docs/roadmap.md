@@ -97,8 +97,10 @@ Phase 2.5 work. Open work:
    output, ESP32 timestamped DIN/USB ingest, first-source selection, next-Clock
    Start/Continue, SPP Pattern/Song relocation and sequencer clock controls.
    Next: measure jitter, callback cost and DAW sync in HV-014/HV-005. The full
-   gate remains open. LFO follow-up: Sync switches the Rate field from Hz to
-   musical durations including 3/16; see [the design](features/param-locks-and-modulation.md#lfo-rate-control-follow-up).
+   gate remains open. LFO Rate now switches between 0.01–100 Hz and
+   musical durations including 3/16, preserving Hz across Sync toggles; see
+   [the design](features/param-locks-and-modulation.md#lfo-rate-controls).
+   Audible behavior, rendering and callback cost remain open in HV-015.
 3. Validate TLC5947 LED feedback on hardware (HV-012). Per-pad cutoff and amp attack/decay/sustain
    editing with inheritance reset is implemented. The
    touch kit editor provides creation, naming, assignment, choke and new-copy

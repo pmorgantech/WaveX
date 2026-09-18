@@ -1,6 +1,8 @@
 #pragma once
 #include "spi_protocol/protocol.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace wavex_ui {
@@ -89,13 +91,13 @@ class LfoModel {
     }
     static int Maximum(uint8_t field) {
         return field == 0                 ? 4
-               : field == 1               ? 20000
-               : field == 2               ? 7
+               : field == 1               ? 100000
+               : field == 2               ? WaveX::LfoControl::kDivisionCount - 1
                : field == 4 || field == 5 ? 600000
                                           : 1;
     }
     bool Set(uint8_t field, int value) {
-        if (!Editable() || field > 6 || value < (field == 1 ? 20 : 0) || value > Maximum(field))
+        if (!Editable() || field > 6 || value < (field == 1 ? 10 : 0) || value > Maximum(field))
             return false;
         switch (field) {
             case 0:
@@ -122,6 +124,51 @@ class LfoModel {
         }
         UpdateDirty();
         return true;
+    }
+    bool Synced() const { return desired_.sync_div != 0; }
+    float RateHz() const { return desired_.rate_hz; }
+    bool SetSync(bool enabled) {
+        // Hz is independent and stays in every preview/save snapshot. Returning
+        // to sync defaults to a quarter note; an existing division is retained.
+        return Set(2, enabled ? (Synced() ? desired_.sync_div : 3) : 0);
+    }
+    int DurationIndex() const {
+        for (int i = 0; i < WaveX::LfoControl::kDivisionCount - 1; ++i)
+            if (WaveX::LfoControl::kDurationOrder[i] == desired_.sync_div)
+                return i;
+        return 0;
+    }
+    bool AdjustRate(int steps, int divisor = 1) {
+        if (!Editable() || !steps)
+            return false;
+        if (Synced()) {
+            const auto index = std::clamp<int64_t>(
+                int64_t{DurationIndex()} + steps, 0, WaveX::LfoControl::kDivisionCount - 2);
+            return Set(2, WaveX::LfoControl::kDurationOrder[index]);
+        }
+        // Logarithmic movement across four decades. Keep float Hz here so small
+        // adjustments near 0.01 are not rounded away by the console's mHz units.
+        const float base = std::clamp(
+            desired_.rate_hz, WaveX::LfoControl::kMinRateHz, WaveX::LfoControl::kMaxRateHz);
+        const double movement =
+            std::clamp(static_cast<double>(steps) / (100.0 * std::max(divisor, 1)), -4.0, 4.0);
+        desired_.rate_hz =
+            static_cast<float>(std::clamp(base * std::pow(10.0, movement),
+                                          static_cast<double>(WaveX::LfoControl::kMinRateHz),
+                                          static_cast<double>(WaveX::LfoControl::kMaxRateHz)));
+        UpdateDirty();
+        return true;
+    }
+    float RateFill() const {
+        if (Synced())
+            return static_cast<float>(DurationIndex()) / (WaveX::LfoControl::kDivisionCount - 2);
+        return std::clamp(std::log10(std::clamp(desired_.rate_hz,
+                                                WaveX::LfoControl::kMinRateHz,
+                                                WaveX::LfoControl::kMaxRateHz) /
+                                     WaveX::LfoControl::kMinRateHz) /
+                              4.f,
+                          0.f,
+                          1.f);
     }
     WaveX::Protocol::InstLfoOpMessage Request(uint32_t id, bool get = false) const {
         WaveX::Protocol::InstLfoOpMessage r;

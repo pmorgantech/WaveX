@@ -19,7 +19,7 @@ class VoiceLfo {
             std::min(4294967295.0, static_cast<double>(bpm) * 4294967296.0 / (60.0 * sample_rate)));
     }
     static uint64_t DivideBeatPhase(uint64_t beat_phase, uint8_t division) {
-        return division <= 3 ? beat_phase << (3 - division) : beat_phase >> (division - 3);
+        return LfoControl::CyclePhase(beat_phase, division);
     }
     WAVEX_ITCM_CODE_NAMED("lfo.Start")
     void Start(const Protocol::InstLfoSettings& settings,
@@ -76,7 +76,7 @@ class VoiceLfo {
         sample_rate = sample_rate ? sample_rate : 48000;
         wave_ = settings.wave;
         division_ = settings.sync_div;
-        enabled_ = wave_ <= 4 && division_ <= 7;
+        enabled_ = wave_ <= 4 && LfoControl::ValidDivision(division_);
         float hz = settings.rate_hz;
         if (!(hz >= 0 && hz <= 1000))
             hz = 1;
@@ -84,7 +84,7 @@ class VoiceLfo {
             hz *= pitch_ratio;
         if (!(hz >= 0))
             hz = 1;
-        hz = std::clamp(hz, .02f, 20.0f);
+        hz = std::clamp(hz, LfoControl::kMinRateHz, LfoControl::kMaxRateHz);
         rate_step_ = static_cast<uint32_t>(
             std::min(4294967295.0, static_cast<double>(hz) * 4294967296.0 / sample_rate));
         auto frames = [sample_rate](float seconds) {

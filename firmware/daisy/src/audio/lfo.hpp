@@ -14,6 +14,7 @@
 // HAL-free and allocation-free, so the waveforms, the phase wrap, the S&H
 // sequence and the delay/fade envelope are all host-testable.
 
+#include "audio/lfo_config.hpp"
 #include "lfo_sine.hpp"
 #include <cstdint>
 
@@ -28,10 +29,9 @@ enum class LfoWave : uint8_t {
     SampleHold = 4,
 };
 
-/// Rate limits from §5. The low end is slow enough for a filter sweep across
-/// a bar; the high end stops short of audio rate, which this is not for.
-static constexpr float kLfoMinRateHz = 0.02f;
-static constexpr float kLfoMaxRateHz = 20.0f;
+// Shared unsynced range; modulation remains evaluated at control rate.
+static constexpr float kLfoMinRateHz = LfoControl::kMinRateHz;
+static constexpr float kLfoMaxRateHz = LfoControl::kMaxRateHz;
 
 class Lfo {
    public:

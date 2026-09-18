@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "audio/lfo_config.hpp"
+
 namespace WaveX {
 namespace Protocol {
 
@@ -2284,10 +2286,9 @@ inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
            m.value.keytrack <= 1;
 }
 
-// Two per-voice LFOs. sync_div: 0=Hz, 1=1/16 note, 2=1/8,
-// 3=1/4, 4=1/2, 5=one bar, 6=two bars, 7=four bars (4/4).
+// Two per-voice LFOs; append-only sync identities are in audio/lfo_config.hpp.
 // Pitch follow applies to Hz mode: one octave of rate per octave above C4.
-// Runtime Hz clamps to 0.02..20; the storage domain retains 0..1000.
+// Runtime Hz clamps to 0.01..100; the storage domain retains 0..1000.
 static constexpr uint8_t INST_LFO_COUNT = 2;
 struct InstLfoSettings {
     uint8_t wave = 0, sync_div = 0, retrigger = 1, pitch_follow = 0;
@@ -2308,9 +2309,9 @@ static_assert(sizeof(InstLfoSettings) == 16, "LFO settings wire size");
 static_assert(sizeof(InstLfoOpMessage) == 28, "LFO operation wire size");
 static_assert(sizeof(InstLfoSyncMessage) == 48, "LFO snapshot wire size");
 inline bool IsValidInstLfoSettings(const InstLfoSettings& s) {
-    return s.wave <= 4 && s.sync_div <= 7 && s.retrigger <= 1 && s.pitch_follow <= 1 &&
-           s.rate_hz >= 0 && s.rate_hz <= 1000 && s.delay_s >= 0 && s.delay_s <= 600 &&
-           s.fade_s >= 0 && s.fade_s <= 600;
+    return s.wave <= 4 && LfoControl::ValidDivision(s.sync_div) && s.retrigger <= 1 &&
+           s.pitch_follow <= 1 && s.rate_hz >= 0 && s.rate_hz <= 1000 && s.delay_s >= 0 &&
+           s.delay_s <= 600 && s.fade_s >= 0 && s.fade_s <= 600;
 }
 inline bool IsValidInstLfoOp(const InstLfoOpMessage& m) {
     return m.request_id && m.track < 16 && m.index < INST_LFO_COUNT && m.op <= INST_LFO_SET &&

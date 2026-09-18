@@ -842,3 +842,20 @@ TEST(WxiCodec, OriginalOscillatorHeaderDefaultsMonoOff) {
     EXPECT_FALSE(dst.osc[0].mono);
     EXPECT_EQ(dst.osc[0].keytrack, 1);
 }
+
+TEST(WxiCodec, LfoExtendedRatesAndAppendOnlyDivisionSurviveSave) {
+    for (uint8_t id = 0; id <= 8; ++id) {
+        auto doc = MakeFullDoc();
+        doc.lfo[0].rate_hz = .01f;
+        doc.lfo[1].rate_hz = 100.f;
+        doc.lfo[0].sync_div = doc.lfo[1].sync_div = id;
+        MemoryIo io;
+        ASSERT_EQ(Wxi::Write(io.AsWriter(), doc), Result::Ok);
+        InstrumentFile out;
+        ASSERT_EQ(ReadBytes(io.buf, out), Result::Ok);
+        EXPECT_FLOAT_EQ(out.lfo[0].rate_hz, .01f);
+        EXPECT_FLOAT_EQ(out.lfo[1].rate_hz, 100.f);
+        EXPECT_EQ(out.lfo[0].sync_div, id);
+        EXPECT_EQ(out.lfo[1].sync_div, id);
+    }
+}

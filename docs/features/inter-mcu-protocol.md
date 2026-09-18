@@ -514,8 +514,10 @@ The request identifies the Track and LFO index and carries the expected
 Instrument revision for mutations; the retained completion id and error status
 make duplicate delivery and timeout recovery observable without retrying a
 blind edit. Snapshots carry waveform, rate mode/value, sync division,
-retrigger, pitch-follow, delay and fade. Hz values are limited to 0.02–20 and
-sync divisions span 1/16 through 4 bars; pitch-follow is meaningful only for
+retrigger, pitch-follow, delay and fade. Runtime Hz values clamp to 0.01–100
+(the storage/wire domain retains 0–1000). Sync divisions span 1/16 through
+4 bars including the append-only 3/16 selector; identities are centralized in
+`audio/lfo_config.hpp`. Pitch-follow is meaningful only for
 Hz mode. Source id 5 remains retired and reads zero, while source ids 6 and 17
 identify voice LFO 1 and 2.
 
