@@ -61,6 +61,21 @@ def _operation(esp, daisy, label, op, record_property, confirm=False):
     return stats
 
 
+def _program(esp, daisy, channel, program, record_property):
+    previous = daisy.cmd("BANKSTATS")["request"]
+    esp.cmd("MIDIPROGRAM", channel, program)
+    deadline = time.monotonic() + 60
+    while True:
+        stats = daisy.cmd("BANKSTATS")
+        if stats["request"] != previous and stats["busy"] == "0":
+            break
+        assert time.monotonic() < deadline, stats
+        time.sleep(0.1)
+    assert stats["op"] == "8" and stats["error"] == "0", stats
+    record_property("midi_program_" + stats["request"], repr(stats))
+    return stats
+
+
 @pytest.mark.both
 @pytest.mark.sdcard
 @pytest.mark.usefixtures("empty_project")
@@ -185,6 +200,52 @@ def test_bank_copy_recall_failure_isolation_and_service_timing(
     _operation(esp, daisy, "Preload", 7, record_property)
     # Shared/repeated paths deduplicate.
     assert set(daisy.samples()) == preloaded
+    assert int(daisy.state()["underruns"]) == underruns
+    daisy.note(1, 60, on=False)
+    # Frontend parser/forwarder injection, not an electrical MIDI cable test.
+    for track in range(16):
+        daisy.set_midi_in(track, daisy.MIDI_IN_OFF)
+    daisy.bind_track(2, second)
+    _track(esp, 1, trackloaded=1)
+    esp.page("MIDI", 3)
+    esp.wait_state(trackready=1, midiin=3)
+    esp.page("PROGRAM", 1)
+    esp.wait_state(trackready=1, program=1)
+    _track(esp, 2, trackloaded=1)
+    esp.page("MIDI", 3)
+    esp.wait_state(trackready=1, midiin=3)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Program: On")
+    esp.wait_state(trackready=1, program=0)
+    _track(esp, 3, trackloaded=1)
+    esp.page("MIDI", 0)
+    esp.wait_state(trackready=1, midiin=0)
+    esp.page("PROGRAM", 1)
+    esp.wait_state(trackready=1, program=1)
+    untouched = daisy.cmd("EDIT", 1)["revision"]
+    daisy.note(1, 60)
+    daisy.wait_state(voices=1)
+    _banks(esp)
+    stats = _program(esp, daisy, 3, 127, record_property)
+    for track in (0, 2):
+        assert daisy.cmd("LFO", track, 0)["rate"] == saved_lfo["rate"]
+    assert daisy.cmd("EDIT", 1)["revision"] == untouched
+    assert daisy.state()["voices"] == "1"
+    # Empty program preserves Tracks and does not count as an accepted job.
+    revisions = [daisy.cmd("EDIT", t)["revision"] for t in range(3)]
+    esp.cmd("MIDIPROGRAM", 3, 1)
+    esp.wait_state(bankready=1, bankerror=12)
+    assert daisy.cmd("BANKSTATS")["request"] == stats["request"]
+    assert [daisy.cmd("EDIT", t)["revision"] for t in range(3)] == revisions
+    # The same program is a fresh command on each event.
+    _program(esp, daisy, 3, 127, record_property)
+    assert daisy.cmd("EDIT", 0)["revision"] != revisions[0]
+    assert daisy.cmd("EDIT", 2)["revision"] != revisions[2]
+    assert daisy.cmd("EDIT", 1)["revision"] == untouched
+    _track(esp, 1, trackloaded=1, midiin=3, mixgain=3900, mixpan=12000)
+    _track(esp, 2, trackloaded=1, midiin=3, program=0)
+    _track(esp, 3, trackloaded=1, midiin=0, program=1)
     assert int(daisy.state()["underruns"]) == underruns
     daisy.note(1, 60, on=False)
     esp.home()

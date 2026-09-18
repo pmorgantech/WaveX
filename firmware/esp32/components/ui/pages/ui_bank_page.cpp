@@ -176,9 +176,14 @@ void UIBankPage::service() {
             confirm_ = 0;
             std::snprintf(message_, sizeof(message_), "%s", errorText(BANK_STALE));
         }
+        const bool midi_completion =
+            received.completed_op == BANK_PROGRAM_RECALL && received.completed_request_id &&
+            (received.completed_request_id != status_.completed_request_id ||
+             status_.completed_op != BANK_PROGRAM_RECALL);
         status_ = received;
         valid_ = true;
-        if (pending_id_ && received.completed_request_id == pending_id_) {
+        if (pending_id_ && received.completed_request_id == pending_id_ &&
+            received.completed_op == draft_.op) {
             pending_id_ = 0;
             std::snprintf(
                 message_,
@@ -188,6 +193,12 @@ void UIBankPage::service() {
                     ? "Bank samples preloaded and pinned until unloaded. Tracks unchanged."
                     : errorText(received.error));
         }
+        if (!pending_id_ && midi_completion)
+            std::snprintf(message_,
+                          sizeof(message_),
+                          "%s",
+                          received.error == BANK_OK ? "MIDI Program Change recall completed."
+                                                    : errorText(received.error));
         if (changed)
             UINavigator::instance().refreshSoftkeys();
     }

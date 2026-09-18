@@ -7,6 +7,11 @@ namespace WaveX::Storage {
 using namespace Protocol;
 using namespace AudioEngine;
 using R = BankFileJob::Result;
+namespace {
+bool IsRecall(uint8_t op) {
+    return op == BANK_RECALL || op == BANK_PROGRAM_RECALL;
+}
+}  // namespace
 BankSession::BankSession(
     SampleMemMgr& memory, SamplePool& pool, uint8_t* io, uint32_t bytes, Boundary boundary)
     : memory_(memory), pool_(pool), io_(io), io_bytes_(bytes), boundary_(boundary) {}
@@ -35,13 +40,44 @@ void BankSession::RefreshSlot() {
 bool BankSession::Request(const BankOpMessage& request, bool external_busy) {
     if (!IsValidBankOp(request))
         return false;
+    return BeginRequest(request, external_busy, static_cast<uint16_t>(1u << request.track));
+}
+bool BankSession::ProgramChange(const MidiProgramMessage& message, bool external_busy) {
+    if (!IsValidMidiProgram(message) || Busy() || external_busy)
+        return false;  // never defer an event across storage/routing changes
+    uint8_t tracks[kNumTracks];
+    const uint8_t count = SfzLoader::TracksForMidiChannel(message.channel, tracks, kNumTracks);
+    uint16_t targets = 0;
+    uint8_t source = 0;
+    for (uint8_t i = 0; i < count; ++i)
+        if (SfzLoader::TrackProgramChange(tracks[i])) {
+            source = tracks[i];
+            targets |= static_cast<uint16_t>(1u << source);
+        }
+    if (!targets)
+        return false;
+    do {
+        if (++program_id_ == 0)
+            ++program_id_;
+    } while (program_id_ == status_.active_request_id ||
+             program_id_ == status_.completed_request_id);
+    BankOpMessage request;
+    request.request_id = program_id_;
+    request.revision = status_.revision;
+    request.op = BANK_PROGRAM_RECALL;
+    request.slot = message.program;
+    request.track = source;
+    return BeginRequest(request, false, targets);
+}
+bool BankSession::BeginRequest(const BankOpMessage& request, bool external_busy, uint16_t targets) {
     status_.request_id = request.request_id;
     status_.slot = request.slot;
     status_.blocked = external_busy;
     RefreshSlot();
     reply_ = true;
-    if (request.op == BANK_GET || request.request_id == status_.active_request_id ||
-        request.request_id == status_.completed_request_id)
+    if (request.op == BANK_GET ||
+        (request.request_id == status_.active_request_id && request.op == status_.active_op) ||
+        (request.request_id == status_.completed_request_id && request.op == status_.completed_op))
         return false;
     const auto reject = [&](uint8_t error) {
         status_.completed_request_id = request.request_id;
@@ -53,18 +89,18 @@ bool BankSession::Request(const BankOpMessage& request, bool external_busy) {
         return reject(BANK_BUSY);
     if (request.revision != status_.revision)
         return reject(BANK_STALE);
-    if (request.op != BANK_RECALL && request.op != BANK_PRELOAD &&
-        !BankFile::ValidName(request.name))
+    if (!IsRecall(request.op) && request.op != BANK_PRELOAD && !BankFile::ValidName(request.name))
         return reject(BANK_BAD_NAME);
     if (request.op >= BANK_SAVE_COPY && !status_.loaded)
         return reject(BANK_NO_BANK);
-    if ((request.op == BANK_RECALL || request.op == BANK_CLEAR_COPY) && !status_.occupied)
+    if ((IsRecall(request.op) || request.op == BANK_CLEAR_COPY) && !status_.occupied)
         return reject(BANK_EMPTY_SLOT);
     if ((request.op == BANK_RECALL || request.op == BANK_CLEAR_COPY ||
          (request.op == BANK_STORE_COPY && status_.occupied)) &&
         !(request.flags & BANK_CONFIRM_REPLACE))
         return reject(BANK_CONFIRM_REQUIRED);
     request_ = request;
+    recall_targets_ = targets;
     status_.busy = 1;
     status_.active_request_id = request.request_id;
     status_.active_op = request.op;
@@ -120,7 +156,7 @@ void BankSession::Pump() {
                     break;
                 }
                 phase_ = Phase::Snapshot;
-            } else if (request_.op == BANK_RECALL || request_.op == BANK_PRELOAD) {
+            } else if (IsRecall(request_.op) || request_.op == BANK_PRELOAD) {
                 void* storage = nullptr;
                 if (!memory_.alloc(sizeof(Candidate), &candidate_mem_) ||
                     !memory_.ptr(candidate_mem_, &storage)) {
@@ -224,7 +260,7 @@ void BankSession::Pump() {
                 break;
             }
             stage_.emplace(pool_, candidate_->pool, memory_);
-            if (!stage_->Begin(static_cast<uint16_t>(~(1u << request_.track))) ||
+            if (!stage_->Begin(static_cast<uint16_t>(~recall_targets_)) ||
                 !SfzLoader::BeginProjectLoad(candidate_->tracks) ||
                 !SfzLoader::BeginProjectDocument(request_.track, candidate_->document)) {
                 Finish(BANK_DEPENDENCY);
@@ -239,6 +275,13 @@ void BankSession::Pump() {
             if (SfzLoader::ProjectTrackError() != INST_ERROR_NONE) {
                 Finish(InstrumentError(SfzLoader::ProjectTrackError()));
                 break;
+            }
+            if (IsRecall(request_.op)) {
+                const auto source_bit = static_cast<uint16_t>(1u << request_.track);
+                candidate_->pool.ForEach([&](SamplePool::Record& record) {
+                    if (record.used_by & source_bit)
+                        record.used_by |= recall_targets_;
+                });
             }
             phase_ = request_.op == BANK_PRELOAD ? Phase::PreloadNext : Phase::Commit;
             break;
@@ -256,15 +299,15 @@ void BankSession::Pump() {
                 phase_ = Phase::File;
             break;
         case Phase::Commit:
-            if (!boundary_.stop_track || !boundary_.stop_track(request_.track)) {
+            if (!boundary_.stop_tracks || !boundary_.stop_tracks(recall_targets_)) {
                 if (boundary_.publish)
                     boundary_.publish();
                 Finish(BANK_AUDIO_BUSY);
                 break;
             }
             // No fallible I/O/allocation after the stop fence. Only this
-            // Instrument is installed; Track routing and mix are independent.
-            if (!SfzLoader::FinishProjectLoad(true, request_.track)) {
+            // Instrument is copied to the captured targets; routing/mix are independent.
+            if (!SfzLoader::FinishProjectLoad(true, request_.track, recall_targets_)) {
                 if (boundary_.publish)
                     boundary_.publish();
                 Finish(BANK_DEPENDENCY);

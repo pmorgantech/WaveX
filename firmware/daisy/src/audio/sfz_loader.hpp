@@ -49,7 +49,9 @@ void CancelProjectTrack(SamplePool&, SampleMemMgr&);
 // Keep notes/transport gated until Pool commit, Track commit and publication
 // of all prepared voice maps finish. A failed/cancelled session cannot commit.
 // Abort requires CancelProjectTrack first, then caller rolls back staged PCM.
-bool FinishProjectLoad(bool commit, int only_track = -1);
+// With only_track >= 0, copy that candidate Instrument to recall_targets
+// (zero means only_track). All other Track fields remain live-owned.
+bool FinishProjectLoad(bool commit, int only_track = -1, uint16_t recall_targets = 0);
 // Bank recall shares the private Project loader lease, but installs only the
 // selected Instrument; routing/mix and every other Track remain live.
 bool BeginProjectDocument(uint8_t track, const Wxi::InstrumentFile& document);
@@ -174,9 +176,8 @@ const ModSlot* GetModSlots(uint8_t track);
 // track or value and returns false rather than clamping, so a malformed
 // MSG_TRACK_OP is visible instead of silently landing on Track 0.
 //
-// Only midi_in has behaviour today: poly_limit/priority are stored for stage
-// 8 (which measures before it implements a steal policy) and program_change
-// for stage 6 (Bank recall).
+// midi_in routes notes and enabled Program Changes; poly_limit/priority
+// remain stored pending the measured allocation policy.
 bool SetTrackMidiIn(uint8_t track, uint8_t midi_in);  // TrackMidiIn encoding
 uint8_t TrackMidiIn(uint8_t track);
 bool SetTrackPolyLimit(uint8_t track, uint8_t limit);  // 0 = none, else <= WAVEX_NUM_VOICES

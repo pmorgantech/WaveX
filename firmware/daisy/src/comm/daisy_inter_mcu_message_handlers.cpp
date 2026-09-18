@@ -128,6 +128,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 #endif
         return;
     }
+    if (msg_type == MSG_MIDI_PROGRAM) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        MidiProgramMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidMidiProgram(request))
+                AudioEngine::OnMidiProgram(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_BANK_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         BankOpMessage request;

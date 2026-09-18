@@ -139,10 +139,12 @@ TEST(MidiStreamParser, OrphanDataBytesBeforeAnyStatusAreDiscarded) {
 TEST(MidiStreamParser, TwoByteMessagesKeepAlignment) {
     StreamParser p;
     // Program change (0xC0, 1 data byte) then channel pressure (0xD0,
-    // 1 data byte) - neither is reported, but a following note must parse.
+    // 1 data byte) - Program Change and the following note must parse.
     auto events = FeedAll(p, {0xC0, 5, 0xD2, 100, 0x90, 60, 100});
-    ASSERT_EQ(events.size(), 1u);
-    EXPECT_EQ(events[0].type, EventType::NoteOn);
+    ASSERT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].type, EventType::ProgramChange);
+    EXPECT_EQ(events[0].data1, 5);
+    EXPECT_EQ(events[1].type, EventType::NoteOn);
 }
 
 TEST(MidiStreamParser, ThreeByteUnreportedMessagesKeepAlignment) {
@@ -265,3 +267,17 @@ TEST(MidiStreamParser, InterruptedMessageIsAbandoned) {
 }
 
 }  // namespace
+
+TEST(MidiStreamParser, ProgramChangeRunningStatusAndRealtimeInterleave) {
+    StreamParser p;
+    auto events = FeedAll(p, {0xCF, 0xF8, 0, 127, 0xFA, 42, 0xF2, 1, 0, 5});
+    ASSERT_EQ(events.size(), 3u);
+    for (const auto& event: events) {
+        EXPECT_EQ(event.type, EventType::ProgramChange);
+        EXPECT_EQ(event.channel, 15);
+        EXPECT_EQ(event.data2, 0);
+    }
+    EXPECT_EQ(events[0].data1, 0);
+    EXPECT_EQ(events[1].data1, 127);
+    EXPECT_EQ(events[2].data1, 42);
+}

@@ -222,6 +222,7 @@ struct BankJobMetrics {
 };
 BankJobMetrics DebugBankJobMetrics();
 #endif
+void OnMidiProgram(const WaveX::Protocol::MidiProgramMessage&);
 void OnBankOp(const WaveX::Protocol::BankOpMessage&);
 void OnSeqSlotEdit(const WaveX::Protocol::SeqSlotEditMessage&);
 void OnSeqSlotPageRequest(const WaveX::Protocol::SeqPatternRequestMessage&);

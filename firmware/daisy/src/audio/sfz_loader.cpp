@@ -1870,23 +1870,32 @@ void CancelProjectTrack(SamplePool& pool, SampleMemMgr& memory) {
     s_in_project_step = false;
     s_bank = live;
 }
-bool FinishProjectLoad(bool commit, int only_track) {
+bool FinishProjectLoad(bool commit, int only_track, uint16_t recall_targets) {
     if (only_track < -1 || only_track >= kNumTracks)
         return false;
     if (!s_project_bank || s_phase != Phase::Idle || (commit && s_project_failed))
+        return false;
+    if (only_track >= 0) {
+        if (!recall_targets)
+            recall_targets = static_cast<uint16_t>(1u << only_track);
+        if (!(recall_targets & (1u << only_track)))
+            return false;
+    } else if (recall_targets)
         return false;
     if (commit) {
         if (only_track < 0)
             *s_bank = *s_project_bank;
         else
-            s_bank->At(static_cast<uint8_t>(only_track)).instrument =
-                s_project_bank->At(static_cast<uint8_t>(only_track)).instrument;
+            for (uint8_t track = 0; track < kNumTracks; ++track)
+                if (recall_targets & (1u << track))
+                    s_bank->At(track).instrument =
+                        s_project_bank->At(static_cast<uint8_t>(only_track)).instrument;
     }
     s_project_bank = nullptr;
     s_project_samples_only = false;
     if (commit) {
         for (uint8_t track = 0; track < kNumTracks; ++track) {
-            if (only_track >= 0 && track != only_track)
+            if (only_track >= 0 && !(recall_targets & (1u << track)))
                 continue;
             s_sound_undo[track].Apply();
             BumpKeyRevision(track);

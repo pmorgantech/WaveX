@@ -188,6 +188,7 @@ enum MessageType : uint8_t {
     MSG_MIX_STATE = 0x7C,       // D->E: foreground-owned accepted mix settings
     MSG_INST_EDIT_OP = 0x80,    // E->D: sound undo/apply/filter/amp
     MSG_BANK_OP = 0x82,         // E->D: named Bank copies, slot readback and Track recall
+    MSG_MIDI_PROGRAM = 0x84,    // E->D: channel-routed MIDI Program Change
     MSG_BANK_STATUS = 0x83,     // D->E: stable slot and retained operation outcome
     MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
     MSG_ERROR = 0xFF
@@ -1729,7 +1730,8 @@ enum BankOpCode : uint8_t {
     BANK_STORE_COPY,
     BANK_CLEAR_COPY,
     BANK_RECALL,
-    BANK_PRELOAD
+    BANK_PRELOAD,
+    BANK_PROGRAM_RECALL  // status only; initiated by MSG_MIDI_PROGRAM
 };
 enum BankError : uint8_t {
     BANK_OK = 0,
@@ -1787,8 +1789,8 @@ inline bool IsValidBankStatus(const BankStatusMessage& m) {
         instrument_end |= c == 0;
     return m.request_id && m.revision && m.busy <= 1 && m.blocked <= 1 && m.loaded <= 1 &&
            m.occupied <= m.loaded && m.slot < 128 && m.error <= BANK_CONFIRM_REQUIRED &&
-           m.active_op <= BANK_PRELOAD && m.completed_op <= BANK_PRELOAD && name_end &&
-           instrument_end &&
+           m.active_op <= BANK_PROGRAM_RECALL && m.completed_op <= BANK_PROGRAM_RECALL &&
+           name_end && instrument_end &&
            (m.busy ? m.active_request_id != 0 && m.active_op != BANK_GET
                    : m.active_request_id == 0);
 }
@@ -2146,6 +2148,19 @@ inline bool IsValidMidiClockEvent(const MidiClockEventMessage& m) {
     return m.source <= 1 && m.event <= MIDI_CLK_SPP && !m.reserved && m.spp_beats16 <= 0x3fff &&
            (m.event == MIDI_CLK_SPP || !m.spp_beats16) &&
            (m.event == MIDI_CLK_TICK || !m.esp_delta_us);
+}
+
+// MIDI Program Change: raw zero-based channel and program (Bank slot).
+struct MidiProgramMessage {
+    uint8_t program, channel;
+    uint16_t reserved;
+    MidiProgramMessage() : program(0), channel(0), reserved(0) {}
+    MidiProgramMessage(uint8_t program_, uint8_t channel_)
+        : program(program_), channel(channel_), reserved(0) {}
+} __attribute__((packed));
+static_assert(sizeof(MidiProgramMessage) == 4, "MIDI Program wire size");
+inline bool IsValidMidiProgram(const MidiProgramMessage& m) {
+    return m.program < 128 && m.channel < 16 && !m.reserved;
 }
 
 // MSG_MIDI_CC (E->D): a forwarded MIDI control change. The Daisy owns the
@@ -3165,6 +3180,8 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SEQ_PLAYHEAD";
         case MSG_MIDI_CLOCK_EVENT:
             return "MIDI_CLOCK_EVENT";
+        case MSG_MIDI_PROGRAM:
+            return "MIDI_PROGRAM";
         case MSG_MIDI_CC:
             return "MIDI_CC";
         case MSG_SEQ_FILE_OP:

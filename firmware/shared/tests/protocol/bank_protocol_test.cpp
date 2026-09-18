@@ -77,3 +77,32 @@ TEST(BankProtocol, RejectsInvalidBoundsFlagsAndStatus) {
     std::memset(status.instrument, 'x', sizeof(status.instrument));
     EXPECT_FALSE(IsValidBankStatus(status));
 }
+
+TEST(BankProtocol, MidiProgramRoundTripAndBounds) {
+    std::array<uint8_t, 128> packet{};
+    for (uint8_t program: {uint8_t{0}, uint8_t{127}}) {
+        MidiProgramMessage request(program, 15), read;
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet.data(), packet.size(), MSG_MIDI_PROGRAM, &request, sizeof(request)),
+                  0u);
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(packet.data(), MSG_MIDI_PROGRAM, &read, sizeof(read)));
+        EXPECT_EQ(std::memcmp(&read, &request, sizeof(read)), 0);
+        EXPECT_TRUE(IsValidMidiProgram(read));
+    }
+    MidiProgramMessage invalid(128, 0);
+    EXPECT_FALSE(IsValidMidiProgram(invalid));
+    invalid = MidiProgramMessage(0, 16);
+    EXPECT_FALSE(IsValidMidiProgram(invalid));
+    invalid = MidiProgramMessage(0, 0);
+    invalid.reserved = 1;
+    EXPECT_FALSE(IsValidMidiProgram(invalid));
+    BankStatusMessage status;
+    status.request_id = status.completed_request_id = 1;
+    status.completed_op = BANK_PROGRAM_RECALL;
+    EXPECT_TRUE(IsValidBankStatus(status));
+    BankOpMessage op;
+    op.request_id = 1;
+    op.op = BANK_PROGRAM_RECALL;  // UI must not bypass recall confirmation
+    EXPECT_FALSE(IsValidBankOp(op));
+}

@@ -1999,8 +1999,14 @@ namespace {
 uint8_t bank_stopped_track = 0xff;
 bool bank_stop_ok = true;
 unsigned bank_published = 0;
-bool StopBankTest(uint8_t track) {
-    bank_stopped_track = track;
+uint16_t bank_stopped_mask = 0;
+bool StopBankTest(uint16_t mask) {
+    bank_stopped_mask = mask;
+    for (uint8_t track = 0; track < 16; ++track)
+        if (mask & (1u << track)) {
+            bank_stopped_track = track;
+            break;
+        }
     return bank_stop_ok;
 }
 void PublishBankTest() {
@@ -2344,4 +2350,128 @@ TEST_F(SfzLoaderTest, BankPreloadTraversesAll128SlotsAndBothFullOscillatorMaps) 
     EXPECT_TRUE(pool_.FindByPath("/kits/b.wav")->pinned);
     EXPECT_EQ(bank_stopped_track, 0xff);
     EXPECT_FALSE(SfzLoader::TrackLoaded(0));
+}
+
+TEST_F(SfzLoaderTest, MidiProgramRecallsMatchingEnabledTracksInOneTransaction) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    ASSERT_TRUE(Load(2));
+    for (uint8_t track = 0; track < 16; ++track)
+        ASSERT_TRUE(SfzLoader::SetTrackMidiIn(track, TRACK_MIDI_IN_OFF));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(0, 3));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(1, TRACK_MIDI_IN_OMNI));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(2, 3));
+    ASSERT_TRUE(SfzLoader::SetTrackProgramChange(2, false));
+    MockFatFS::Instance().AddFile("/new.wav", PcmWave(2048));
+    SaveBankDependency("Programs", nullptr, 127, "/new.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Programs")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    const auto old = SampleId("/kits/a.wav");
+    const auto revision = SfzLoader::ReadEditState(2).revision;
+    bank_stopped_mask = bank_published = 0;
+    ASSERT_TRUE(bank.ProgramChange(MidiProgramMessage(127, 2)));
+    const auto active = bank.Status().active_request_id;
+    EXPECT_EQ(bank.Status().active_op, BANK_PROGRAM_RECALL);
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(0, 2)));
+    EXPECT_EQ(bank.Status().active_request_id, active);
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_EQ(bank.Status().completed_op, BANK_PROGRAM_RECALL);
+    EXPECT_EQ(bank_stopped_mask, 3u);
+    EXPECT_EQ(bank_published, 1u);
+    EXPECT_EQ(SfzLoader::TrackMidiIn(0), 3);
+    EXPECT_EQ(SfzLoader::TrackMidiIn(1), TRACK_MIDI_IN_OMNI);
+    EXPECT_FALSE(SfzLoader::TrackProgramChange(2));
+    EXPECT_EQ(SfzLoader::ReadEditState(2).revision, revision);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "Preload test");
+    EXPECT_STREQ(SfzLoader::TrackName(1), "Preload test");
+    EXPECT_STREQ(SfzLoader::TrackName(2), "kit.sfz");
+    EXPECT_FALSE(SfzLoader::TrackLoaded(3));
+    EXPECT_EQ(pool_.Find(old)->used_by, 4u);
+    EXPECT_EQ(pool_.FindByPath("/new.wav")->used_by, 3u);
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 333.f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(0, filter));
+    EXPECT_NE(SfzLoader::GetInstrumentFilter(1)->cutoff_hz, 333.f);  // independent copies
+    // Repeated PC is a new command, not a permanently deduplicated program value.
+    ASSERT_TRUE(bank.ProgramChange(MidiProgramMessage(127, 2)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_NE(bank.Status().completed_request_id, active);
+    EXPECT_NE(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 333.f);
+}
+TEST_F(SfzLoaderTest, MidiProgramFailurePreservesEveryTargetAndRollsBackNewPcm) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(0, TRACK_MIDI_IN_OMNI));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(1, TRACK_MIDI_IN_OMNI));
+    for (uint8_t track = 2; track < 16; ++track)
+        ASSERT_TRUE(SfzLoader::SetTrackProgramChange(track, false));
+    SaveBankDependency("Programs", nullptr, 0, "/new.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Programs")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    const auto revision0 = SfzLoader::ReadEditState(0).revision;
+    const auto revision1 = SfzLoader::ReadEditState(1).revision;
+    bank_stopped_mask = 0;
+    ASSERT_TRUE(bank.ProgramChange(MidiProgramMessage(0, 15)));
+    EXPECT_EQ(RunBank(bank), BANK_DEPENDENCY);
+    EXPECT_EQ(bank_stopped_mask, 0u);
+    MockFatFS::Instance().AddFile("/new.wav", PcmWave(2048));
+    bank_stop_ok = false;
+    ASSERT_TRUE(bank.ProgramChange(MidiProgramMessage(0, 15)));
+    EXPECT_EQ(RunBank(bank), BANK_AUDIO_BUSY);
+    bank_stop_ok = true;
+    EXPECT_EQ(bank_stopped_mask, 3u);
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(SampleId("/new.wav"), 0u);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->used_by, 3u);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, revision0);
+    EXPECT_EQ(SfzLoader::ReadEditState(1).revision, revision1);
+}
+TEST_F(SfzLoaderTest, MidiProgramRejectsEmptyNoBankBusyAndUnmatchedWithoutQueue) {
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(0, 0)));
+    EXPECT_EQ(bank.Status().error, BANK_NO_BANK);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 100, BANK_NEW, "Empty")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(127, 0)));
+    EXPECT_EQ(bank.Status().error, BANK_EMPTY_SLOT);
+    const auto completed = bank.Status().completed_request_id;
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(0, 0), true));
+    for (uint8_t track = 0; track < 16; ++track)
+        ASSERT_TRUE(SfzLoader::SetTrackMidiIn(track, 16));
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(0, 0)));
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(0, 16)));
+    EXPECT_FALSE(bank.ProgramChange(MidiProgramMessage(128, 15)));
+    EXPECT_EQ(bank.Status().completed_request_id, completed);
+    bank.Pump();
+    EXPECT_FALSE(bank.Busy());
+    EXPECT_EQ(bank.Status().completed_request_id, completed);
+}
+
+TEST_F(SfzLoaderTest, MidiProgramCanPopulateAll16EmptyOmniTracks) {
+    SaveBankDependency("All tracks", nullptr, 0, "/kits/a.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "All tracks")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    for (uint8_t track = 0; track < 16; ++track) {
+        EXPECT_TRUE(SfzLoader::TrackProgramChange(track));
+        ASSERT_TRUE(SfzLoader::SetTrackMidiIn(track, TRACK_MIDI_IN_OMNI));
+    }
+    bank_stopped_mask = 0;
+    ASSERT_TRUE(bank.ProgramChange(MidiProgramMessage(0, 15)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    EXPECT_EQ(bank_stopped_mask, 0xffffu);
+    ASSERT_NE(SampleId("/kits/a.wav"), 0u);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->used_by, 0xffffu);
+    for (uint8_t track = 0; track < 16; ++track)
+        EXPECT_STREQ(SfzLoader::TrackName(track), "Preload test");
 }

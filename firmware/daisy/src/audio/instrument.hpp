@@ -462,10 +462,8 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
  * policy describe the Track's place in the machine and stay put when the
  * sound is replaced. Filter/envelope/tuning belong to the Instrument (§2.3).
  *
- * Only `midi_in` has behaviour today. `poly_limit`/`priority` are stored for
- * stage 8 (polyphony policy, which measures first) and `program_change` for
- * stage 6 (Bank recall); they are on the wire and in the file now so those
- * stages do not have to migrate a Track record that users already saved.
+ * `midi_in` routes notes and enabled Program Changes. `poly_limit`/`priority`
+ * remain stored pending the measured allocation policy.
  */
 struct Track {
     Instrument instrument;
@@ -475,7 +473,7 @@ struct Track {
     uint8_t midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
     uint8_t poly_limit = 0;      // 0 = no limit; stage 8
     uint8_t priority = 0;        // steal priority, 0 = lowest; stage 8
-    uint8_t program_change = 0;  // 1 = Program Change recalls Bank slots; stage 6
+    uint8_t program_change = 1;  // enabled for new Tracks; saved Projects retain their value
 };
 
 // The sixteen Tracks. A sequencer track addresses one directly; a MIDI note

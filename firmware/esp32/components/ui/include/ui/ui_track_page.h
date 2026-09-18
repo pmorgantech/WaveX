@@ -43,6 +43,7 @@ class UITrackPage : public UIPage {
     bool pending_ = false, alive_ = false;
     void select(uint8_t);
     void setMidi(uint8_t);
+    void setProgramChange(bool);
     void adjust(int);
     void read();
     void service();

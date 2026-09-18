@@ -1187,6 +1187,14 @@ esp_err_t inter_mcu_send_mix_op(uint8_t op, uint8_t track, uint16_t value) {
                : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_midi_program(const WaveX::Protocol::MidiProgramMessage& message) {
+    if (!WaveX::Protocol::IsValidMidiProgram(message))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_MIDI_PROGRAM, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_midi_clock(const WaveX::Protocol::MidiClockEventMessage& message) {
     if (!WaveX::Protocol::IsValidMidiClockEvent(message))
         return ESP_ERR_INVALID_ARG;
@@ -1830,6 +1838,7 @@ portMUX_TYPE s_bank_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::BankStatusMessage s_bank_status;
 bool s_bank_valid = false;
 uint32_t s_bank_pool_changed = 0;
+uint8_t s_bank_pool_op = 0;
 }  // namespace
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage& request) {
     if (!WaveX::Protocol::IsValidBankOp(request))
@@ -1846,11 +1855,15 @@ void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage& statu
     s_bank_status = status;
     s_bank_valid = true;
     const bool pool_changed =
-        (status.completed_op == BANK_RECALL || status.completed_op == BANK_PRELOAD) &&
+        (status.completed_op == BANK_RECALL || status.completed_op == BANK_PRELOAD ||
+         status.completed_op == BANK_PROGRAM_RECALL) &&
         status.error == BANK_OK && status.completed_request_id &&
-        status.completed_request_id != s_bank_pool_changed;
-    if (pool_changed)
+        (status.completed_request_id != s_bank_pool_changed ||
+         status.completed_op != s_bank_pool_op);
+    if (pool_changed) {
         s_bank_pool_changed = status.completed_request_id;
+        s_bank_pool_op = status.completed_op;
+    }
     taskEXIT_CRITICAL(&s_bank_lock);
     if (pool_changed) {
         // Recall can retire IDs; preload adds records/pins. Discard caches before

@@ -217,7 +217,10 @@ confirmed/cancelled Recall, preserves another Track while recalling shared or
 unloaded sample data, and checks duplicate-name/missing-file isolation. It then
 stores a second occupied slot and preloads with cold/shared dependencies while
 another Track holds a note. Repeated preload must reuse resident IDs and leave
-Track state/editor revision unchanged.
+Track state/editor revision unchanged. Program Change coverage injects through
+the frontend parser/forwarder, verifies channel and Omni targets, the Project
+page opt-out toggle, repeated recall, empty-slot refusal and a retained voice on
+an opted-out Track. This does not replace DIN/USB cable, DAW or jitter checks.
 
 JUnit properties retain each accepted job's `BANKSTATS` counters and UI wall
 completion time. Preserve the JUnit report, `logs/hil-*.log`, image hashes and

@@ -131,7 +131,9 @@ struct Track {
 
 **Numbering.** `midi_in` is **1-based (1..16) because it is displayed**, so Track 1 listens on MIDI channel 1 and no screen has to re-derive an offset; 0 is then free for Omni without colliding with a real channel. The wire channel MIDI itself delivers is 0-based, and that conversion happens in exactly one place — `MidiWireToDisplayChannel()` in `protocol.h`, which `TrackAcceptsMidiChannel()` uses. Track indices stay 0-based in code and 1-based on screen, as since stage 1.
 
-Only `midi_in` has behaviour today. `poly_limit`/`priority` are stored and on the wire for stage 8 (which measures before it implements a steal policy) and `program_change` for stage 6, so neither stage has to migrate a Track record users have already saved.
+`midi_in` routes notes and enabled Program Changes. Project → Shift exposes the
+saved Program Change enable flag. `poly_limit`/`priority` remain stored and on
+the wire pending the measured allocation policy.
 
 ### 2.2 MIDI routing: poly, omni, and everything between
 
@@ -348,11 +350,11 @@ Project (.wxp)
 
 **Implementation, 2026-09-18:** the [Bank Manager/session](bank-persistence.md)
 implements named New/Open/Save copy, Store/Clear into new files and confirmed
-selected-Track recall, plus atomic sample preload with explicit residency pins.
+selected-Track recall, atomic sample preload with explicit residency pins and
+channel-routed MIDI Program Change recall.
 The operation names and progress sketch below remain
 **target design**; the as-built wire contract is in
-[the protocol reference](inter-mcu-protocol.md). MIDI Program Change,
-Project Bank-path persistence and save-with-samples remain future work.
+[the protocol reference](inter-mcu-protocol.md). Project Bank-path persistence and save-with-samples remain future work.
 
 Every machine surveyed (Digitakt's 128-Sound pool, Octatrack's 128 Flex slots, E-mu's bank image, EP-133's numbered sounds, MIDI itself) has a numbered table of ready sounds. WaveX's is the **Bank**:
 
@@ -583,4 +585,5 @@ sparse and split maps remain Instrument bindings.
 This adds foreground editing and snapshot publication, with no callback, DSP,
 control-tick or voice-count change. No new DWT performance claim is made.
 Physical panel integration and the complete Phase 2 gate remain open. Bank
-save/load and Program Change recall continue in Phase 2.5.
+follow-ups continue in Phase 2.5; save/load and Program Change are implemented
+as described in [Bank persistence](bank-persistence.md).

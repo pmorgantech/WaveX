@@ -4,7 +4,7 @@
  *
  * Reads the 31250-baud serial MIDI stream on UART2 (pins/baud in
  * pin_config.h), parses it with the shared WaveX::Midi::StreamParser, and
- * forwards note on/off events to the Daisy backend over the inter-MCU
+ * forwards note on/off and Program Change events to the Daisy backend over the inter-MCU
  * link (MSG_NOTE_ON/MSG_NOTE_OFF). Serializes queued clock/transport output
  * from midi_out.h through its own UART TX ring.
  *
@@ -53,7 +53,7 @@ esp_err_t midi_task_stop(void);
  * @brief Forward a parsed MIDI event to the Daisy over the inter-MCU link.
  *
  * Shared by the DIN reader here and the USB MIDI reader
- * (usb_midi_task.cpp) so both transports get identical note handling.
+ * (usb_midi_task.cpp) so both transports get identical note and Program Change handling.
  * Thread-safe (the underlying link send path is mutex-protected).
  */
 void midi_forward_event(const WaveX::Midi::Event& ev);

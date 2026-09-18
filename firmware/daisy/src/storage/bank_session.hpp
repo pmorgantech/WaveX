@@ -10,7 +10,7 @@ namespace WaveX::Storage {
 class BankSession {
    public:
     struct Boundary {
-        bool (*stop_track)(uint8_t);
+        bool (*stop_tracks)(uint16_t);
         void (*publish)();
     };
     BankSession(SampleMemMgr&, AudioEngine::SamplePool&, uint8_t*, uint32_t, Boundary);
@@ -18,6 +18,8 @@ class BankSession {
     BankSession(const BankSession&) = delete;
     BankSession& operator=(const BankSession&) = delete;
     bool Request(const Protocol::BankOpMessage&, bool external_busy = false);
+    // Foreground only. No queue: busy or unmatched events are ignored.
+    bool ProgramChange(const Protocol::MidiProgramMessage&, bool external_busy = false);
     void Pump();
     bool Busy() const { return status_.busy != 0; }
     bool ReplyPending() const { return reply_; }
@@ -32,6 +34,7 @@ class BankSession {
         AudioEngine::SamplePool pool{records};
     };
     enum class Phase { Idle, Begin, File, Snapshot, Index, Stage, Load, Commit, PreloadNext };
+    bool BeginRequest(const Protocol::BankOpMessage&, bool external_busy, uint16_t targets);
     void Finish(uint8_t);
     void RefreshSlot();
     void Cleanup();
@@ -49,7 +52,8 @@ class BankSession {
     std::optional<AudioEngine::SamplePoolStage> stage_;
     Protocol::BankOpMessage request_;
     Protocol::BankStatusMessage status_;
-    uint16_t preload_slot_ = 0;
+    uint16_t preload_slot_ = 0, recall_targets_ = 0;
+    uint32_t program_id_ = 0;
     Phase phase_ = Phase::Idle;
     bool reply_ = false;
 };

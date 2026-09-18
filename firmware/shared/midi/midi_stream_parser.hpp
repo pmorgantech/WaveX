@@ -32,6 +32,7 @@ enum class EventType : uint8_t {
     NoteOff,        // data1 = note, data2 = release velocity (0 when
                     // normalized from a velocity-0 NoteOn)
     ControlChange,  // data1 = controller, data2 = value
+    ProgramChange,  // data1 = program (0-127), data2 = 0
 };
 
 struct Event {
@@ -45,7 +46,7 @@ class StreamParser {
    public:
     // Feeds one raw byte. Returns true when `out` holds a complete event.
     // Bytes that complete unreported message types (pitch bend, aftertouch,
-    // program change...) return false but still advance parser state.
+    // channel pressure...) return false but still advance parser state.
     bool Feed(uint8_t byte, Event& out) {
         // Real-time bytes are transparent: valid anywhere, never touch
         // running status, SysEx state, or an in-progress message.
@@ -127,6 +128,12 @@ class StreamParser {
                 out.channel = channel;
                 out.data1 = data_[0];
                 out.data2 = data_[1];
+                return true;
+            case 0xC0:  // ProgramChange (one data byte, including running status)
+                out.type = EventType::ProgramChange;
+                out.channel = channel;
+                out.data1 = data_[0];
+                out.data2 = 0;
                 return true;
             default:  // parsed for alignment, not reported
                 return false;

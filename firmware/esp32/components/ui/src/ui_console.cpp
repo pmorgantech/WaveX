@@ -19,6 +19,7 @@
 #include "inter_mcu.h"
 #include "lvgl.h"
 #include "midi_out.h"
+#include "midi_task.h"
 #include "ui/current_track.h"
 #include "ui/input_dispatcher.h"
 #include "ui/panel_key.h"
@@ -394,6 +395,21 @@ void dispatch(const Command& c) {
         touch_enqueue(static_cast<int16_t>(x), static_cast<int16_t>(y), pressed)
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
+    } else if (!strcmp(c.verb, "MIDIPROGRAM")) {
+        long channel, program;
+        if (!NextInt(&p, &channel) || !NextInt(&p, &program) || channel < 1 || channel > 16 ||
+            program < 0 || program > 127 || *detail::SkipSpaces(p)) {
+            reply_err(seq, "badarg");
+            return;
+        }
+        // Exercise the same parser/forwarder as DIN and USB, without claiming
+        // electrical MIDI coverage. The acknowledgement is injection only.
+        WaveX::Midi::StreamParser parser;
+        WaveX::Midi::Event event;
+        parser.Feed(static_cast<uint8_t>(0xC0 | (channel - 1)), event);
+        if (parser.Feed(static_cast<uint8_t>(program), event))
+            midi_forward_event(event);
+        reply_ok(seq);
     } else if (!strcmp(c.verb, "MIDIOUT")) {
         uint8_t accepted = 0;
         if (*p) {

@@ -4,8 +4,8 @@ Bank Manager, its foreground session owner and selected-Track recall are
 implemented for Phase 2.5. The codec, SD transactions, staged recall and UI are
 host-tested and both firmware images compile. Physical SD/audio acceptance is
 still open in HV-016. A sparse two-board HIL regression passed on 2026-09-18;
-explicit Bank sample preload is implemented; MIDI Program Change recall remains
-unimplemented.
+explicit Bank sample preload and channel-routed MIDI Program Change recall are
+implemented. Electrical MIDI and full-load timing remain hardware gates.
 
 ## Contents
 
@@ -14,6 +14,7 @@ unimplemented.
 - [SD transaction adapter](#sd-transaction-adapter)
 - [Bank Manager and Track recall](#bank-manager-and-track-recall)
 - [Sample preload](#sample-preload)
+- [MIDI Program Change recall](#midi-program-change-recall)
 - [Validation and remaining work](#validation-and-remaining-work)
 - [Related](#related)
 
@@ -74,7 +75,8 @@ transfer less than a sector; unchanged slot copies and index scans advance in
 128-byte slices. New Instrument encoding and selected-slot decoding process
 one bounded WXI document per foreground pump, so their worst-case service
 latency still needs physical measurement before this integration is accepted
-for performance use or extended to Program Change recall.
+for performance use. Sparse UI/preload/Program Change timings are recorded in
+HV-016; they do not bound a full Bank or the largest Instrument.
 
 Saves calculate the resulting sparse-file size and call the existing free-space
 admission helper before creating directories or files. They use a unique
@@ -157,6 +159,39 @@ slot; dense Banks therefore require separate total-time and responsiveness
 measurements. Preload removes later PCM reads, but recall still reads/validates
 the Instrument and WAV headers; it is not a guarantee of instant switching.
 
+## MIDI Program Change recall
+
+DIN and USB share the MIDI parser/forwarder. Raw program 0–127 selects Bank slot
+1–128 on screen. The Daisy captures all Tracks whose MIDI input matches the
+message channel (including Omni) and whose Program Change setting is enabled.
+Project → Shift → **Program: On/Off** changes that setting for the selected
+Track. New Tracks enable it; saved Projects retain their explicit value,
+including older Projects saved with it off. MIDI Input Off never matches.
+
+The MIDI event itself authorizes replacement, so it needs no dialog. The job
+reads one Instrument and stages its dependencies once in private Pool state.
+All non-target ownership bits remain live. Only after successful admission does
+one audio stop fence acknowledge the complete target mask; each target receives
+an independent copy of the Instrument, retaining its routing, mix and other
+Track settings. Prepared sequencer maps are then republished. No Bank I/O,
+allocation or Instrument copying occurs in the callback.
+
+A missing/invalid dependency, memory refusal or refused stop keeps every target
+Instrument and live Pool unchanged. No Bank or an empty program reports the
+existing Bank error. An invalid/unmatched event or any event arriving during a
+Bank/Project/Instrument/Pattern/card operation is ignored, with **no queued
+recall or automatic retry**. Send again after the operation finishes. New notes
+remain gated during staging; note-offs, resident sequencing and clock handling
+continue. Send Program Changes ahead of the notes that need the new sound.
+Preload reduces PCM work but does not eliminate card/header reads or guarantee
+instant switching. Bank Select remains deferred.
+
+Program Change outcomes use retained Bank status with the distinct
+`BANK_PROGRAM_RECALL` operation and a foreground-generated request ID. The Bank
+page displays the last observed MIDI outcome. Completion identity includes the
+operation, so MIDI results cannot acknowledge a coincident UI request ID. The
+same program sent again is a new recall, allowing stored sound restoration.
+
 ## Validation and remaining work
 
 Eight codec tests cover sparse and full-capacity Banks, both oscillator maps,
@@ -174,7 +209,9 @@ ownership, newly admitted PCM rollback, missing dependencies, full media,
 stale/busy requests and explicit replacement confirmation. Preload tests cover
 shared/new dependencies, preserved unpinned records, late-failure rollback,
 reserve-aware memory refusal, repeated/empty Banks and all 128 slots with both
-full oscillator maps. Wire/dispatch tests
+full oscillator maps. MIDI cases cover matched/Omni/Off routing, opt-out,
+all 16 targets, busy rejection, repeat events, independent copies and rollback
+for missing dependencies or an unacknowledged target stop. Wire/dispatch tests
 reject malformed messages; real-LVGL tests cover confirmation, Track changes,
 stale/offline status, stable slot selection, no mutation replay and idle rendering.
 
@@ -182,7 +219,9 @@ stale/offline status, stable slot selection, no mutation replay and idle renderi
 path: sparse Store/Save/Clear copies, Open, cancellation, LFO recall, preserved
 Track routing/mix, shared and newly admitted samples, duplicate destinations and
 missing sources, plus preload with cold/shared dependencies and an unrelated
-held voice. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
+held voice. It also injects Program Change through the frontend parser/forwarder,
+verifies matching and Omni targets, opt-out, empty slots and repeated recall.
+This injection does not validate DIN/USB electrical behavior. It retains per-operation `BANKSTATS` and UI wall times in JUnit.
 See [the bench command](../testing_guide.md#bank-files-and-track-recall).
 
 `BANKSTATS` is debug-only foreground telemetry. Each accepted job resets its
@@ -194,8 +233,7 @@ callback DWT, CPU utilization, analog continuity or MIDI wire-jitter results.
 Timing instrumentation compiles out when the debug harness is disabled.
 
 The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
-remains open. Next software work is channel-routed MIDI Program
-Change recall, followed by slot-to-slot copy/move and a decision on deferred
+remains open. Next software work is slot-to-slot copy/move and a decision on deferred
 unsaved Bank working copies. Project save/load does not yet persist the selected
 Bank path; reopen it by name after reboot. See the [roadmap](../roadmap.md).
 

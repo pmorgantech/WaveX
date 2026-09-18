@@ -117,10 +117,11 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
 | MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
 | MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy, confirmed Track recall and explicit sample preload |
+| MSG_MIDI_PROGRAM | 0x84 | E→D | `MidiProgramMessage` | raw channel/program; Daisy resolves enabled matching Tracks against the active Bank |
 | MSG_BANK_STATUS | 0x83 | D→E | `BankStatusMessage` | revisioned stable slot, storage availability and retained completion |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
-| MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
+| MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). `midi_in` routes notes and enabled Program Changes; polyphony/priority remain stored for the measured allocation policy. An out-of-range track or value is rejected and logged, not clamped |
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` changes user mutes; `SET_SOLO_MASK` (op 0x08) selects audible Tracks without changing those mutes, with zero disabling Solo. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_STATE_REQ | 0x7B | E→D | `MixStateRequest` | correlated mixer read; nonzero request id and Track 0–15, or 0xFF for master gain |
 | MSG_MIX_STATE | 0x7C | D→E | `MixStateMessage` | matching identity, validity, gain/pan in existing mixer wire units and mute target; foreground accepted state, applied through the existing block-boundary handoff; no ramp telemetry; master replies use pan=32768 and mute=0 |
@@ -139,7 +140,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, 0x82–0x83 for Bank operations, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x84 for Bank operations and Program Change, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
@@ -428,8 +429,9 @@ the UART queue is full. No callback work is added.
 MIDI input edits use the existing MSG_TRACK_OP, followed by authoritative
 readback. Values are validated before narrowing to the engine's byte fields;
 wide values cannot wrap into another channel. The UI offers Omni, 1-16 and Off.
-Polyphony/priority and Program Change fields remain stored for their later
-engine stages and are not exposed as working controls.
+Project → Shift exposes Program Change enable/disable through the same
+request/readback path. Polyphony/priority remain stored for their later engine
+stage.
 
 ### Filtered browser requests (as built, 2026-09-11)
 
@@ -588,7 +590,7 @@ active/completed request IDs, operations and error. Unknown flags and invalid
 bounds are rejected; names use the Bank file codec's admission rules.
 
 GET is read-only and can recover a lost completion. Mutations never auto-replay;
-active/completed IDs are deduplicated. Open/New/Save/Store/Clear require a fresh
+active/completed operation-and-ID pairs are deduplicated. Open/New/Save/Store/Clear require a fresh
 revision. Store/Clear publish a new named copy, preserving the old file. Recall
 always requires explicit replacement confirmation, stages the selected document
 and sample dependencies, and commits only after the target Track's audio stop
@@ -600,3 +602,25 @@ preserves the original Pool. Payload sizes and existing operation values stay
 unchanged. Upgrade both images to expose the new action; older backends reject
 it as an unknown operation.
 See [Bank persistence](bank-persistence.md) for ownership and SD semantics.
+
+### MIDI Program Change
+
+`MSG_MIDI_PROGRAM` (0x84) carries `MidiProgramMessage` (4 bytes): program and
+channel bytes followed by a zero reserved uint16. Programs are raw 0–127 and
+channels raw 0–15, following the [MIDI 1.0 message summary](https://midi.org/summary-of-midi-1-0-messages).
+The shared parser supports Program Change running status and interleaved
+real-time bytes; DIN and USB use the same forwarding path.
+
+The foreground captures all enabled matching/Omni Tracks and performs one
+staged Bank recall, with a single target-mask stop acknowledgement before
+replacement. `BANK_PROGRAM_RECALL` (operation 8) is status-only and is rejected
+in `MSG_BANK_OP`; a UI message cannot use it to skip confirmation. Outcomes
+carry foreground-generated IDs in existing `BankStatusMessage`. Consumers match
+completion by operation **and** ID and invalidate the Pool cache on successful
+recall. Both images must be upgraded for this extension; existing wire layouts
+and operation values stay unchanged.
+
+Busy or unmatched events are not queued/replayed. No Bank, empty slot or failed
+staging preserves Track Instruments and uses existing Bank errors. See
+[Bank persistence](bank-persistence.md#midi-program-change-recall) for routing,
+new-Track defaults, opt-out and timing limitations.

@@ -994,3 +994,24 @@ TEST_F(MessageDispatchTest, BankCommandsAreExactAndStorageLeaseBlocksMutations) 
     Dispatch(MSG_BANK_OP, request);
     EXPECT_EQ(GetDispatchRecord().bank_ops.size(), 2u);
 }
+
+TEST_F(MessageDispatchTest, MidiProgramValidatesAndReachesForegroundAdmission) {
+    MidiProgramMessage message(127, 15);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&message);
+    for (size_t size = 0; size < sizeof(message); ++size)
+        ProcessInterMcuMessage(MSG_MIDI_PROGRAM, 1, bytes, size);
+    EXPECT_TRUE(GetDispatchRecord().midi_programs.empty());
+    message.reserved = 1;
+    Dispatch(MSG_MIDI_PROGRAM, message);
+    message = MidiProgramMessage(128, 0);
+    Dispatch(MSG_MIDI_PROGRAM, message);
+    message = MidiProgramMessage(0, 16);
+    Dispatch(MSG_MIDI_PROGRAM, message);
+    EXPECT_TRUE(GetDispatchRecord().midi_programs.empty());
+    message = MidiProgramMessage(127, 15);
+    GetDispatchRecord().bank_busy = true;  // session owner rejects, without queuing
+    Dispatch(MSG_MIDI_PROGRAM, message);
+    ASSERT_EQ(GetDispatchRecord().midi_programs.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().midi_programs[0].program, 127);
+    EXPECT_EQ(GetDispatchRecord().midi_programs[0].channel, 15);
+}

@@ -56,6 +56,12 @@ void midi_forward_event(const WaveX::Midi::Event& ev) {
             }
             break;
         }
+        case WaveX::Midi::EventType::ProgramChange: {
+            const WaveX::Protocol::MidiProgramMessage message(ev.data1, ev.channel);
+            if (inter_mcu_send_midi_program(message) != ESP_OK)
+                ESP_LOGW(TAG, "program change dropped (link send failed)");
+            break;
+        }
         case WaveX::Midi::EventType::ControlChange:
             // Not forwarded yet: MSG_CONTROL_CHANGE carries WaveX PARAM_*
             // ids, not raw MIDI CC numbers - a CC-to-parameter mapping

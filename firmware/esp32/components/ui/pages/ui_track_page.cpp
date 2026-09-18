@@ -210,6 +210,19 @@ void UITrackPage::setMidi(uint8_t value) {
     read();
     render();
 }
+void UITrackPage::setProgramChange(bool enabled) {
+    if (!alive_ || !model_.Ready())
+        return;
+    if (inter_mcu_send_track_op(TRACK_OP_SET_PROGRAM_CHANGE, getCurrentTrack(), enabled) !=
+        ESP_OK) {
+        label(status_, "Link busy. Try again.");
+        return;
+    }
+    model_.Reset(getCurrentTrack());
+    pending_ = false;
+    read();
+    render();
+}
 void UITrackPage::focusControl(uint8_t control) {
     if (control_ == control)
         return;
@@ -351,7 +364,8 @@ void UITrackPage::render() {
                                                     : "Assign loads an Instrument. Tap a control "
                                                       "or click encoder to focus."))));
     uint32_t state = (alive_ && model_.Ready() ? 1u : 0u) | (static_cast<uint32_t>(first_) << 1) |
-                     (mix_.Ready() ? 64u : 0u) | (static_cast<uint32_t>(control_) << 7);
+                     (mix_.Ready() ? 64u : 0u) | (static_cast<uint32_t>(control_) << 7) |
+                     (static_cast<uint32_t>(s.program_change) << 9);
     if (state != soft_state_) {
         soft_state_ = state;
         UINavigator::instance().refreshSoftkeys();
@@ -391,6 +405,10 @@ std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getShiftedSoftkeys() {
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
     keys[1] = {"Banks", [] { UINavigator::instance().push(createBankPage()); }};
     keys[2] = {"Project files", [] { UINavigator::instance().push(createProjectFilesPage()); }};
+    keys[3] = {model_.State().program_change ? "Program: On" : "Program: Off",
+               [this] { setProgramChange(!model_.State().program_change); },
+               alive_ && model_.Ready(),
+               "Reading Track settings"};
     return keys;
 }
 void UITrackPage::onInput(const InputEvent& e) {
@@ -408,6 +426,7 @@ size_t UITrackPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "mixgain", mix_.State().gain);
     len = AppendKvInt(out, cap, len, "mixpan", mix_.State().pan);
     len = AppendKvInt(out, cap, len, "mixmute", mix_.State().mute);
+    len = AppendKvInt(out, cap, len, "program", model_.State().program_change);
     return AppendKvInt(out, cap, len, "midiin", model_.State().midi_in);
 }
 bool UITrackPage::consoleCommand(const char* args, char* reply, size_t cap) {
@@ -420,6 +439,8 @@ bool UITrackPage::consoleCommand(const char* args, char* reply, size_t cap) {
     else if (!std::strcmp(field, "MIDI") && value >= 0 && value <= 255 &&
              TrackMidiInValid(static_cast<uint8_t>(value)) && alive_ && model_.Ready())
         setMidi(static_cast<uint8_t>(value));
+    else if (!std::strcmp(field, "PROGRAM") && value >= 0 && value <= 1 && alive_ && model_.Ready())
+        setProgramChange(value != 0);
     else if (!std::strcmp(field, "LEVEL") && value >= 0 && value <= 6600 && alive_ && mix_.Ready())
         setMix(MIX_OP_SET_GAIN, static_cast<uint16_t>(value));
     else if (!std::strcmp(field, "PAN") && value >= 0 && value <= 65535 && alive_ && mix_.Ready())

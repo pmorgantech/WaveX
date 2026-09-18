@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- MIDI Program Change recalls active-Bank slots into every enabled matching or
+  Omni Track using one staged transaction and target-mask audio fence. Track
+  mix/routing and non-target sounds remain unchanged; failed staging rolls back.
+  Project → Shift exposes Program On/Off. New Tracks enable it; saved Projects
+  retain their value. Busy events are ignored without deferred replay. Parser,
+  wire, routing/rollback and frontend-injected two-board HIL coverage are added;
+  physical DIN/USB and full-load timing remain open in HV-016.
+
 - Bank Manager Preload loads and pins all active-Bank sample dependencies in
   one private transaction, preserving Tracks and existing PCM. Failed admission
   rolls back new samples and pin changes. Host tests cover full slot/zone

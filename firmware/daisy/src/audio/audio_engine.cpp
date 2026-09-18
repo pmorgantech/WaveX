@@ -702,7 +702,7 @@ alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
 static SamplePool* s_pool = nullptr;
 static BssStatic<std::optional<Storage::ProjectSession>> s_project_session;
 static BssStatic<std::optional<Storage::BankSession>> s_bank_session;
-static bool StopBankTrack(uint8_t track);
+static bool StopBankTrack(uint16_t mask);
 static bool StopProjectVoices();
 static void PublishProject();
 
@@ -2754,6 +2754,24 @@ BankJobMetrics DebugBankJobMetrics() {
 bool BankBusy() {
     return s_bank_session.Get() && s_bank_session.Get()->Busy();
 }
+static bool BankExternalBusy() {
+    return (s_project_session.Get() && s_project_session.Get()->Busy()) || PatternStore::Busy() ||
+           Storage::CardService::Busy() || (!BankBusy() && SfzLoader::Busy());
+}
+static void BankAccepted() {
+#if WAVEX_DEBUG_HARNESS_ENABLED
+    s_bank_job_metrics = BankJobMetrics{};
+    s_bank_job_metrics.request_id = s_bank_session.Get()->Status().active_request_id;
+    s_bank_job_metrics.op = s_bank_session.Get()->Status().active_op;
+    s_bank_job_metrics.busy = true;
+#endif
+    CancelEnvelopeJob();
+    CloseWav();
+}
+void OnMidiProgram(const MidiProgramMessage& message) {
+    if (s_bank_session.Get() && s_bank_session.Get()->ProgramChange(message, BankExternalBusy()))
+        BankAccepted();
+}
 void OnBankOp(const BankOpMessage& request) {
     if (!IsValidBankOp(request))
         return;
@@ -2767,22 +2785,11 @@ void OnBankOp(const BankOpMessage& request) {
         Comm::LinkSend(MSG_BANK_STATUS, &status, sizeof(status));
         return;
     }
-    const bool external = (s_project_session.Get() && s_project_session.Get()->Busy()) ||
-                          PatternStore::Busy() || Storage::CardService::Busy() ||
-                          (!BankBusy() && SfzLoader::Busy());
-    if (s_bank_session.Get()->Request(request, external)) {
-#if WAVEX_DEBUG_HARNESS_ENABLED
-        s_bank_job_metrics = BankJobMetrics{};
-        s_bank_job_metrics.request_id = request.request_id;
-        s_bank_job_metrics.op = request.op;
-        s_bank_job_metrics.busy = true;
-#endif
-        CancelEnvelopeJob();
-        CloseWav();
-    }
+    if (s_bank_session.Get()->Request(request, BankExternalBusy()))
+        BankAccepted();
 }
-static bool StopBankTrack(uint8_t track) {
-    const auto mask = static_cast<uint16_t>(1u << track);
+
+static bool StopBankTrack(uint16_t mask) {
     ClearSequencerVoiceMap(mask);
     return StopTracksAndWait(mask);
 }

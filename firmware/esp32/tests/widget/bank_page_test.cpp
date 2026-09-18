@@ -206,3 +206,19 @@ TEST_F(BankPageTest, PreloadNeedsLoadedFreshBank) {
     Advance(20);
     EXPECT_FALSE(page->getSoftkeys()[5].enabled);
 }
+
+TEST_F(BankPageTest, MidiCompletionCannotAcknowledgeAnUnrelatedUiRequest) {
+    Press(3);
+    Press(1);
+    ASSERT_EQ(mutations.size(), 1u);
+    status.busy = 0;
+    status.active_request_id = 0;
+    status.active_op = BANK_GET;
+    status.completed_request_id = mutations[0].request_id;
+    status.completed_op = BANK_PROGRAM_RECALL;
+    Advance(5);
+    EXPECT_FALSE(page->getSoftkeys()[3].enabled);
+    status.completed_op = BANK_RECALL;
+    Advance(5);
+    EXPECT_TRUE(page->getSoftkeys()[3].enabled);
+}

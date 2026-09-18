@@ -430,6 +430,7 @@ task replaced the listener that lived in `ui_screenshot.cpp`):
 | `ENC <±n>` / `POT <±n>` | one event carrying the magnitude, as the UI task's poll does | console task |
 | `TAP <x> <y>` / `TOUCH <DOWN\|MOVE\|UP> <x> <y>` | the synthetic pointer indev; `TAP` holds PRESSED for three read cycles | console task |
 | `STATE` | `page depth shift root lastkey track tstate tid tname sk0..5 sk<i>en sk<i>xy dropped leddriver ledready ledblank` + the page's own pairs (`tab`, `tab<i>xy`, `status`, `sel`, `dir`, `entries`, `picker`, `target`, `lastid`, `rows`, `focusid`, `selidx`, …) | UI task, under the LVGL lock |
+| `MIDIPROGRAM <channel 1..16> <program 0..127>` | Inject one Program Change through the frontend parser and shared DIN/USB forwarder; ACK means injected, not recalled. Observe `BANKSTATS`, Bank status and Track state for outcome. No electrical MIDI coverage. | console task, debug only |
 | `MIDIOUT [DIN\|USB\|BOTH CLOCK\|START\|CONTINUE\|STOP\|SPP [0..16383]]` | `accepted` destination mask (DIN=1, USB=2); `din`/`usb` tuples: ready,pending,accepted,sent,dropped,expired,failed. Queued is not delivered; inspect counters/analyzer. | console task, no LVGL or driver I/O |
 | `LEDS [WALK\|ALL\|OFF]` | `driver ready blank test errors writes levels`; optional diagnostic override, ten-second expiry; `levels` is last transported physical brightness, not electrical readback | UI task, under the LVGL lock |
 | `TRACK <n>` | selects a Track and asks the Daisy for its binding | UI task |

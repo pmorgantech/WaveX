@@ -727,7 +727,7 @@ preserve the source Bank. Capture both image identities before starting.
   time, callback DWT, clock jitter and underruns. **Pass:** No underruns or lost
   transport state; non-target Tracks remain continuous, the target changes only
   after successful staging, and response/timing meet the performance policy.
-  MIDI Program Change recall is not implemented in this gate.
+  Include Program Change recall; its additional cases are 016h below.
 - [ ] **016g — Bank sample preload:** Create a Bank containing shared and unique
   dependencies across both oscillator maps. Unload one dependency, keep another
   Track sounding, select an empty slot and press Preload. Repeat; switch Banks;
@@ -738,6 +738,22 @@ preserve the source Bank. Capture both image identities before starting.
   Bank changes do not silently unpin samples. Repeat with all 128 slots and
   maximum maps; collect service timing, callback DWT, audio continuity and
   underruns. No in-flight UI cancellation is available.
+
+- [ ] **016h — MIDI Program Change recall:** With both current images, route
+  one Track to a MIDI channel, a second to Omni, a third to the same channel
+  with Program disabled, and a fourth to Off. Use Project → Shift → Program
+  On/Off; save/reload a Project to check retention. Open a Bank with distinct
+  programs at raw 0/127. Send Program Changes from DIN and USB while the
+  non-target Track sounds and sequencing/clock runs. Repeat the same program;
+  try an empty slot, missing dependencies, exhausted RAM, bursts during busy
+  storage, and MIDI disconnect/reconnect. **Pass:** Only enabled matching/Omni
+  Tracks receive private Instrument copies, routing/mix remain unchanged, and
+  failure preserves all target Instruments/Pool ownership. Busy events never
+  replay later or against a different Bank. No confirmation dialog is required
+  for MIDI; UI Recall still requires one. Record source/target identity, service
+  time, callback DWT, physical MIDI timing, audible continuity and underruns;
+  repeat with all 16 targets and the largest Instrument. Full-load/electrical
+  tests and Project-setting persistence remain unrun for this entry.
 
 **2026-09-18 bench result:** `tests/hil/test_bank_files.py` passed (1 test,
 32.93 s), covering subsets of 016a/b/d. A sparse Bank with slot 128 populated
@@ -811,6 +827,32 @@ establish audible continuity, pin-release behavior or failure recovery on media.
 Full-bank/responsiveness profiling, hardware failure injection, callback DWT,
 MIDI jitter and soak remain open. The earlier 74 ms SD outlier remains relevant;
 these sparse measurements do not bound latency or close any whole checklist item.
+
+**2026-09-18 Program Change bench result:** Extended Bank HIL passed (1 test,
+52.11 s). Frontend `MIDIPROGRAM` injected into the production parser/forwarder,
+then traversed the real UART and Bank SD/recall path. Raw program 127 restored
+stored LFO settings on one channel-matched and one Omni Track. A same-channel
+Track with Program disabled through the Shift softkey retained its editor
+revision and held voice. Empty program 1 preserved all three revisions; repeat
+program 127 triggered a new recall. Track MIDI/mix and opt-out readback remained
+correct; reported underruns stayed zero. This is a subset of 016h, not a
+DIN/USB cable or acoustic-continuity result.
+
+- Source base `37d04b5` plus Program Change changes, before final Bank-page
+  outcome-message text and commit formatting.
+- Daisy QSPI SHA-256:
+  `c0343694e2aafe139256ad4dc9019675031c6f322c3b57da6a8777e7b84da055`;
+  debug harness enabled, callback profiling disabled, normal `-O2`/storage `-Os`.
+- ESP32 SHA-256:
+  `7dad5bc9be5d0409b01b09834fd7e7a301fd6132f251a8a38933992a962f4636`.
+- Same attached card/WAV fixtures as prior runs; card identity remains unknown.
+  Saved copies `HILB 736410400100332A.wxb` through `...E.wxb` remain on card.
+- Evidence (local, gitignored): `logs/program-hil.xml`,
+  `logs/program-hil-result.log`, `logs/hil-20260918-130005.log`.
+- Two-target resident recalls: 27 foreground pumps each; maxima **5,902 µs** and
+  **5,781 µs**, summed work **22,946 µs** and **22,650 µs** respectively.
+  These sparse service measurements do not establish callback DWT, wire jitter,
+  end-to-end note readiness or a full-Bank latency bound. No whole gate closes.
 
 ## HV-017 — Sample Edit selection
 
