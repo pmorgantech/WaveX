@@ -20,6 +20,7 @@ struct Softkey {
                                     ///< The {} is load-bearing: an NSDMI keeps
                                     ///< -Wmissing-field-initializers quiet at the
                                     ///< dozens of {label, cb} aggregate inits.
+    bool active = false;            ///< Explicit LED state, independent of the label text.
 };
 
 constexpr int NUM_SOFTKEYS = 6;

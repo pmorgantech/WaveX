@@ -94,7 +94,7 @@ Phase 2.5 work. Open work:
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate, including the prepared note/velocity resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Complete TLC5947 LED feedback. Per-pad cutoff and amp attack/decay/sustain
+3. Validate TLC5947 LED feedback on hardware (HV-012). Per-pad cutoff and amp attack/decay/sustain
    editing with inheritance reset is implemented. The
    touch kit editor provides creation, naming, assignment, choke and new-copy
    WXI saves. The touch Play pads
@@ -234,7 +234,7 @@ The user authorized stage 4 touchscreen editors to proceed on 2026-09-11:
 general key/velocity zones, Instrument Browser and Track page. This does not
 close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
-physical integration, LED/pot drivers and DIN MIDI remain unverified or pending.
+physical integration, pot drivers and DIN MIDI remain unverified or pending.
 The user authorized keypad/LED firmware on 2026-09-17 with a temporary TLC5947
 backend and a replaceable interface for a later PCA9956B.
 Stages, one commit each:
@@ -242,8 +242,10 @@ Stages, one commit each:
 2. TCA8418 interrupt-driven keypad task implemented, with bounded FIFO drains,
    polling fallback and held-key recovery. Host tests pass; physical wiring,
    shared-touch behavior and latency remain open in HV-011.
-3. `panel_task` owning SPI2: TLC5947 chain, LED policy, `LEDS` in `STATE`;
-   absorbs `pcnt_task`.
+3. LED firmware implemented 2026-09-17: `panel_task` owns SPI2/TLC5947 and
+   absorbs the PCNT poller. Chip-independent LED policy, diagnostics and console
+   status are in place; PCA9956B is an explicit replacement stub. Host tests and
+   compile checks do not close the electrical/latency gate in HV-012.
 4. MCP3008 + endless-pot decoder (host-tested), calibration store, the
    four-`EncoderBinding` page contract and strip widget; first consumers
    are the Instrument and Play pages.

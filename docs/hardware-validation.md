@@ -21,6 +21,7 @@ this document owns the runnable checks and their validation status.
 - [HV-009 — Song arrangement and playback](#hv-009--song-arrangement-and-playback)
 - [HV-010 — Waveform playback head](#hv-010--waveform-playback-head)
 - [HV-011 — Keypad interrupt and recovery](#hv-011--keypad-interrupt-and-recovery)
+- [HV-012 — Panel LED output](#hv-012--panel-led-output)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -73,6 +74,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-009 | Song arrangement and playback | Pending | Host tests; audio timing, panel, MIDI and DWT unrun |
 | HV-010 | Waveform playback head | Pending | Host/render checks; tracking, UART, DWT and soak unrun |
 | HV-011 | Keypad interrupt and recovery | Blocked | Firmware/host checks; physical matrix and INT wiring needed |
+| HV-012 | Panel LED output | Blocked | Firmware/host checks; TLC5947 chain wiring and measurements needed |
 
 ## HV-001 — SD card formatting
 
@@ -463,3 +465,44 @@ shared touch bus, logic analyzer, serial diagnostics, and a playable test kit.
 touch, measured latency and zero audio underruns under the test workload.
 Host tests cover register setup, FIFO ordering/ACK race, backpressure, overflow,
 I2C failure and bounded draining; they do not establish physical correctness.
+
+
+## HV-012 — Panel LED output
+
+**Status:** Blocked on wiring; no hardware results recorded.
+**Design / gate:** [Panel controls stage 3](features/panel-controls.md#led-output-implementation-stage-3-2026-09-17),
+[roadmap 2.P](roadmap.md#2p--panel-controls-and-midi-io-physical-integration).
+**Setup:** Temporary TLC5947 chain and LEDs wired from the canonical config
+headers, appropriate current-setting resistors/supply and external BLANK pull-up,
+logic analyzer/scope, paired firmware image identities, serial console, test kit.
+Record wiring revision and images with each dated result.
+
+- [ ] **012a — Startup and map:** Check power-on/reset/bootloader darkness before
+  firmware starts, then Diagnostics → Panel → LED walk through every output.
+  Record actual channel-to-LED mapping, including unused channels. Test all/off
+  and ten-second expiry; leaving Panel restores normal policy immediately.
+- [ ] **012b — Policy:** Verify root jumps, defined/disabled/active softkeys,
+  sticky Shift, Play latch/held pads and release. On Sequencer check selected
+  Track step bits, all four step windows, playing Pattern changes, Stop,
+  record mode, offline link and page exit. `STATE`/`LEDS` must agree after service;
+  build on existing `test_panel_keys.py` HIL navigation cases when hardware exists.
+- [ ] **012c — Blanking and failure:** Let the screen sleep during normal and
+  all-on output; LEDs must go dark and restore policy on wake. In a debugger,
+  suspend only the UI task: outputs blank within the one-second heartbeat limit
+  plus service latency, and recover on resume. Exercise orderly panel stop/start
+  and injected SPI/init failure: blank, bounded retries, responsive encoders.
+- [ ] **012d — Electrical/timing:** Scope complete-frame clocks, order and XLAT
+  timing; no latch mid-transfer. Check brightness/flicker, rapid navigation,
+  encoder turns, touch/key rolls and maximum UART traffic during playback.
+  Record frame latency, panel-task stack headroom, encoder counts, UI rendering
+  timings, UART drops and audio underruns. Compare matched pre/post workloads;
+  no lost encoder movement, visible flicker or audio regressions are acceptable.
+- [ ] **012e — Replacement seam:** Compile/select the PCA9956B stub; startup and
+  encoders continue, diagnostics reports unavailable and no TLC bus/pins are
+  claimed. Restore TLC selection for the bench image. Later PCA hardware needs
+  a new validation entry; this check does not validate a PCA implementation.
+
+**Pass:** All applicable checks pass with dated image identities and scope/log
+or visual evidence. Host tests cover policy, mapping, PWM packing, blanking and
+heartbeat wrap; builds do not establish electrical correctness. MCP3008 traffic
+and shared-bus flicker checks remain blocked until stage 4 and must be added then.

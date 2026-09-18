@@ -195,6 +195,12 @@ foreach(test_file IN LISTS unit_tests integration_tests)
     add_wavex_esp32_test(${test_file})
 endforeach()
 
+# Compile the real replacement stub, so selecting it cannot silently light the
+# temporary TLC chain or claim a successful hardware write.
+target_sources(led_backend_stub_test PRIVATE ../main/panel/led_backend.cpp)
+target_compile_definitions(led_backend_stub_test PRIVATE
+    WAVEX_PANEL_LED_BACKEND=WAVEX_PANEL_LED_PCA9956B)
+
 # Widget tests live in their own directory because they must NOT inherit the
 # include_directories() above - `mocks/` is deliberately first there to shadow
 # lvgl.h, and these tests need the real one. See widget/CMakeLists.txt.

@@ -720,6 +720,17 @@ void UIPlayPage::refreshPadTiles() {
 
 // --- softkeys --------------------------------------------------------------
 
+PanelPageLeds UIPlayPage::panelLeds() const {
+    PanelPageLeds result;
+    for (int i = 0; i < kPadCount && i < key_count_; ++i) {
+        if (keys_[i].obj)
+            result.defined |= static_cast<uint16_t>(1u << i);
+        if (keys_[i].down)
+            result.active |= static_cast<uint16_t>(1u << i);
+    }
+    return result;
+}
+
 std::array<Softkey, NUM_SOFTKEYS> UIPlayPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
@@ -738,6 +749,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIPlayPage::getSoftkeys() {
                    refreshKeys();
                    UINavigator::instance().refreshSoftkeys();
                }};
+    keys[5].active = latch_;
     return keys;
 }
 

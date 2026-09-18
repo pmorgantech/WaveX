@@ -4,6 +4,7 @@
 #include <lvgl.h>
 
 #include "input_event.h"
+#include "panel/panel_led_state.h"
 #include "ui_softkey.h"
 
 #include <memory>
@@ -34,6 +35,8 @@ class UIPage {
      * nothing; a page that shows the Track label or its binding overrides.
      */
     virtual void onTrackChanged() {}
+    // Read under the UI lock. Backend-confirmed or held local presentation state.
+    virtual PanelPageLeds panelLeds() const { return {}; }
 
     /**
      * @brief Optional second line in the header, beside the page title.

@@ -699,6 +699,27 @@ void UISequencerPage::onInput(const InputEvent& event) {
     else if (event.type == InputType::ButtonPress || event.type == InputType::EncoderClick)
         toggle(selectedRow(), selected_step_ % 16);
 }
+PanelPageLeds UISequencerPage::panelLeds() const {
+    PanelPageLeds result;
+    const auto row = selectedRow();
+    if (!link_alive_ || !model_.HasSnapshot(row))
+        return result;
+    const auto& page = model_.Row(row);
+    for (uint8_t i = 0; i < 16; ++i) {
+        const auto step = model_.FirstStep() + i;
+        if (step >= page.length)
+            continue;
+        if (page.steps[i].on)
+            result.defined |= static_cast<uint16_t>(1u << i);
+        if (playhead_.playing && playhead_.pattern == model_.PatternSlot() &&
+            playhead_.step == step)
+            result.active |= static_cast<uint16_t>(1u << i);
+    }
+    result.recording =
+        page.input_mode == SEQ_INPUT_STEP_RECORD || page.input_mode == SEQ_INPUT_LIVE_RECORD;
+    return result;
+}
+
 std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
@@ -712,6 +733,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
                    [this] { transport(); },
                    ready,
                    "Waiting for the audio engine"};
+        keys[5].active = link_alive_ && playhead_.playing;
         return keys;
     }
     if (clear_armed_) {
@@ -727,6 +749,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
                [this] { transport(); },
                ready,
                "Waiting for the audio engine"};
+    keys[1].active = link_alive_ && playhead_.playing;
     keys[2] = {"Tracks -",
                [this] { focus(getCurrentTrack() - 4, selected_step_); },
                model_.FirstTrack() > 0,

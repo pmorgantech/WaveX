@@ -46,6 +46,10 @@ class UITabHostPage : public UIPage {
     const char* name() const override { return name_.c_str(); }
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
+    PanelPageLeds panelLeds() const override {
+        auto* page = activePage();
+        return page ? page->panelLeds() : PanelPageLeds{};
+    }
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     size_t consoleState(char* out, size_t cap, size_t len) override;

@@ -698,10 +698,19 @@
 #define WAVEX_PCNT1_THRESH_NEG -4
 #endif
 #endif
-// Panel LEDs (TLC5947 chain), endless pots (MCP3008) and the button matrix
-// sizing. PLANNED, not as-built: no driver reads these yet. The design that
-// consumes them is docs/features/panel-controls.md; 48 channels = two chained
-// TLC5947s, four endless pots = the eight channels of one MCP3008.
+// Panel output backend. Pages publish chip-independent brightness frames.
+// PCA9956B is a deliberate unimplemented replacement seam for the later board.
+#define WAVEX_PANEL_LED_NONE 0
+#define WAVEX_PANEL_LED_TLC5947 1
+#define WAVEX_PANEL_LED_PCA9956B 2
+#ifndef WAVEX_PANEL_LED_BACKEND
+#define WAVEX_PANEL_LED_BACKEND WAVEX_PANEL_LED_TLC5947
+#endif
+#if WAVEX_PANEL_LED_BACKEND < WAVEX_PANEL_LED_NONE || \
+    WAVEX_PANEL_LED_BACKEND > WAVEX_PANEL_LED_PCA9956B
+#error "Unknown panel LED backend"
+#endif
+
 #ifndef WAVEX_LED_CHANNELS
 #define WAVEX_LED_CHANNELS 48
 #endif
@@ -718,7 +727,7 @@
 // components/ui/include/ui/panel_led.h) sits on. Wiring truth, so it lives
 // here with the pins (panel-controls.md §6 decision 4); panel_led.h turns
 // these into the table and static_asserts that no channel is used twice and
-// every one is < WAVEX_LED_CHANNELS. Nothing drives the chain until 2.P.3;
+// every one is < WAVEX_LED_CHANNELS. The temporary TLC5947 backend uses these;
 // the numbers follow the panel PCB when it exists. Chip 1 is channels 0-23,
 // chip 2 is 24-47: the pad grid is kept whole on chip 2.
 #define WAVEX_LED_CH_SOFT1 0

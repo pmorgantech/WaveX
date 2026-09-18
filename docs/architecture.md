@@ -74,7 +74,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Touch | GT911 capacitive | I2C0 (shared) | working |
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
-| LEDs | 2× TLC5947 chained | SPI2 (one owner task) | planned (2.P.3); no driver yet |
+| LEDs | 2× TLC5947 chained, temporary | SPI2 DMA, `panel_task` only | implemented (2.P.3), HV-012 open; chip-independent frames, PCA9956B stub for later board |
 | MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
@@ -212,8 +212,8 @@ only inline magic numbers:
 | `spi_slave` | 5 | 16384 | any | DMA result, repeated 50 ms wait | SPI selection only; timeout retains descriptor ownership |
 | `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
 | LVGL port task | 4 | 16384 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
-| `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
-| `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line (2.P.2 makes it INT-driven) |
+| `panel_task` | 5 | 4096 | any | 2 ms delay; LED DMA completion | Owns PCNT polling and SPI2; changed LED frames checked every 20 ms |
+| `tca8418_task` | 5 | 4096 | 1 | INT notification / 100 ms safety poll | Bounded FIFO service; 10 ms fallback if INT registration is unavailable (HV-011) |
 | `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
 | `usb_midi` | 5 | 4096 | any | task notification | Woken by TinyUSB's device task |
 | `log_drain` | 1 | 3072 | any | 20 ms delay | Drains the log ring to the console |
@@ -221,9 +221,10 @@ only inline magic numbers:
 | TinyUSB device | esp_tinyusb default | — | — | USB events | Calls `tud_midi_rx_cb` |
 | esp_timer task | 22 | — | 0 | timer queue | Shared; keep callbacks short (guide §11) |
 
-Two of these still poll where an interrupt would do (`pcnt_task` at 500 Hz for a
-31 Hz consumer, and the keypad at 100 Hz). Both are deliberate for now and
-explained at the call site; converting either needs bench time.
+`panel_task` retains the PCNT 2 ms polling cadence; converting quadrature
+service to interrupts still needs bench time. LED publication is a fixed-size
+copy under a short SMP lock. The task releases that lock before DMA, and a
+one-second stale UI heartbeat forces BLANK. No page or UI task performs LED I/O.
 
 **Lock order is LVGL → selected link mutex.** UI-task code takes the LVGL port
 lock and then sends over the link. Link dispatch releases the queue mutex before

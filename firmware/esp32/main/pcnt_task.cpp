@@ -16,8 +16,7 @@
 #include "../../shared/config/pin_config.h"
 #include "driver/pulse_cnt.h"
 #include "esp_log.h"
-
-#include <atomic>
+#include "panel/panel_task.h"
 
 static const char *TAG = "PCNT_TASK";
 
@@ -48,11 +47,6 @@ static encoder_reading_t s_encoder_readings[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Driver handles, indexed by WaveX logical unit. NULL means "not initialized".
 static pcnt_unit_handle_t s_pcnt_units[WAVEX_PCNT_UNIT_COUNT] = {};
-
-static std::atomic<TaskHandle_t> s_pcnt_task_handle{NULL};
-// Shutdown handshake; see midi_task.cpp. This task touches PCNT driver
-// internals, so it has to leave its loop on its own rather than be deleted.
-static std::atomic<bool> s_pcnt_running{false};
 
 /**
  * @brief Initialize a single PCNT unit
@@ -190,92 +184,82 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
 /**
  * @brief PCNT monitoring task (polling-based for reliable encoder reading)
  */
-static void pcnt_task(void *pvParameters) {
-    (void)pvParameters;
-    ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
-
-    while (s_pcnt_running) {
-        for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
-            const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
-            if (!config->enabled || s_pcnt_units[config->unit] == NULL) {
-                continue;
-            }
-
-            encoder_reading_t *reading = &s_encoder_readings[config->unit];
-
-            int hw_count = 0;
-            esp_err_t get_err = pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
-            if (get_err != ESP_OK) {
-                // Leave last_hw alone: the next successful read then reports
-                // the movement across both polls instead of losing it.
-                ESP_LOGW(TAG,
-                         "PCNT unit %u get_count failed: %s",
-                         (unsigned)config->unit,
-                         esp_err_to_name(get_err));
-                continue;
-            }
-
-            // The one place direction is decided. Everything downstream -
-            // the UI task's events, InputEvent::steps(), every page - takes
-            // positive as clockwise; a knob whose phases are wired the other
-            // way is corrected here by its hardware_config.h direction, never
-            // by a page.
-            int32_t delta = ((int32_t)hw_count - reading->last_hw) * config->direction;
-            reading->last_hw = (int32_t)hw_count;
-            if (delta != 0) {
-                const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
-                                            ? "Main Encoder"
-                                            : "PCNT1 Encoder (PEC11R quadrature)";
-                // DEBUG, not INFO: this fires on every 2ms poll while a knob
-                // turns, which at console baud rate would stall this task.
-                ESP_LOGD(TAG,
-                         "%s - Count: %" PRId32 ", Delta: %" PRId32,
-                         unit_name,
-                         (int32_t)hw_count,
-                         delta);
-
-                // Atomic add: the UI task takes this with an exchange from the
-                // other core, and this task is unpinned. A plain `+=` here let
-                // a consumer's zeroing land between the read and the write, so
-                // detents were silently dropped under load. Relaxed ordering is
-                // enough - the delta is a self-contained count, not a flag
-                // publishing some other buffer.
-                __atomic_fetch_add(&reading->delta, delta, __ATOMIC_RELAXED);
-            }
-
-            // Re-centre well before the driver's ±INT16 limit, where it would
-            // reset the count to zero on its own and make the next delta a
-            // large bogus jump.
-            //
-            // The counter is NOT cleared on every poll any more. Doing that
-            // discarded any edge landing between get_count() and clear_count(),
-            // which is every poll during movement; now the window is hit once
-            // per ~8000 counts (~85 revolutions), where losing a fraction of a
-            // detent is imperceptible. Closing it completely needs the driver's
-            // watch-point callbacks, which is an ISR and wants bench time.
-            constexpr int32_t kRecentreThreshold = 8000;
-            if (hw_count > kRecentreThreshold || hw_count < -kRecentreThreshold) {
-                esp_err_t clear_err = pcnt_unit_clear_count(s_pcnt_units[config->unit]);
-                if (clear_err == ESP_OK) {
-                    reading->last_hw = 0;
-                } else {
-                    // last_hw still matches the hardware, so the baseline stays
-                    // true and the next poll just tries again. The old code
-                    // zeroed it regardless, which re-applied the whole count as
-                    // fresh delta on every subsequent poll.
-                    ESP_LOGW(TAG,
-                             "PCNT unit %u clear_count failed: %s",
-                             (unsigned)config->unit,
-                             esp_err_to_name(clear_err));
-                }
-            }
+void pcnt_poll(void) {
+    for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
+        const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
+        if (!config->enabled || s_pcnt_units[config->unit] == NULL) {
+            continue;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
+        encoder_reading_t *reading = &s_encoder_readings[config->unit];
 
-    s_pcnt_task_handle = NULL;
-    vTaskDelete(NULL);
+        int hw_count = 0;
+        esp_err_t get_err = pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
+        if (get_err != ESP_OK) {
+            // Leave last_hw alone: the next successful read then reports
+            // the movement across both polls instead of losing it.
+            ESP_LOGW(TAG,
+                     "PCNT unit %u get_count failed: %s",
+                     (unsigned)config->unit,
+                     esp_err_to_name(get_err));
+            continue;
+        }
+
+        // The one place direction is decided. Everything downstream -
+        // the UI task's events, InputEvent::steps(), every page - takes
+        // positive as clockwise; a knob whose phases are wired the other
+        // way is corrected here by its hardware_config.h direction, never
+        // by a page.
+        int32_t delta = ((int32_t)hw_count - reading->last_hw) * config->direction;
+        reading->last_hw = (int32_t)hw_count;
+        if (delta != 0) {
+            const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
+                                        ? "Main Encoder"
+                                        : "PCNT1 Encoder (PEC11R quadrature)";
+            // DEBUG, not INFO: this fires on every 2ms poll while a knob
+            // turns, which at console baud rate would stall this task.
+            ESP_LOGD(TAG,
+                     "%s - Count: %" PRId32 ", Delta: %" PRId32,
+                     unit_name,
+                     (int32_t)hw_count,
+                     delta);
+
+            // Atomic add: the UI task takes this with an exchange from the
+            // other core, and this task is unpinned. A plain `+=` here let
+            // a consumer's zeroing land between the read and the write, so
+            // detents were silently dropped under load. Relaxed ordering is
+            // enough - the delta is a self-contained count, not a flag
+            // publishing some other buffer.
+            __atomic_fetch_add(&reading->delta, delta, __ATOMIC_RELAXED);
+        }
+
+        // Re-centre well before the driver's ±INT16 limit, where it would
+        // reset the count to zero on its own and make the next delta a
+        // large bogus jump.
+        //
+        // The counter is NOT cleared on every poll any more. Doing that
+        // discarded any edge landing between get_count() and clear_count(),
+        // which is every poll during movement; now the window is hit once
+        // per ~8000 counts (~85 revolutions), where losing a fraction of a
+        // detent is imperceptible. Closing it completely needs the driver's
+        // watch-point callbacks, which is an ISR and wants bench time.
+        constexpr int32_t kRecentreThreshold = 8000;
+        if (hw_count > kRecentreThreshold || hw_count < -kRecentreThreshold) {
+            esp_err_t clear_err = pcnt_unit_clear_count(s_pcnt_units[config->unit]);
+            if (clear_err == ESP_OK) {
+                reading->last_hw = 0;
+            } else {
+                // last_hw still matches the hardware, so the baseline stays
+                // true and the next poll just tries again. The old code
+                // zeroed it regardless, which re-applied the whole count as
+                // fresh delta on every subsequent poll.
+                ESP_LOGW(TAG,
+                         "PCNT unit %u clear_count failed: %s",
+                         (unsigned)config->unit,
+                         esp_err_to_name(clear_err));
+            }
+        }
+    }
 }
 
 esp_err_t pcnt_task_init(void) {
@@ -296,41 +280,13 @@ esp_err_t pcnt_task_init(void) {
     return ESP_OK;
 }
 
+// Preserve the application lifecycle entry points; panel_task owns the poller
+// and LED output together, so there is no second task reading these counters.
 esp_err_t pcnt_task_start(void) {
-    ESP_LOGI(TAG, "Starting PCNT reading task...");
-
-    s_pcnt_running = true;
-    TaskHandle_t handle = NULL;
-    BaseType_t ret = xTaskCreate(pcnt_task,    // Task function
-                                 "pcnt_task",  // Task name
-                                 4096,         // Stack size
-                                 NULL,         // Parameters
-                                 5,            // Priority (higher than UI task)
-                                 &handle       // Task handle
-    );
-    s_pcnt_task_handle = handle;
-
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create PCNT task");
-        s_pcnt_running = false;
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "PCNT reading task started successfully");
-    return ESP_OK;
+    return wavex_panel::Start();
 }
-
 esp_err_t pcnt_task_stop(void) {
-    s_pcnt_running = false;
-    for (int waited_ms = 0; s_pcnt_task_handle != NULL && waited_ms < 200; waited_ms += 10) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    if (s_pcnt_task_handle != NULL) {
-        ESP_LOGE(TAG, "PCNT task did not exit");
-        return ESP_ERR_TIMEOUT;
-    }
-    ESP_LOGI(TAG, "PCNT task stopped");
-    return ESP_OK;
+    return wavex_panel::Stop();
 }
 
 esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading) {

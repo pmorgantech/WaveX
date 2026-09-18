@@ -67,6 +67,7 @@ class UIPlayPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     void onTrackChanged() override;
+    PanelPageLeds panelLeds() const override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 

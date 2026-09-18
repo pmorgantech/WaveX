@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Panel LED feedback through a temporary DMA-driven TLC5947 backend, with
+  chip-independent brightness frames and an explicit PCA9956B replacement stub.
+  Softkeys, Shift, root navigation, transport, held pads and sequencer steps
+  drive the LEDs; blanking covers sleep, stale UI state and output failures.
+  Diagnostics provides channel-walk/all-on tests and console LED status.
+  Physical acceptance remains open in HV-012.
+
 - Interrupt-driven TCA8418 keypad processing with polling fallback, bounded
   FIFO draining, retained events under queue pressure and held-key recovery
   after overflow/I2C errors. Missing keypad hardware no longer aborts through

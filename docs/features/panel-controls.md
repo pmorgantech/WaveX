@@ -1,6 +1,6 @@
 # Panel Controls — Buttons, LEDs, Endless Pots, and MIDI I/O
 
-**Status**: Design with stages 0–2 implemented; keypad INT added 2026-09-17.
+**Status**: Design with stages 0–3 implemented; keypad INT and LED output added 2026-09-17.
 Physical panel validation remains open. Pin numbers live only in `firmware/shared/config/pin_config.h`; feature
 flags and table sizes only in `hardware_config.h`. This document names the
 functions those pins carry and the rules that produced the allocation — never
@@ -26,7 +26,8 @@ references are the audit trail; re-verify before trusting):
 | Keypad (TCA8418) | INT wakes a bounded FIFO task; 100 ms safety poll, 10 ms fallback without INT. Logical key map and diagnostics exist. Geometry and wiring remain unverified; see HV-011. |
 | Softkeys | Six on-screen buttons, touch only. `SoftkeyBar::focusNext()` / `pressFocused()` exist with no callers — the documented "encoder scrolls softkeys" interaction is not in the binary. |
 | Shift | Latched-and-sticky global modifier in `InputDispatcher::processAll()` with a header chip. Works, driven by keycode 4 today. |
-| LEDs (TLC5947), pot ADC (MCP3008) | **No driver, no SPI2 bus init, nothing.** Only config constants. |
+| LEDs (temporary TLC5947) | `panel_task` owns SPI2 DMA and complete-frame latching; logical policy and diagnostics implemented. HV-012 open. |
+| Pot ADC (MCP3008) | Pending stage 4; no ADC driver yet. |
 | DIN MIDI | Compiled out since 2026-09-04: RX sat on the USB-Serial/JTAG D- pin. Pins moved 2026-09-05; still off until rewired (§5). TX ring is zero-length — no MIDI out. |
 | USB MIDI | Device on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Input only; `WAVEX_USB_MIDI_OUTPUT_ENABLED` is read by nothing. |
 | Input plumbing | `InputEvent` → `InputDispatcher` queue (64 deep) → drained on the UI task under the LVGL lock → global Shift/Back → `UIPage::onInput()`. The debug console injects the same events (`KEY`, `ENC`, `POT`). |
@@ -165,10 +166,10 @@ run wiper-to-wiper between 3.3 V and ground with the MCP3008 on the same
 ### 4.1 Ownership and tasks
 
 ```
-panel_task (new, prio 5, 2 ms)        keypad_task (existing → INT-driven)
+panel_task (prio 5, 2 ms)            keypad_task (existing → INT-driven)
 ├─ PCNT unit 0/1 deltas               └─ TCA8418 FIFO on INT, 100 ms fallback poll
-├─ MCP3008 8-ch burst read                 │
-├─ endless-pot decoder → deltas            │  physical keycode → PanelKey (table)
+├─ MCP3008 8-ch burst read (stage 4, pending)                 │
+├─ endless-pot decoder → deltas (stage 4, pending)            │  physical keycode → PanelKey (table)
 ├─ LED frame flush if dirty                │
 │      │  InputEvent (Pot/Encoder)         │  InputEvent (Key press/release)
 │      └──────────────► InputDispatcher::post() ◄──────────┘
@@ -177,7 +178,7 @@ panel_task (new, prio 5, 2 ms)        keypad_task (existing → INT-driven)
 │              ├─ global keys: SHIFT, BACK, SOFTn, menu jumps, TRACK±, transport
 │              └─ page: UIPage::onInput() / pot bindings
 │
-└─ ◄── LED frame (double-buffered, dirty flag) ◄── PanelLeds (UI-task-owned model)
+└─ ◄── LED frame (locked value mailbox) ◄── PanelLeds (UI-task-owned model)
 ```
 
 - `panel_task` absorbs today's `pcnt_task`: one 2 ms poller instead of two,
@@ -186,7 +187,8 @@ panel_task (new, prio 5, 2 ms)        keypad_task (existing → INT-driven)
   `KE_IEN` bit is written, INT falling edge → task notification), keeping a
   slow poll as a safety net. Physical latency remains unmeasured in HV-011; no sub-millisecond claim is made.
 - The UI task owns all *meaning*: which key does what, what the LEDs show.
-  It publishes the LED frame into a double buffer; `panel_task` flushes it.
+  It publishes a fixed-size LED frame under a short SMP lock; `panel_task`
+  copies it, releases the lock and flushes only changes.
   The UI task never blocks on SPI.
 
 ### 4.2 Data model
@@ -198,10 +200,10 @@ Entities and where their truth lives:
 | `PanelKey` | `enum class : uint8_t` — the logical keys of §3.4, replacing the four `BUTTON_*` constants in `ui_softkey.h` (kept as aliases during the transition) | `components/ui/include/ui/panel_key.h` |
 | Key map | TCA8418 keycode (row·10 + col + 1) → `PanelKey`, one table, `static_assert` no duplicate keycode | `hardware_config.h` (it is wiring truth, like a pin) |
 | `PanelLed` | `enum class : uint8_t` — the LEDs of §3.4 | `components/ui/include/ui/panel_led.h` |
-| LED map | `PanelLed` → TLC5947 channel index, one table, `static_assert` no duplicate channel and all `< WAVEX_LED_CHANNELS` | `hardware_config.h` |
+| LED map | `PanelLed` → physical output channel index, one table, `static_assert` no duplicate channel and all `< WAVEX_LED_CHANNELS` | `hardware_config.h` |
 | `InputEvent` | Existing struct gains `InputType::KeyPress/KeyRelease` carrying a `PanelKey` in `source_id`, and `InputType::PotUp/PotDown` carrying the pot index in `source_id` and the magnitude in `delta` — same magnitude-plus-direction contract `steps()` already enforces. Existing `Encoder*` types stay for the nav encoders. | `input_event.h` |
 | `EncoderBinding` | `{ const char* label; const char* value; void (*onSteps)(int); }`, four per page, mirroring `Softkey` | `ui_page.h` |
-| `PanelLeds` | UI-task-owned array of `uint16_t` levels indexed by `PanelLed`; `set()`, `flushIfDirty()` | `components/ui/src/panel_leds.cpp` |
+| LED frame/policy | Fixed array of chip-independent 8-bit brightness indexed by `PanelLed`, plus blank/test state; UI owns policy, output task owns applied status | `ui/panel/panel_led_frame.h`, `main/panel/` |
 | Pot calibration | per-channel min/max + per-pot direction, persisted in NVS (`wavex/panel`), defaults from the datasheet range | `main/panel/endless_pot_store.cpp` |
 
 Invariants: every physical keycode maps to at most one `PanelKey`; every
@@ -250,8 +252,8 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 - `SHIFT` LED = `isShifted()`.
 - Jump LEDs: the active root group bright, others off.
 - Softkey LEDs: defined softkey dim, undefined off; a page may mark one
-  softkey `active` (e.g. "Stop" while auditioning) → bright. This needs one
-  `bool active` on `Softkey`.
+  softkey `active` → bright when enabled. The explicit `Softkey::active`
+  flag currently covers Play Latch and Sequencer Play/Stop.
 - Transport/pad LEDs: Phase 2 (step/playhead mirror; see `sequencer.md` §5).
 - Screen blanker: `DisplayManager` blank → BLANK high (all LEDs off); any
   panel input wakes both.
@@ -260,11 +262,12 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 
 - **Diagnostics → Panel tab**: last keycode with row/col and its `PanelKey`
   (or "unmapped"), raw MCP3008 values and decoded angles per pot, PCNT
-  counts, an LED walk test (Select cycles channels) and a full-on test. This
+  counts, an LED walk softkey and a full-on toggle. ADC/angle display is
+  deferred to stage 4. This
   is how the matrix geometry and LED map get *verified* rather than assumed.
 - **Console**: `KEY <PanelKey name> [PRESS|RELEASE|TAP]` (every logical key
-  by name — today it knows four), `POT <n> <delta>`, `LEDS` in `STATE` (the
-  48 levels), `PANEL` (raw ADC + pcnt snapshot). `make test-hil` then covers
+  by name — today it knows four), `POT <n> <delta>`, `STATE` LED driver/ready/blank fields and `LEDS` (the
+  physical levels; implemented stage 3), `PANEL` (raw ADC + pcnt snapshot). `make test-hil` then covers
   menu jumps, softkey keys honouring Shift, pots reaching a page binding,
   and LED state following navigation — with no camera.
 - **Host tests**: endless-pot decoder (§4.4); key-map and LED-map table
@@ -288,7 +291,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 | 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; per-encoder direction flags. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
 | 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. The dead `focusNext/pressFocused` deleted. *Done 2026-09-05.* | HIL: jumps, softkeys via key, Shift row (`test_panel_keys.py`) | keycode → key on the Diagnostics ▸ Panel tab |
 | 2 | **Keypad INT** — implemented 2026-09-17: CFG, ISR notification, fallback, error recovery. | FIFO/configuration/race/backpressure tests | HV-011: latency, key rolls, shared-bus recovery |
-| 3 | **`panel_task` + SPI2 + TLC5947** — absorb `pcnt_task`; LED frame, BLANK, `PanelLeds`, LED policy §4.5, `LEDS` in `STATE`. | HIL: LED state follows navigation | walk test, dark at power-on, no flicker with pot reads |
+| 3 | **LED output** — implemented 2026-09-17: temporary TLC5947 backend, PCNT service, replaceable output interface, blanking, policy and diagnostics. | Policy/packing tests and firmware compile; HIL still open | HV-012: mapping, startup, sleep, timing; shared-pot traffic deferred to stage 4 |
 | 4 | **MCP3008 + endless pots** — decoder (host tests), calibration store, Settings → Calibrate flow, `EncoderBinding` page contract, strip widget, Shift = fine. First consumers: Instrument page (Filter/Amp), Play page live strip. | decoder tests; HIL `POT n` | feel, drift, noise floor; measure the strip's cost on the 30 FPS budget |
 | 5 | **MIDI** — DIN on, TX ring, USB out, latency measured (closes the roadmap's "MIDI latency" row). | — | DIN in → sound, USB in → sound, both < 5 ms |
 
@@ -360,3 +363,48 @@ Shutdown retries outstanding releases before freeing the device, returning a
 timeout if it cannot finish safely. Diagnostics → Panel shows INT/POLL, I2C
 errors and overflow observations. [HV-011](../hardware-validation.md#hv-011--keypad-interrupt-and-recovery)
 owns the unrun electrical, latency and shared-touch checks.
+
+
+## LED output implementation (stage 3, 2026-09-17)
+
+`PanelLedFrame` carries 8-bit logical brightness, blanking and an optional
+physical-output diagnostic override. `BuildPanelLedFrame` derives values from
+cached softkeys (dim when defined; bright when enabled and explicitly active),
+Shift, root group and confirmed transport. Play reports held/latched pads;
+Sequencer reports the selected Track's confirmed enabled steps dim and its
+matching Pattern playhead bright. Recording mode lights Rec on Sequencer.
+Off-context pads are dark. Tab hosts forward their active child's state.
+
+`panel_task` absorbs PCNT polling and exclusively owns backend initialization,
+writes and shutdown. It checks changed frames every 20 ms, separately from the
+2 ms PCNT cadence. UI publication and status readback copy complete values under
+a short SMP lock; no lock is held over I/O. A UI heartbeat older than one second
+forces blanking. Screen sleep overrides all policy and diagnostic test output.
+
+The temporary TLC5947 backend allocates one driver-aligned internal DMA buffer
+at initialization. Every write packs the entire chain in descending channel
+order, with 12-bit values MSB first, waits for ESP-IDF SPI DMA completion, then
+pulses XLAT. Startup latches zeros before enabling outputs. Failure/shutdown
+assert BLANK; failed initialization/writes retry at most once per second without
+stopping encoder service. The external BLANK pull-up remains essential before
+firmware starts. The [TI datasheet](https://www.ti.com/lit/ds/symlink/tlc5947.pdf)
+and ESP-IDF SPI driver own timing and DMA requirements; pins/map/backend
+selection remain solely in the canonical configuration headers.
+
+The backend interface is `init/write/shutdown`; policy and pages never reference
+TLC registers, SPI or PCA addresses. Selecting PCA9956B currently reports
+`ESP_ERR_NOT_SUPPORTED` without claiming pins or a bus. Replacing it requires a
+board-specific backend for address/current/output-enable setup and PWM writes,
+plus the canonical channel map. The logical brightness/page contract is unchanged.
+
+Diagnostics → Panel offers **LED walk** (next physical channel per press) and
+**LED all/off** (toggle); tests expire after ten seconds or leaving that tab.
+The card shows driver availability, blanking, test channel and error count.
+Debug console `LEDS WALK`, `LEDS ALL`, `LEDS OFF` control the same test state;
+`OFF` restores normal policy. Plain `LEDS` reports driver, ready/blank, test
+(-1 normal, -2 all), errors, writes and `levels` (two hex digits per physical
+channel in ascending order). This is the last successfully transported frame;
+a just-requested test may not appear until the next UI/output service passes.
+`STATE` adds `leddriver`, `ledready`, `ledblank`. Transport success cannot verify
+the write-only chain or its wiring. [HV-012](../hardware-validation.md#hv-012--panel-led-output)
+owns those checks, HIL and measured timing; no hardware result is claimed.

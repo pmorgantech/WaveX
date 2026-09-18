@@ -37,6 +37,8 @@ class DisplayManager {
 
     /// UI-task service point for the five-minute blank/wake policy.
     void serviceScreenBlanker();
+    // UI task only, after serviceScreenBlanker().
+    bool screenBlanked() const { return screen_blanker_.blanked(); }
 
    private:
     DisplayManager() = default;

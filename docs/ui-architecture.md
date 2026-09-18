@@ -125,6 +125,15 @@ checks in [roadmap.md](roadmap.md#outstanding-hardware-verification).
 input producers. Producers post value events; the UI task drains them under
 the LVGL port lock.
 
+Panel feedback is derived under the UI lock by `ServicePanelLeds()`: cached
+softkey metadata (`active` is explicit), navigator state, confirmed transport,
+and the optional `UIPage::panelLeds()` value. Tab hosts forward the page hook.
+Play reports held pads; Sequencer reports the selected Track's confirmed steps
+and matching Pattern playhead. Other pages default to no pad state. A fixed
+brightness frame crosses a short locked mailbox to `panel_task`; no UI/page
+code selects a chip, performs SPI, or shares the DMA buffer. See
+[panel controls](features/panel-controls.md#led-output-implementation-stage-3-2026-09-17).
+
 The global `PanelKey` mapping handles Back, Shift, six softkeys, root jumps
 and Track changes before forwarding page input. Hardware driver status and
 future LED/pot work live in [panel-controls.md](features/panel-controls.md).

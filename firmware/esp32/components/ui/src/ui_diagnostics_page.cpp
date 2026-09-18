@@ -1,6 +1,6 @@
+#include "panel/panel_task.h"
+#include "ui/panel/panel_led_service.h"
 // WaveX UI Diagnostics Page Implementation
-#include "ui/ui_diagnostics_page.h"
-
 #include <esp_log.h>
 #include <esp_lvgl_port.h>
 #include <string.h>
@@ -21,6 +21,7 @@
 #include "ui/input_dispatcher.h"
 #include "ui/panel_key.h"
 #include "ui/tca8418_keypad.h"
+#include "ui/ui_diagnostics_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_tab_group.h"
@@ -295,6 +296,8 @@ void UIDiagnosticsPage::setActiveTab(uint8_t tab) {
     if (tab >= TAB_COUNT) {
         return;
     }
+    if (tab != TAB_PANEL)
+        PanelLedTestOff();
     active_tab = tab;
     // First visit to this tab pays for its content here rather than at page
     // entry. This runs on the UI task, from a touch event or a softkey.
@@ -307,6 +310,7 @@ void UIDiagnosticsPage::setActiveTab(uint8_t tab) {
     // which reads as "this tab has no data".
     ui_update_pending = true;
     applyUiUpdates();
+    UINavigator::instance().refreshSoftkeys();
 }
 
 UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
@@ -683,28 +687,18 @@ void UIDiagnosticsPage::buildPanelTab(lv_obj_t* tab) {
     // PanelKey (if any) the WAVEX_KEYCODE_* map gives it. This is how the map
     // and the matrix geometry get verified on the bench (panel-controls.md
     // §4.6), so it works for an unmapped key too.
-    static const char* titles[7] = {"LAST KEYCODE",
+    static const char* titles[8] = {"LAST KEYCODE",
                                     "LAST KEY",
                                     "KEY PRESSES",
                                     "UNMAPPED",
                                     "NAV ENCODER A",
                                     "NAV ENCODER B",
-                                    "DROPPED EVENTS"};
-    for (int i = 0; i < 7; i++) {
+                                    "DROPPED EVENTS",
+                                    "PANEL LEDS"};
+    for (int i = 0; i < 8; i++) {
         panel_cards[i] =
             makeCard(tab, kColX[i % 4], kRowY[i / 4], kCardW, titles[i], "esp32", false, 0);
     }
-    lv_obj_t* note = mkLabel(tab,
-                             kColX[3],
-                             kRowY[1] + 20,
-                             "Keycode = row * 10 + column + 1, as the TCA8418 "
-                             "reports it. A key that reads \"unmapped\" is not in "
-                             "the WAVEX_KEYCODE_* map (hardware_config.h) - or the "
-                             "matrix geometry there is wrong.",
-                             UI_FONT_MICRO,
-                             kColDimmer);
-    lv_obj_set_width(note, kCardW);
-    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 }
 
 void UIDiagnosticsPage::showTabOffline(Card* cards, int n, const char* why) {
@@ -714,6 +708,7 @@ void UIDiagnosticsPage::showTabOffline(Card* cards, int n, const char* why) {
 }
 
 void UIDiagnosticsPage::onExit() {
+    PanelLedTestOff();
     ESP_LOGI(TAG, "Diagnostics page exiting");
 
     inter_mcu_send_diag_subscribe(false, 2);
@@ -743,9 +738,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
                    frozen = !frozen;
                    UINavigator::instance().refreshSoftkeys();
                }};
-    // Slot 5 used to push a standalone Sample Memory page. Its content is the
-    // Daisy tab now, so the key would only be a second route to a tab that is
-    // already one press of Tab > away.
+    if (active_tab == TAB_PANEL) {
+        keys[4] = {"LED walk", [] { PanelLedWalk(); }};
+        keys[5] = {"LED all/off", [] { PanelLedAll(); }};
+    }
 
     if (frozen) {
         keys[3].label = "Live";
@@ -1208,6 +1204,22 @@ void UIDiagnosticsPage::refreshPanelTab() {
              static_cast<unsigned long>(k.errors),
              static_cast<unsigned long>(k.overflows));
     setCard(panel_cards[6], v, "", sub, -1);
+    const auto leds = wavex_panel::ReadStatus();
+    const int test = PanelLedTestChannel();
+    std::snprintf(v,
+                  sizeof(v),
+                  "%s",
+                  !leds.ready          ? "Unavailable"
+                  : !leds.applied      ? "Pending"
+                  : leds.frame.blanked ? "Blank"
+                                       : "Active");
+    std::snprintf(sub,
+                  sizeof(sub),
+                  "%s test %d errors %lu",
+                  wavex_panel::BackendName(),
+                  test,
+                  static_cast<unsigned long>(leds.errors));
+    setCard(panel_cards[7], v, "", sub, -1);
 }
 
 void UIDiagnosticsPage::refreshEsp32Tab() {

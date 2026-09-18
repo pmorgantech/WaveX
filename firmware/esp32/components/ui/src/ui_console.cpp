@@ -1,3 +1,5 @@
+#include "panel/panel_task.h"
+#include "ui/panel/panel_led_service.h"
 // ESP32 debug console: one line reader, two grammars, acknowledged verbs.
 // See ui_console.h and docs/features/debug-harness-and-hil.md.
 #include "ui/ui_console.h"
@@ -391,7 +393,7 @@ void dispatch(const Command& c) {
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
     } else if (!strcmp(c.verb, "STATE") || !strcmp(c.verb, "PAGE") || !strcmp(c.verb, "TRACK") ||
-               !strcmp(c.verb, "HOME")
+               !strcmp(c.verb, "HOME") || !strcmp(c.verb, "LEDS")
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
                || !strcmp(c.verb, "RENDER")
 #endif
@@ -467,6 +469,11 @@ void serve_state(int32_t seq) {
                    "lastkey",
                    wavex_ui::panelKeyName(wavex_ui::InputDispatcher::instance().lastKey()));
     len = append_track_state(s_reply, sizeof(s_reply), len, wavex_ui::getCurrentTrack());
+    const auto leds = wavex_panel::ReadStatus();
+    len = AppendKv(s_reply, sizeof(s_reply), len, "leddriver", wavex_panel::BackendName());
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "ledready", leds.ready && leds.applied);
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "ledblank", leds.frame.blanked);
+
     // The softkey row as the bar shows it now (shifted or not), with each
     // button's centre so a host can TAP it through the real touch path.
     if (auto* bar = nav.softkeyBar()) {
@@ -529,6 +536,34 @@ void serve_request() {
                  static_cast<unsigned long>(s_render.peak_pixels),
                  static_cast<unsigned long>(s_render.peak_us));
 #endif
+    } else if (!strcmp(s_req.verb, "LEDS")) {
+        if (!strcmp(s_req.args, "WALK"))
+            wavex_ui::PanelLedWalk();
+        else if (!strcmp(s_req.args, "ALL"))
+            wavex_ui::PanelLedAll();
+        else if (!strcmp(s_req.args, "OFF"))
+            wavex_ui::PanelLedTestOff();
+        else if (s_req.args[0]) {
+            FormatErr(seq, "badarg", s_reply, sizeof(s_reply));
+            return;
+        }
+        const auto leds = wavex_panel::ReadStatus();
+        size_t len = FormatOk(seq, s_reply, sizeof(s_reply));
+        len = AppendKv(s_reply, sizeof(s_reply), len, "driver", wavex_panel::BackendName());
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "ready", leds.ready && leds.applied);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "blank", leds.frame.blanked);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "test", wavex_ui::PanelLedTestChannel());
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "errors", leds.errors);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "writes", leds.writes);
+        // Last successfully transported physical frame, not a hardware readback.
+        char levels[WAVEX_LED_CHANNELS * 2 + 1]{};
+        constexpr char hex[] = "0123456789abcdef";
+        for (size_t i = 0; i < WAVEX_LED_CHANNELS; ++i) {
+            const auto value = wavex_ui::PanelLedChannelLevel(leds.frame, i);
+            levels[2 * i] = hex[value >> 4];
+            levels[2 * i + 1] = hex[value & 15];
+        }
+        AppendKv(s_reply, sizeof(s_reply), len, "levels", levels);
     } else if (!strcmp(s_req.verb, "TRACK")) {
         // TRACK <n>: select a Track (0-based, as on the wire) and ask the
         // Daisy for its binding, the way the Track -/+ keys do.

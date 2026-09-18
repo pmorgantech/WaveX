@@ -12,9 +12,9 @@ namespace wavex_ui {
  * @brief Every LED on the panel, by meaning (panel-controls.md §3.4).
  *
  * What each one shows is the LED policy of §4.5, decided from navigator and
- * page state in one place - no page sets an LED directly. The TLC5947 channel
- * behind each is the WAVEX_LED_CH_* map in hardware_config.h; nothing drives
- * the chain until stage 2.P.3 (`PanelLeds`), this is the model it drives.
+ * page state in one place - no page sets an LED directly. The physical channel
+ * behind each is the WAVEX_LED_CH_* map in hardware_config.h; the selected
+ * backend owns PWM packing, bus operations and output enable.
  */
 enum class PanelLed : uint8_t {
     Soft1 = 0,  ///< dim = softkey defined, bright = latched/active state
@@ -55,7 +55,7 @@ constexpr size_t kPanelLedCount = static_cast<size_t>(PanelLed::Count);
 
 namespace detail {
 
-// Indexed by PanelLed: its TLC5947 channel. The numbers are wiring truth and
+// Indexed by PanelLed: its physical channel. The numbers are wiring truth and
 // live in hardware_config.h; this only arranges them.
 constexpr uint8_t kLedChannels[kPanelLedCount] = {
     WAVEX_LED_CH_SOFT1,         WAVEX_LED_CH_SOFT2,
@@ -98,11 +98,11 @@ constexpr bool ledChannelsUnique() {
 
 static_assert(ledChannelsInRange(),
               "a WAVEX_LED_CH_* is >= WAVEX_LED_CHANNELS (hardware_config.h)");
-static_assert(ledChannelsUnique(), "two PanelLeds share a TLC5947 channel (hardware_config.h)");
+static_assert(ledChannelsUnique(), "two PanelLeds share a physical channel (hardware_config.h)");
 
 }  // namespace detail
 
-/// TLC5947 channel index (0 .. WAVEX_LED_CHANNELS-1) of a panel LED.
+/// Physical channel index (0 .. WAVEX_LED_CHANNELS-1) of a panel LED.
 constexpr uint8_t panelLedChannel(PanelLed led) {
     return detail::kLedChannels[static_cast<size_t>(led)];
 }

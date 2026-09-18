@@ -61,6 +61,8 @@ typedef struct {
 
 esp_err_t pcnt_task_init(void);
 esp_err_t pcnt_task_start(void);
+// One pass, called exclusively by panel_task. No blocking delay.
+void pcnt_poll(void);
 esp_err_t pcnt_task_stop(void);
 
 esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading);

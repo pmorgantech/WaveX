@@ -70,11 +70,13 @@ TEST_F(SoftkeyBarRenderTest, IdenticalAppearanceDoesNotRedrawButReplacesItsActio
     flushes = 0;
     keys[0].onPress = [&] { ++new_calls; };
     keys[0].why = "Current action";
+    keys[0].active = true;  // LED-only metadata must survive visual deduplication.
     for (int i = 0; i < 10; ++i)
         bar_.setSoftkeys(keys);
     Draw();
     EXPECT_EQ(flushes, 0u);
     EXPECT_STREQ(bar_.key(0).why.c_str(), "Current action");
+    EXPECT_TRUE(bar_.key(0).active);
     ASSERT_TRUE(bar_.press(0));
     Draw();
     EXPECT_EQ(old_calls, 0);

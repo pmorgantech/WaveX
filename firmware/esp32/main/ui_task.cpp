@@ -1,3 +1,4 @@
+#include "ui/panel/panel_led_service.h"
 /**
  * @file ui_task.cpp
  * @brief UI Task Implementation for MIPI DSI Display with LVGL
@@ -5,8 +6,6 @@
  * This implementation provides full LVGL integration with MIPI DSI display
  * using the Waveshare 5-DSI-TOUCH-A display and HX8394 driver.
  */
-
-#include "ui_task.h"
 
 #include <stdlib.h>
 
@@ -28,6 +27,7 @@
 #include "ui/ui_console.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_screenshot.h"
+#include "ui_task.h"
 
 #include <atomic>
 
@@ -287,6 +287,7 @@ void UITask::run() {
         LV_LOCK();
         wavex_ui::BusyOverlay::service();
         wavex_ui::UISampleBrowser::processDeferredUpdates();
+        wavex_ui::ServicePanelLeds();
         LV_UNLOCK();
 
         adaptiveRefreshControl();

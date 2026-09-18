@@ -167,7 +167,7 @@ class UIDiagnosticsPage : public UIPage {
     Card audio_cards[8];
     Card storage_cards[8];
     Card midi_cards[4];
-    Card panel_cards[7];
+    Card panel_cards[8];
     lv_obj_t* midi_note;     // "no sequencer yet" explainer on the MIDI tab
     lv_obj_t* msg_table;     // per-message-type counts, from wavex_packet_stats_t
     lv_obj_t* sample_table;  // resident samples, from SampleMemStatusMessage
