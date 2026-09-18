@@ -562,6 +562,10 @@ versioning and release process.
 
 ### Changed
 
+- Consolidate the roadmap around remaining work: retire the separate Phase 0/1
+  lists while retaining unfinished work and gates, remove completed/duplicate
+  entries, and move deferred analog-board Phase 3 to the end.
+
 - Mixer master now controls the final stereo output through a 5 ms ramp, with
   correlated target readback. Legacy volume controls use the same master target.
   Hardware click and callback-timing validation remains open (HV-006).
