@@ -2,7 +2,7 @@
 
 // ESP32 debug console (debug builds only - WAVEX_DEBUG_HARNESS_ENABLED).
 //
-// One line reader on the console UART carries every host-driven command:
+// One line reader on the configured USB/serial console carries every host-driven command:
 // the legacy "WAVEX-LOG ..." and "WAVEX-SCREENSHOT" lines the scripts/ tools
 // send, and the acknowledged "WAVEX-DBG <seq> <VERB> ..." grammar the HIL
 // suite drives (docs/features/debug-harness-and-hil.md §3, grammar shared

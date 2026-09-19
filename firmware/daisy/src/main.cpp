@@ -163,6 +163,14 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
 
     if (std::strcmp(c.verb, "PING") == 0) {
         FormatOk(seq, reply, sizeof(reply));
+    } else if (std::strcmp(c.verb, "LOGSTATS") == 0) {
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        len = AppendKvInt(reply, sizeof(reply), len, "usb_drop", WaveX::Log::DroppedBytes());
+        len = AppendKvInt(reply, sizeof(reply), len, "isr_log", WaveX::Log::IsrWrites());
+#if WAVEX_RTT_LOGGING
+        len = AppendKvInt(reply, sizeof(reply), len, "rtt_drop", WaveX::Log::RttDroppedBytes());
+#endif
+        (void)len;
     } else if (std::strcmp(c.verb, "LOG") == 0) {
         HandleLogCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
                                  : FormatErr(seq, "badlog", reply, sizeof(reply));

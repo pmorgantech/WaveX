@@ -13,6 +13,9 @@ versioning and release process.
 
 ### Added
 
+- Optional Daisy RTT foreground log mirror over SWD, with nonblocking loss
+  counters and a byte-for-byte USB/RTT comparison script; normal builds keep
+  USB CDC logging and require no RTT dependency.
 - ESP32 display bring-up for Waveshare 8-DSI-TOUCH-A using the existing
   JD9365/GT911 BSP stack: RGB565, PPA-rotated 1280×800 landscape, PSRAM draw
   buffers and updated UI geometry. The current partial-flush path is not
@@ -609,6 +612,9 @@ versioning and release process.
 
 ### Changed
 
+- ESP32 logs, console commands, HIL replies and screenshots use native USB
+  Serial/JTAG instead of the 115,200-baud CH343 bridge. Flash/monitor targets
+  pause and resume the managed logger to avoid competing for USB replies.
 - Consolidate the roadmap around remaining work: retire the separate Phase 0/1
   lists while retaining unfinished work and gates, remove completed/duplicate
   entries, and move deferred analog-board Phase 3 to the end.

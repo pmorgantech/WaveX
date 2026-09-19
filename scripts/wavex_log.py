@@ -31,7 +31,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from serial_ports import DAISY_CDC, ESP32_UART, find_tty  # noqa: E402
+from serial_ports import DAISY_CDC, ESP32_CONSOLE, find_tty  # noqa: E402
 
 LEVELS = ("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +41,7 @@ LOGGING_CONFIG = os.path.join(
 
 BOARDS = {
     "daisy": {"vidpid": DAISY_CDC, "log": "logs/daisy.log"},
-    "esp32": {"vidpid": ESP32_UART, "log": "logs/esp32.log"},
+    "esp32": {"vidpid": ESP32_CONSOLE, "log": "logs/esp32.log"},
 }
 
 

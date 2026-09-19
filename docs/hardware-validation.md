@@ -28,6 +28,7 @@ this document owns the runnable checks and their validation status.
 - [HV-016 — Bank SD transactions](#hv-016--bank-sd-transactions)
 - [HV-017 — Sample Edit selection](#hv-017--sample-edit-selection)
 - [HV-018 — 8-inch display bring-up](#hv-018--8-inch-display-bring-up)
+- [HV-021 — USB console and Daisy RTT](#hv-021--usb-console-and-daisy-rtt)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -87,6 +88,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-016 | Bank SD transactions and Track recall | Partial | Sparse Bank HIL passed 2026-09-18; full-Bank, DWT, MIDI timing and failure/recovery gates remain open |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 | HV-018 | 8-inch display bring-up | Partial | RGB565 restored visible UI, confirmed by user 2026-09-18; touch/brightness/load checks remain open |
+| HV-021 | USB console and Daisy RTT | Partial; RTT integrity failed | ESP32 USB console passes; Daisy USB retained pending a reliable RTT probe/readout and active-audio soak |
 
 ## HV-001 — SD card formatting
 
@@ -990,6 +992,74 @@ Local evidence: `logs/display-rgb565-build.log`,
 `logs/display-rgb565-flash.log`, `logs/display-rgb565-boot-20260918.log`,
 `logs/display-rgb565-working-20260918.png`. The original RGB888 image is retained
 in `logs/display-rgb888-baseline/` for a controlled future comparison.
+
+## HV-021 — USB console and Daisy RTT
+
+**Introduced:** Debug transport experiment, 2026-09-19.
+**Design / gate:** [Logging](logging.md), [Phase 2 timing gate](roadmap.md),
+[debug console architecture](architecture.md#debug-console-transport-as-built-2026-09-19).
+**Setup:** ESP32-P4 native USB Serial/JTAG, Daisy USB CDC, ST-Link V2
+(firmware V2J29S7), devcontainer, both serial loggers. Save normal images;
+build the optional RTT QSPI image using the pinned source in `logging.md`.
+
+- [x] **021a — ESP32 console:** Resolve the native USB port, flash with a
+  managed logger running, then run `tests/hil/test_console.py`. Capture and
+  decode the same main-menu screenshot over bridge UART and native USB.
+  **Pass:** Commands, logs and CRC-checked screenshots work; logger resumes
+  after flashing. Pause its reader, request a screenshot, resume and verify
+  fresh PING/STATE replies without resetting the board.
+- [ ] **021b — RTT integrity and delivery:** Run `scripts/bench_daisy_rtt.py`
+  for 100 bursts with the documented OpenOCD server; repeat after reboot.
+  **Pass:** Every USB/RTT payload matches, loss counters remain unchanged,
+  and complete-burst latency is recorded. **Failed** on the current probe.
+- [x] **021c — Absent RTT reader:** Stop RTT polling, issue 80 `LOG ?`
+  commands via USB, and compare LOGSTATS/STATE before and after.
+  **Pass:** RTT loss increases without USB loss or stalled callbacks.
+- [ ] **021d — Active audio:** Repeat 021b/c during resident and streaming
+  playback, capturing callback timing and listening for faults.
+  **Pass:** No new underruns, command stalls or audio faults; callback timing
+  remains within the phase gate. **Deferred:** resolve 021b before promotion.
+
+**2026-09-19 bench:** Native ESP32 JTAG detected both HP cores without halting
+or resetting. Native USB console firmware flashed successfully, including an
+app reflash while the managed logger was active. Seven console HIL cases
+passed. A 1280x800 main-menu screenshot took **16.071 s via UART** and
+**1.568 s via native USB** (repeat **1.564 s**), approximately 10.3 times faster
+end to end. These are capture timings, not CPU or raw transport benchmarks.
+Reader-pause/reconnect PING and STATE checks passed.
+
+The SRAM RTT build exceeded D2 by **22,888 bytes** (285,032 / 262,144) and
+DTCM by **528 bytes** (98,832 / 98,304, with stack space reserved). The separate
+QSPI RTT build fits without changing linker limits. It used 474,960 bytes AXI
+SRAM, 28,808 bytes D2 DMA, 69,568 bytes general D2, 9,376 bytes DTCM and
+28,792 bytes ITCM in this dirty-tree test image.
+
+RTT readout failed with OpenOCD 0.12.0 HLA and newer native ST-Link DAP, also
+after explicitly enforcing the M7 publication barrier. At requested 400 kHz
+(actual **240 kHz**) SWD and 10 ms polling, **32 identical 331-byte bursts**
+completed before corruption. Their median complete-burst delivery was
+**USB 2.499 ms / RTT 49.951 ms**. RTT loss stayed at 5,562 and USB loss at zero
+during this trial. A direct RTT RAM dump contained correct text missing from
+the received stream, suggesting a probe/readout-path fault; the cause is not
+proven. RTT therefore remains opt-in; the USB ring is retained.
+
+With polling stopped, RTT loss rose **5,562 → 31,945**, USB loss and ISR-log
+attempts stayed zero, callback blocks advanced **248,624 → 250,380**, and
+underruns stayed zero. This was **idle audio (zero voices/streams)** and does
+not satisfy 021d. The saved normal Daisy image was restored after testing.
+
+Tested image SHA256 identities (working tree; includes concurrent audio work):
+
+- ESP32 USB app: `0dfd8024303395c249d7e94f929e886e4b830c06cdeb76a71c340bad312c0317`.
+- ESP32 UART baseline: `be9965b1aa45707366d352c21ef4f4386b51dc01a1a080df2b08900f8cfdfb4e`.
+- Daisy QSPI RTT: `0643bdeca640b54f56e8412f46d84f506eef0615c0ea89aafdb2440adc4e723e`.
+- Daisy normal restored: `afa12b533956996e4ccb1a0af720f1b195c62f4aa4118b37066608b5ded959ec`.
+
+Evidence is retained locally under `logs/usb-rtt-20260918/`: build/flash and
+restore logs, `esp32-jtag.log`, `uart.png`, `usb.png`, `usb-final.png`,
+`rtt-400khz.json`, `rtt-400khz-error.log`, `rtt-buffer.bin`, and
+`rtt-no-reader.json`. These generated artifacts are gitignored. Repeat RTT
+integrity with a different probe/host stack before removing any USB buffering.
 
 ## Recording a validation session
 

@@ -137,3 +137,7 @@ CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 
 # Preserve every GT911 contact and tracking ID for independent pointers.
 CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5
+
+# Native USB console: logs and debug commands bypass the CH343 UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

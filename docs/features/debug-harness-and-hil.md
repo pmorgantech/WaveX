@@ -415,7 +415,7 @@ Daisy PING of the bench run was lost to exactly that before the change.
 
 The legacy seq-less lines (`WAVEX-LOG`, `WAVEX-SCREENSHOT`) still work and
 still answer in their legacy form, so `scripts/wavex_log.py` and
-`esp32_screenshot.py` are unchanged (`WAVEX-FILTER` was retired on 2026-09-14
+`esp32_screenshot.py` use the same grammar (`WAVEX-FILTER` was retired on 2026-09-14
 when slope and drive became Instrument parameters). `WAVEX-ENTER-DFU`
 keeps its own substring matcher, as §3 required.
 
@@ -450,6 +450,7 @@ scrolling an unknown card by pot detent.
 | Verb | Effect |
 |---|---|
 | `PING`, `LOG`, `FILTER` | ack / as before |
+| `LOGSTATS` | `usb_drop`, `isr_log`, and optional `rtt_drop`; foreground logging diagnostics |
 | `STATE` | `voices underruns samples streaming blocks dropped` |
 | `BANKSTATS` | Last accepted Bank job: `request op busy error pumps max_us work_us`; read-only, available during storage work. Rejected requests do not reset the measurement. |
 | `TRACKS` | `t0..t15` = `empty` / `sample:<id>` / `instrument:<name>` / `loading:<name>` — what `MSG_TRACK_BINDING` would say |

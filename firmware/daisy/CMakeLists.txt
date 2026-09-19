@@ -314,6 +314,22 @@ endif()
 
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
+option(WAVEX_RTT_LOGGING "Mirror foreground logs to nonblocking RTT (bench only)" OFF)
+set(WAVEX_SEGGER_RTT_DIR "" CACHE PATH "SEGGERMicro/RTT checkout for the optional bench build")
+if(WAVEX_RTT_LOGGING)
+    if(NOT WAVEX_BUILD_DEBUG)
+        message(FATAL_ERROR "RTT logging is a debug-only bench option")
+    endif()
+    if(NOT EXISTS "${WAVEX_SEGGER_RTT_DIR}/RTT/SEGGER_RTT.c")
+        message(FATAL_ERROR "Set WAVEX_SEGGER_RTT_DIR to the SEGGER RTT checkout (see docs/logging.md)")
+    endif()
+    list(APPEND FIRMWARE_SOURCES "${WAVEX_SEGGER_RTT_DIR}/RTT/SEGGER_RTT.c")
+    include_directories(src/comm/rtt "${WAVEX_SEGGER_RTT_DIR}/RTT")
+    add_compile_definitions(WAVEX_RTT_LOGGING=1)
+else()
+    add_compile_definitions(WAVEX_RTT_LOGGING=0)
+endif()
+
 include(DaisyProject)
 
 set_source_files_properties(${WAVEX_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${WAVEX_DAISY_COLD_OPT}")

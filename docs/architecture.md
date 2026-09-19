@@ -513,3 +513,12 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 10. **Wavetable source**: the typed boundary and its oscillator slot are
     defined, but the renderer is intentionally unscheduled until promoted from
     `roadmap.md` after the sampler/Instrument/sequencer gates.
+
+## Debug console transport (as-built, 2026-09-19)
+
+ESP32 logs, screenshots and acknowledged debug commands use native USB
+Serial/JTAG; CH343 UART remains a ROM recovery/flash fallback. USB MIDI uses
+the separate OTG controller. Daisy normally uses its bounded USB CDC log ring;
+an optional foreground-only RTT mirror supports the SWD bench experiment.
+See [logging](logging.md) for ownership, configuration and capture, and
+[HV-021](hardware-validation.md#hv-021--usb-console-and-daisy-rtt) for evidence.

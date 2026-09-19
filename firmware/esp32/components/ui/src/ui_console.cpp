@@ -9,7 +9,12 @@
 
 #include "config/hardware_config.h"
 #include "debug/console_command.h"
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#else
 #include "driver/uart.h"
+#endif
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
@@ -35,9 +40,10 @@ namespace {
 
 const char* TAG = "UI_CONSOLE";
 
-// Console UART. Commands arrive on the same port the logs leave on, so the
-// host drives everything through one tty.
-constexpr uart_port_t kUart = UART_NUM_0;
+// Commands arrive on the configured console, on the same tty as logs.
+#if !CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+constexpr uart_port_t kUart = static_cast<uart_port_t>(CONFIG_ESP_CONSOLE_UART_NUM);
+#endif
 
 using namespace WaveX::Debug;
 
@@ -472,7 +478,11 @@ void console_task(void*) {
     uint8_t buf[64];
     LineReader reader;
     for (;;) {
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+        const int n = usb_serial_jtag_read_bytes(buf, sizeof(buf), pdMS_TO_TICKS(100));
+#else
         const int n = uart_read_bytes(kUart, buf, sizeof(buf), pdMS_TO_TICKS(100));
+#endif
         for (int i = 0; i < n; i++) {
             if (reader.Feed(static_cast<char>(buf[i]))) {
                 Command c;
@@ -696,6 +706,19 @@ void wavex_console_start() {
     }
     started = true;
 
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    // One driver owns both directions. Route stdout through its interrupt-driven
+    // TX queue as well, so the polled VFS writer cannot race the TX ISR.
+    usb_serial_jtag_driver_config_t config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    config.tx_buffer_size = 4096;
+    config.rx_buffer_size = 1024;
+    const esp_err_t err = usb_serial_jtag_driver_install(&config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "USB console driver failed (%s) - commands disabled", esp_err_to_name(err));
+        return;
+    }
+    usb_serial_jtag_vfs_use_driver();
+#else
     // RX-only driver on the console UART. Console TX (logging, printf) does
     // not go through this driver, so output is unaffected.
     if (!uart_is_driver_installed(kUart)) {
@@ -706,6 +729,8 @@ void wavex_console_start() {
             return;
         }
     }
+
+#endif
 
     s_touch_q = xQueueCreate(32, sizeof(TouchStep));
     lvgl_port_lock(portMAX_DELAY);

@@ -14,16 +14,12 @@ import time
 DAISY_CDC = ("0483", "5740")
 DAISY_DFU = ("0483", "df11")
 
-# Two USB ports reach the ESP32-P4 on the Waveshare ESP32-P4-WIFI6 board. The
-# onboard CH343 USB-UART bridge carries the firmware console (UART0), so it is
-# the port to log and monitor on. The P4's own USB connector enumerates as the
-# chip's built-in USB-Serial/JTAG unit, which the ROM serves without firmware
-# help: esptool can enter download mode, flash, and reset over it while the
-# console stays undisturbed on the bridge. TinyUSB MIDI runs on the separate
-# high-speed OTG controller, so it does not displace this unit while the app
-# runs. Flash targets prefer "esp32-jtag" and fall back to "esp32".
+# Native USB Serial/JTAG carries the application console and is the preferred
+# flash port. The CH343 bridge remains available for ROM/boot recovery.
+# TinyUSB MIDI uses the separate high-speed OTG controller.
 ESP32_UART = ("1a86", "55d3")
 ESP32_USB_JTAG = ("303a", "1001")
+ESP32_CONSOLE = ESP32_USB_JTAG
 
 # The SRAM debug load reaches the Daisy through an ST-Link on SWD, not through
 # the Daisy's own USB port, so the probe is what proves the debug path can
@@ -35,7 +31,8 @@ STLINK = ("0483", ("3748", "374b", "374e", "374f", "3753", "3754"))
 # both are only valid for --present.
 TTY_BOARDS = {
     "daisy": DAISY_CDC,
-    "esp32": ESP32_UART,
+    "esp32": ESP32_CONSOLE,
+    "esp32-uart": ESP32_UART,
     "esp32-jtag": ESP32_USB_JTAG,
 }
 USB_BOARDS = dict(TTY_BOARDS, **{"daisy-dfu": DAISY_DFU, "stlink": STLINK})

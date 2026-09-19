@@ -26,11 +26,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
-from serial_ports import DAISY_CDC, ESP32_UART, find_tty  # noqa: E402
+from serial_ports import DAISY_CDC, ESP32_CONSOLE, find_tty  # noqa: E402
 
 BOARDS = {
     "daisy": {"vidpid": DAISY_CDC, "log": "logs/daisy.log"},
-    "esp32": {"vidpid": ESP32_UART, "log": "logs/esp32.log"},
+    "esp32": {"vidpid": ESP32_CONSOLE, "log": "logs/esp32.log"},
 }
 
 _ACK = re.compile(rb"WAVEX-DBG: (-?\d+) (OK|ERR)(?: (.*))?$")

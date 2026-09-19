@@ -205,16 +205,14 @@ esp32-clean:
 # unhelpful "No serial data received". Resolve by USB VID:PID instead, the same
 # way the Daisy DFU trigger already does.
 #
-# Two ports reach the P4. The CH343 UART bridge carries the console, so it is
-# the monitor/log port. The P4's own USB connector is the chip's built-in
-# USB-Serial/JTAG unit, served by the ROM, so flashing prefers it when it is
-# plugged in and leaves the console port alone; with only the bridge present it
-# falls back to that. `make ESP32_PORT=/dev/ttyACMn` forces one port for both.
+# Native USB Serial/JTAG carries logs, commands and flashing. Flash targets
+# pause the managed ESP32 logger while esptool owns that port, then resume it.
+# The CH343 bridge remains the flashing fallback and ROM recovery port. `make ESP32_PORT=/dev/ttyACMn` forces one port for both.
 # ---------------------------------------------------------------------------
 ESP32_PORT ?=
 ESP32_BAUD ?= 2000000
 esp32_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32)
-esp32_flash_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32-jtag 2>/dev/null || python3 scripts/serial_ports.py esp32)
+esp32_flash_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32-jtag 2>/dev/null || python3 scripts/serial_ports.py esp32-uart)
 
 # Edit/test-loop variant: the app partition only. The bootloader, partition
 # table and OTA data do not change between iterations and cost ~1 s to
@@ -235,6 +233,7 @@ esp32-app-flash:
 	@port=$$($(esp32_flash_port)) && \
 		echo "Port: $$port" && \
 		cd firmware/esp32/build && . /opt/esp/idf/export.sh >/dev/null && \
+		python3 ../../../scripts/with_serial_logger_paused.py --pidfile $(abspath $(LOG_DIR))/esp32.pid -- \
 		esptool.py --chip esp32p4 -p "$$port" -b $(ESP32_BAUD) --before default_reset --after hard_reset \
 			write_flash @flash_app_args
 	@echo "✅ ESP32 app flashed"
@@ -244,6 +243,7 @@ esp32-flash:
 	@port=$$($(esp32_flash_port)) && \
 		echo "Port: $$port, Baudrate: $(ESP32_BAUD)" && \
 		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		python3 ../../scripts/with_serial_logger_paused.py --pidfile $(abspath $(LOG_DIR))/esp32.pid -- \
 		idf.py -p "$$port" -b $(ESP32_BAUD) flash
 	@echo "✅ ESP32 Frontend flashed"
 
@@ -261,7 +261,7 @@ esp32-flash:
 # after, as flash-all does.
 esp32-reset: stop-logs
 	@set -eu; status=0; \
-		port=$$($(esp32_port)) && \
+		port=$$(python3 scripts/serial_ports.py esp32-uart) && \
 		echo "Resetting ESP32 via $$port (bridge auto-reset circuit)..." && \
 		( cd firmware/esp32 && . /opt/esp/idf/export.sh >/dev/null && \
 		  esptool.py --chip esp32p4 --port "$$port" --before default_reset --after hard_reset chip_id \
@@ -273,19 +273,17 @@ esp32-monitor:
 	@echo "📺 Monitoring ESP32 Frontend..."
 	@port=$$($(esp32_port)) && \
 		echo "Port: $$port" && \
-		cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py -p "$$port" monitor
+		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		python3 ../../scripts/with_serial_logger_paused.py --pidfile $(abspath $(LOG_DIR))/esp32.pid -- \
+		idf.py -p "$$port" monitor
 
 esp32-menuconfig:
 	@echo "⚙️  Configuring ESP32 Frontend..."
 	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py menuconfig
 
 esp32-flash-monitor:
-	@echo "⚡ Flashing and monitoring ESP32 Frontend..."
-	@flash_port=$$($(esp32_flash_port)) && port=$$($(esp32_port)) && \
-		echo "Flash port: $$flash_port, Baudrate: $(ESP32_BAUD), Monitor port: $$port" && \
-		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
-		idf.py -p "$$flash_port" -b $(ESP32_BAUD) flash && \
-		idf.py -p "$$port" monitor
+	@$(MAKE) esp32-flash
+	@$(MAKE) esp32-monitor
 
 # Daisy targets (using native ARM GCC toolchain)
 daisy:
@@ -472,9 +470,9 @@ flash-all: stop-logs
 # untouched - use esp32-flash or flash-all after changing those), the Daisy
 # VOLATILELY into SRAM over SWD
 # (a reset or power cycle returns it to the persistent QSPI image - that one
-# still takes flash-all's ~20 s DFU cycle). Neither path touches a console
-# port, so the loggers stay attached and just see each board reboot; the two
-# paths share no USB device, so they run concurrently. Measured 2026-09-04
+# still takes flash-all's ~20 s DFU cycle). The ESP32 logger pauses during
+# flashing; Daisy USB logging stays attached. The two flash paths share no
+# USB device, so they run concurrently. Measured 2026-09-04
 # from the devcontainer, after the builds: ESP32 10.6 s, Daisy 3.4 s.
 # Failures are reported per board and the target fails if either did.
 flash-fast:
@@ -518,7 +516,7 @@ start-logs: stop-logs
 	@nohup python3 scripts/serial_log.py --vid 0483 --pid 5740 \
 		--out $(LOG_DIR)/daisy.log --pidfile $(LOG_DIR)/daisy.pid >/dev/null 2>&1 &
 	@nohup python3 scripts/serial_log.py \
-		$(if $(ESP32_PORT),--port $(ESP32_PORT),--vid 1a86 --pid 55d3) --baud 115200 \
+		$(if $(ESP32_PORT),--port $(ESP32_PORT),--vid 303a --pid 1001) --baud 115200 \
 		--out $(LOG_DIR)/esp32.log --pidfile $(LOG_DIR)/esp32.pid >/dev/null 2>&1 &
 	@sleep 1
 	@echo "📝 Logging started:"

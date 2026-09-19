@@ -26,7 +26,7 @@ Usage:
   sysmon_stats.py --no-pages logs/esp32.log   # whole capture only
 
 Capture with, from the repo root:
-  python3 scripts/serial_log.py --vid 1a86 --pid 55d3 --baud 115200 \\
+  python3 scripts/serial_log.py --vid 303a --pid 1001 --baud 115200 \\
       --out logs/esp32.log
 """
 

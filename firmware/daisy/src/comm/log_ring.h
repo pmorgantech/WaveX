@@ -70,5 +70,10 @@ uint32_t DroppedBytes();
 // names a real bug at that call site rather than here.
 uint32_t IsrWrites();
 
+#if WAVEX_RTT_LOGGING
+// Optional independent RTT mirror loss count; USB loss remains DroppedBytes().
+uint32_t RttDroppedBytes();
+#endif
+
 }  // namespace Log
 }  // namespace WaveX

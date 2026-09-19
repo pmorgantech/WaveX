@@ -26,7 +26,7 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from serial_ports import ESP32_UART, find_tty  # noqa: E402
+from serial_ports import ESP32_CONSOLE, find_tty  # noqa: E402
 
 TOKEN = b"WAVEX-SCREENSHOT\n"
 BEGIN_RE = re.compile(
@@ -153,9 +153,10 @@ def main():
     # A fixed ttyACM number is not stable - the Daisy re-enumerates on every
     # reset and DFU cycle and can take ACM0, pushing the ESP32 to ACM1.
     if not args.port:
-        args.port = find_tty(*ESP32_UART)
+        args.port = find_tty(*ESP32_CONSOLE)
         if args.port is None:
-            sys.stderr.write("no ESP32 found (looked for USB %s:%s)\n" % ESP32_UART)
+            message = "no ESP32 found (looked for USB %s:%s)\n"
+            sys.stderr.write(message % ESP32_CONSOLE)
             return 1
 
     out = args.out or time.strftime("esp32-screen-%Y%m%d-%H%M%S.png")

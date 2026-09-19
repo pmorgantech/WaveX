@@ -3,6 +3,10 @@
 #include "config/uart_debug_config.h"
 #include "daisy_seed.h"
 
+#if WAVEX_RTT_LOGGING
+#include "SEGGER_RTT.h"
+#endif
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -39,6 +43,9 @@ uint32_t s_dropped = 0;
 // DroppedBytes()' sibling accessor rather than logged, because logging from
 // the context that must not log is not an option.
 uint32_t s_isr_writes = 0;
+#if WAVEX_RTT_LOGGING
+uint32_t s_rtt_dropped = 0;
+#endif
 
 daisy::DaisySeed* s_hw = nullptr;
 
@@ -59,6 +66,11 @@ size_t Buffered() {
 }  // namespace
 
 void Init(daisy::DaisySeed* hw) {
+#if WAVEX_RTT_LOGGING
+    if (hw && !s_hw) {
+        SEGGER_RTT_Init();
+    }
+#endif
     s_hw = hw;
 }
 
@@ -75,6 +87,13 @@ void Write(const char* data, size_t len) {
         ++s_isr_writes;
         return;
     }
+#if WAVEX_RTT_LOGGING
+    if (s_hw) {
+        // Independent mirror: an absent/slow probe drops RTT bytes only. The
+        // usual USB queue and command input remain available throughout a test.
+        s_rtt_dropped += len - SEGGER_RTT_WriteNoLock(0, data, len);
+    }
+#endif
     // A single write longer than the ring keeps only its tail; the newest
     // bytes are the ones worth having.
     if (len >= kRingBytes) {
@@ -174,6 +193,12 @@ uint32_t DroppedBytes() {
 uint32_t IsrWrites() {
     return s_isr_writes;
 }
+
+#if WAVEX_RTT_LOGGING
+uint32_t RttDroppedBytes() {
+    return s_rtt_dropped;
+}
+#endif
 
 }  // namespace Log
 
