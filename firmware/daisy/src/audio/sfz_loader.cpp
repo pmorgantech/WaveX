@@ -318,7 +318,7 @@ bool SearchForSample(const char* dir,
     bool found = false;
 
     FILINFO fno;
-#if FF_USE_LFN
+#if defined(FF_USE_LFN) && FF_USE_LFN
     char lfn_buf[Sfz::kMaxPath];
     fno.lfname = lfn_buf;
     fno.lfsize = sizeof(lfn_buf);
@@ -328,7 +328,7 @@ bool SearchForSample(const char* dir,
         if (f_readdir(&d, &fno) != FR_OK || fno.fname[0] == '\0') {
             break;
         }
-#if FF_USE_LFN
+#if defined(FF_USE_LFN) && FF_USE_LFN
         const char* name = (fno.lfname && fno.lfname[0]) ? fno.lfname : fno.fname;
 #else
         const char* name = fno.fname;
@@ -1923,7 +1923,7 @@ bool SetTrackMidiIn(uint8_t track, uint8_t midi_in) {
 }
 
 uint8_t TrackMidiIn(uint8_t track) {
-    return track < kNumTracks ? s_bank->At(track).midi_in : TRACK_MIDI_IN_OFF;
+    return track < kNumTracks ? s_bank->At(track).midi_in : static_cast<uint8_t>(TRACK_MIDI_IN_OFF);
 }
 
 bool SetTrackPolyLimit(uint8_t track, uint8_t limit) {

@@ -90,6 +90,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-018 | 8-inch display bring-up | Partial | RGB565 restored visible UI, confirmed by user 2026-09-18; touch/brightness/load checks remain open |
 | HV-021 | USB console and Daisy RTT | Partial; RTT integrity failed | ESP32 USB console passes; Daisy USB retained pending a reliable RTT probe/readout and active-audio soak |
 | HV-022 | Peer restart and browse delivery | Passed (listed cases) | Six isolated restarts, full listings, and early-selection/load regression pass; uncorrelated overlapping browse requests remain outside this check |
+| HV-023 | Stream read recovery cursor | Pending | Absolute retry-position fix implemented; injected SD read failure and latency checks unrun |
 
 ## HV-001 — SD card formatting
 
@@ -1231,3 +1232,27 @@ Failure follow-up / remaining cases:
 - [Flashing](flashing.md)
 - [Performance monitoring](performance_monitoring.md)
 - [Callback performance evidence](callback-performance-log.md)
+
+## HV-023 — Stream read recovery cursor
+
+**Introduced:** 2026-09-20. **Gate:** [streaming CRC recovery](roadmap.md#streaming-crc-recovery).
+**Setup:** disposable/read-only WAV fixture, trimmed region with an internal loop,
+Daisy logs and a foreground FatFs read-failure injection build. Preserve the
+source file and record the tested binary hashes.
+
+- [ ] Start streaming a region whose end precedes the end of the WAV data chunk.
+  Record the absolute offset before a regular slot read. Inject enough failed
+  reads to enter the existing reopen/retry path, without consuming their bytes.
+- [ ] Verify the recovery log seeks to that failed read's exact offset, retries
+  the same frames, and retains channel order. Repeat after a loop rewind, with
+  stereo PCM16 and PCM24 fixtures and a loop start inside the selected region.
+- [ ] Force reopen/seek failure and confirm bounded abort and responsive controls.
+  Record stream underruns, ring low-water and foreground service latency.
+
+**Pass:** no skip to the full-file tail, no stale or duplicated slot publication,
+correct region/loop continuation, and no unbounded retry. A compile or an ordinary
+error-free playback run does not satisfy fault-injection or latency acceptance.
+**Current result:** code retries the captured `read_at` position instead of
+subtracting region-relative bytes remaining from full-file data size. The
+injected-failure bench procedure is unrun; a deterministic injection build is
+still required. The broader CRC-recovery deadline decision remains open.

@@ -1055,7 +1055,9 @@ static void PumpSampleMetaPage() {
         MetaForWire(*page[i], records[i]);
     }
     const size_t bytes = sizeof(SampleMetaPageHeader) + n * sizeof(SampleMetadata);
-    if (WaveX::Comm::LinkSend(MSG_SAMPLE_META_PAGE, s_meta_page_buf, bytes) < 0) {
+    static_assert(sizeof(s_meta_page_buf) <= UINT16_MAX, "metadata page fits link length");
+    if (WaveX::Comm::LinkSend(MSG_SAMPLE_META_PAGE, s_meta_page_buf, static_cast<uint16_t>(bytes)) <
+        0) {
         return;  // queue full: try again next pass
     }
     s_meta_page_first = 0xFFFF;
@@ -1757,8 +1759,11 @@ static bool refill_sd_buffer() {
                 if ((HAL_SD_GetError(&hsd1) & SDMMC_ERROR_DATA_CRC_FAIL) != 0u) {
                     WaveX::Storage::SdSdio::DowngradeSpeed();
                 }
-                const uint32_t resume_at =
-                    s_wav.data_start + (s_wav.data_size - s_wav.bytes_remaining);
+                // Retry the failed read itself. bytes_remaining is relative
+                // to the current region/loop end, not the full data chunk;
+                // deriving an absolute offset from data_size skips elsewhere
+                // in the file after a trimmed region or loop read fails.
+                const uint32_t resume_at = read_at;
                 f_close(&s_wav.file);
                 FRESULT reopen = f_open(&s_wav.file, s_wav.path, FA_READ);
                 if (reopen == FR_OK) {
@@ -3993,13 +3998,10 @@ bool OpenWav(const char* path) {
     // play cleanly and others of the SAME format do not, the difference has
     // to be here.
     //
-    // data_start%4 != 0 means the data chunk is not frame-aligned for 16-bit
-    // stereo, so every read starts mid-frame and the channels are read
-    // swapped and shifted. data_start%512 != 0 means reads never land on a
-    // sector boundary, forcing FatFS through its window buffer for the head
-    // and tail of every transfer. Odd offsets are legal in RIFF - a LIST or
-    // fact chunk of odd length before `data` produces them - and this player
-    // does not compensate for either.
+    // Frame alignment is relative to data_start, not the file origin: a
+    // legal word-aligned RIFF payload need not be aligned to a stereo frame.
+    // Whole-frame read sizes preserve channel order from that exact offset.
+    // Sector alignment can affect FatFs read cost, not PCM channel identity.
     const uint32_t frame_bytes =
         (uint32_t)wav_info.num_channels * ((wav_info.bits_per_sample == 24) ? 3u : 2u);
     WaveX::Log::PrintLine(

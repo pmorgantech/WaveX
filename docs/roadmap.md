@@ -305,7 +305,9 @@ Use [SPI notes](spi-notes.md#verification-and-remaining-gates) for evidence and
 
 Bound SD CRC recovery so the foreground cannot stall beyond the audio ring's
 coverage: choose pause/recover, abort or additional prebuffer. Fault-inject the
-choice and measure ring low-water and service latency.
+choice and measure ring low-water and service latency. The absolute retry cursor
+now preserves trimmed regions/loops; verify it under injected read failures at
+HV-023 before claiming recovery acceptance.
 
 ### Memory and image size
 

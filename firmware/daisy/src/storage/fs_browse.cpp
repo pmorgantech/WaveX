@@ -29,7 +29,7 @@ bool ListDir(const char* path,
 
     DIR dir;
     FILINFO fno;
-#if FF_USE_LFN
+#if defined(FF_USE_LFN) && FF_USE_LFN
     char lfn_buf[256];
     fno.lfname = lfn_buf;
     fno.lfsize = sizeof(lfn_buf);
@@ -78,7 +78,7 @@ bool ListDir(const char* path,
         }
         if (!fno.fname[0])
             break;
-#if FF_USE_LFN
+#if defined(FF_USE_LFN) && FF_USE_LFN
         const char* name = (fno.lfname && fno.lfname[0]) ? fno.lfname : fno.fname;
 #else
         const char* name = fno.fname;

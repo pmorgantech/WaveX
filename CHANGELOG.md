@@ -515,6 +515,12 @@ versioning and release process.
 
 ### Fixed
 
+- WAV read recovery retries the failed absolute read position, preserving trimmed
+  region and loop boundaries instead of calculating a position from the full file.
+  SD fault-injection validation remains pending.
+- Bound metadata-page wire lengths and remove undefined FatFs-option and
+  MIDI-routing enum conversion warnings without changing their behavior.
+
 - Browser replies survive Daisy transmit-queue backpressure; the latest pending
   listing is retried from the main loop. UART health separates RX overruns
   from rejected TX enqueue attempts. ESP32 UART service uses the IDF IRAM ISR
