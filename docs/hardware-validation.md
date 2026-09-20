@@ -28,7 +28,11 @@ this document owns the runnable checks and their validation status.
 - [HV-016 — Bank SD transactions](#hv-016--bank-sd-transactions)
 - [HV-017 — Sample Edit selection](#hv-017--sample-edit-selection)
 - [HV-018 — 8-inch display bring-up](#hv-018--8-inch-display-bring-up)
+- [HV-019 — Note-group allocation policy](#hv-019--note-group-allocation-policy)
+- [HV-020 — Complete kit and pad-pattern workflow](#hv-020--complete-kit-and-pad-pattern-workflow)
 - [HV-021 — USB console and Daisy RTT](#hv-021--usb-console-and-daisy-rtt)
+- [HV-022 — Peer restart and browse delivery](#hv-022--peer-restart-and-browse-delivery)
+- [HV-023 — Stream read recovery cursor](#hv-023--stream-read-recovery-cursor)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -88,6 +92,8 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-016 | Bank SD transactions and Track recall | Partial | Sparse Bank HIL passed 2026-09-18; full-Bank, DWT, MIDI timing and failure/recovery gates remain open |
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 | HV-018 | 8-inch display bring-up | Partial | RGB565 restored visible UI, confirmed by user 2026-09-18; touch/brightness/load checks remain open |
+| HV-019 | Note-group allocation policy | Partial | Batched 16-Track/four-layer pressure passes; final-image mixed-channel soak, held-key behavior and saved controls remain open |
+| HV-020 | Complete kit and pad-pattern workflow | Partial | Full 16-pad WXI/Pattern HIL passes; listening, reboot and failure recovery remain open |
 | HV-021 | USB console and Daisy RTT | Partial; RTT integrity failed | ESP32 USB console passes; Daisy USB retained pending a reliable RTT probe/readout and active-audio soak |
 | HV-022 | Peer restart and browse delivery | Passed (listed cases) | Six isolated restarts, full listings, and early-selection/load regression pass; uncorrelated overlapping browse requests remain outside this check |
 | HV-023 | Stream read recovery cursor | Pending | Absolute retry-position fix implemented; injected SD read failure and latency checks unrun |
@@ -156,6 +162,8 @@ reboot recovery remain unrun; the full HV-001/phase gate stays open.
   sequencing is active. Playback stops safely; the page shows progress and
   eventually success. Old files are gone. Verify every directory in
   [card_layout.hpp](../firmware/daisy/src/storage/card_layout.hpp) exists.
+  Retain the `SD format:` serial lines; on failure record the first failing
+  stage, FatFs result and HAL error before attempting recovery.
 - [ ] **001d — Resume/reboot:** copy a known WAV to the new card, browse and
   audition it, save an Instrument and Pattern, then reboot and reload both.
   Audio, link, UI and saves recover; no stale browser entries remain.
@@ -833,6 +841,51 @@ preserve the source Bank. Capture both image identities before starting.
   Record foreground timing, callback DWT, audible continuity and underruns.
   Sparse automated UI/UART/SD checks do not close full-media/reboot/timing cases.
 
+- [ ] **016j — Project Bank restoration:** Save a Project with a populated
+  Bank selected; switch Banks and save a second Project. Load each and inspect
+  slots 1/128, then recall a sound or send an enabled Program Change. Repeat
+  after reboot. Load a Project with no Bank reference and confirm New; cancel
+  both operations before confirming. Remove/corrupt the referenced Bank, fail
+  a later Track dependency and exhaust staging RAM before another Load.
+  **Pass:** Saved file identity/index restore only with successful Project commit;
+  New/empty references clear selection. Failure preserves the old Bank revision,
+  Tracks and Pool; stale confirmations cannot act on the replacement Bank.
+  Missing Bank-only WAVs do not prevent Project Load or admit/pin extra samples;
+  subsequent explicit Preload/recall fails without partial publication. Existing
+  user pins survive. Record image identities, RAM, DWT/underruns and evidence.
+  `tests/hil/test_project_bank.py` covers empty-Bank selection/clearing through
+  both boards without WAV prerequisites; populated/recovery/timing checks remain
+  separate acceptance requirements.
+
+**2026-09-18 Project Bank restoration result (016j, partial):**
+`tests/hil/test_project_bank.py` passed on both boards (1 test, 53.46 s).
+Two empty Banks were saved with separate Projects; each Load restored its
+selected filename. Saving after switching Banks captured the new selection.
+New and loading a Project saved without a Bank cleared the selection. After a
+Daisy reset through ST-Link, explicit loads of all three files restored the same
+two selections/empty state. The final idle readback reported zero voices,
+samples, streaming and underruns; this is not an audio workload or soak result.
+
+- Daisy binary SHA-256:
+  `63289d90ce4ffa8f8f6ca4c8f28fc4e46b0a366847047b0591bcbdd7678ea143`.
+  Includes the HV-001 SD fallback; the original attached 8 GB card was used.
+- ESP32 unchanged from HV-001: boot ELF prefix `1ede590a3`, build Sep 18
+  2026 17:50:39. Only Daisy was rebooted for the restoration check.
+- Saved Projects `HILPB 5572396975797A`, `HILPB 5572396975797B`, and
+  `HILPB 5572396975797C` remain on the card with their two empty Bank files.
+  Earlier uniquely named trial files are also preserved.
+- Evidence: `logs/project-bank-hil.xml`, `logs/project-bank-reboot.log`,
+  `logs/project-bank-daisy.log`, `logs/project-bank-esp32.log`,
+  `logs/project-bank-flash.log`, and `logs/project-bank-precommit.log`.
+- All 70 loader/session host tests and the Daisy build/test hooks passed.
+  Tests include populated slot 128, externally renamed Bank identity, missing
+  Bank-only WAVs without implicit preload, stale revision rejection, missing or
+  malformed Banks, unsupported paths, and rollback after a later Track failure.
+- Populated-Bank/audio/Program Change restoration, physical dependency/memory
+  failure injection, full power cycling and DWT checks remain open. UART TX
+  queue overflows were logged during the Project operations despite successful
+  UI readback; this run does not establish lossless transport or timing bounds.
+
 **2026-09-18 slot copy/move validation:** Host wire, storage, session, dispatch
 and real-LVGL checks pass, including unknown embedded WXI bytes and failed
 publication. Both firmware images compile. The extended two-board HIL case is
@@ -1052,6 +1105,323 @@ Local evidence: `logs/display-rgb565-build.log`,
 `logs/display-rgb565-working-20260918.png`. The original RGB888 image is retained
 in `logs/display-rgb888-baseline/` for a controlled future comparison.
 
+## HV-019 — Note-group allocation policy
+
+**Introduced:** Whole-note admission foundation, 2026-09-18.
+**Design / gate:** [Phase 2.5 polyphony](roadmap.md#phase-25--sampler-instrument-layer),
+[allocation model](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
+**Setup:** Matched persistent QSPI `-O2` profiling images, both boards, mono and
+stereo resident WAVs, an Instrument with overlapping layers, audio capture and
+the existing DWT logger. Preserve source fixtures and record exact image hashes.
+
+- [ ] **019a — Before-integration baseline:** Use the replacement card with
+  restored WAV fixtures. Run the existing full channel-budget stereo/Mono scenarios
+  with both oscillators, modulation, locks, sequencing, streaming and file
+  operations for at least ten minutes each. Separately exercise repeated-note
+  and layered trigger bursts at capacity. Record complete profiling windows,
+  event/render zones, UART pressure and stream underruns per scenario.
+  **Pass:** Repeatable workload and image identity, zero underruns, callback
+  maximum below the continuation threshold in [performance monitoring](performance_monitoring.md).
+  An idle capture or host planner duration cannot pass this gate.
+- [ ] **019b — Matched group integration:** After the callback owner and complete
+  trigger handoff are implemented, repeat 019a unchanged. Add cap=1/4/Auto,
+  Own only/Own first/Any, stereo and layered pressure, release tails, binding
+  replacement and rejected triggers with choke groups.
+  **Pass:** Whole notes admit or refuse; no partial layer steals/chokes, stale
+  note-offs or ownership leaks. Capture audible steal/retrigger transitions,
+  worst callback cost and stack/memory headroom; preserve the global budget.
+- [ ] **019c — Saved policy and controls:** After persistence/Apply/Revert/UI
+  integration, save/load/new/reboot Instrument and Project policies, including
+  old files with explicit legacy values and Track inheritance. Change caps
+  during held/releasing notes and test Mono fallback/repeated-key identity.
+  **Pass:** Saved defaults and overrides follow the documented legacy policy,
+  edits apply at a callback boundary, and lowered caps act at the next admission.
+  Pad overrides are tested only if separately adopted.
+
+**2026-09-20 admission-batch result:** Same-frame events now plan from compact
+prepared zone metadata and materialize only surviving layers. The former
+16-Track/four-layer overrun passes 605.86 seconds / ten Pattern cycles at
+35.35% average and 66.0025% maximum; boot/setup maximum is 66.8390%, with zero
+stream underruns and sampled console RX drops. Candidate Daisy SHA256
+`ac4f254f5d2b1b3570ab37da041701a36cac47a9d79b11fde7ece401002cb736`,
+ESP32 `82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`.
+779 host tests and 22 targeted sanitizer cases pass, including sequential/batch
+voice and rendered-audio equivalence, channel/choke metadata and sample offsets.
+See [the measured workload and captures](callback-performance-log.md#same-frame-admission-batching--2026-09-20).
+This resolves the reproduced layered deadline failure only. Preserve the earlier
+mixed-channel transition evidence below; final-image one-hour soak, physical
+MIDI/listening and saved-policy acceptance remain open. The user permits
+continuation with these residual checks recorded in the roadmap.
+
+The same candidate also passed a 605.2-second rapid rotation through all five
+channel mixes, switching every ten seconds with ten Pattern cycles. Average
+30.3113%, maximum 59.9650%, zero stream underruns and sampled console RX drops;
+`logs/stereo-0-ladder-20260920-150155.log` / `.json`. This did not reproduce the
+earlier transition peak and does not close the final-image one-hour soak.
+
+**2026-09-18 result:** Ten host planner tests pass, including exhaustive
+four-slot feasibility/resource checks and the 64-slot mask boundary. The
+default eight-slot planner compiles for Cortex-M7 with C++17, `-O2`, exceptions
+and RTTI disabled. Daisy build/test hooks pass. It is not linked into the live
+allocator. The user replaced the empty formatted card with a sample-filled card;
+`/03 Lips of Ashes.wav` is readable and the current audio path was flashed as a
+profiling image for 019a. Group lifetime/held-note integration, saved policy and
+controls are not implemented. Physical acceptance remains open pending the
+recorded complete workloads below.
+
+**2026-09-18 baseline — 019a partial / REVIEW:** The replacement card ran
+`/03 Lips of Ashes.wav` with eight Mono render voices at the complete eight-channel
+budget, two oscillators, ladder/drive, modulation, four locks per hit, sequencing,
+stereo streaming and ten unique Pattern save/load cycles. The workload completed
+in 608.77 s; 122 captured DWT windows span 610.2 s. Zero stream underruns and zero
+sampled console dropped bytes. Callback average 175,783 cycles (36.6%); maximum
+336,019 / 480,000 cycles (**70.0040%**), so the automatic gate is **REVIEW**, not
+STAY. The same window reports event-zone maximum 164,825 cycles and render-zone
+maximum 164,303 cycles; these window maxima do not establish coincident costs.
+Review/profile event handling and repeat the matched workload before adding
+allocator work. Stereo/mixed scenarios and layered/repeated-note bursts remain
+unrun in this session.
+
+Image: Daisy persistent QSPI `-O2`, profiling On, SHA256
+`778b0c77d07ae328733568199b41b1e69ab9960c49b76723fecacaf32b41242f`;
+ESP32 running ELF prefix `1ede590a3` (2026-09-18 17:50:39 build).
+Evidence: `logs/stereo-0-ladder-20260918-233158.log` and `.json`,
+`logs/polyphony-baseline-run2.log`, and the recorded
+[performance gate row](callback-performance-log.md). The earlier 60-second
+attempt ended on stale harness navigation and is excluded from acceptance.
+
+**2026-09-18 group integration — functional checks, capacity pending:** The
+callback now admits complete layer groups and owns their stable IDs and Track
+binding generations. Foreground note queues publish all layers atomically;
+sequencer hits use the same group admission. Host coverage includes partial
+layer completion, whole-group stealing, rejected-trigger choke isolation,
+stale releases, one-shot layers and local cap accounting. The group integration source passed 771 Daisy tests and 37 selected
+ASan/UBSan cases; both output configurations compile.
+
+`tests/hil/test_note_groups.py` passes both live-key and sequenced cases on the
+two boards (45.20 s): construct four overlapping keyboard zones, fire the
+four-layer note, fill the remaining channels with four independent notes,
+then trigger one more note. All four old layers retire together: the active
+count falls from eight to five. Scoped note-offs leave unrelated notes intact.
+Daisy profiling image SHA256
+`d86a89be2a289118e72561879b9753c9bd64575ae12329909726128e04b97f27`;
+frontend SHA256
+`be9965b1aa45707366d352c21ef4f4386b51dc01a1a080df2b08900f8cfdfb4e`.
+Evidence: `logs/note-groups-first.xml` and `logs/note-groups-first-run.log`.
+This image's short capacity screening reached 73.90% and was interrupted for
+planner placement work; functional passes do not clear that performance gate.
+Saved policies, held-key fallback, listening and the full 019b/019c checks remain
+open. Repeat the four-layer procedure with stereo layers and under burst/load
+pressure before closing 019b.
+
+**2026-09-18 final capacity repeat (UTC Sep 19):** The eight-Mono workload
+completed 610.5 seconds / 122 DWT windows and ten Pattern file cycles, with zero
+stream underruns and console RX drops. Weighted mean 174,512 cycles (36.4%),
+maximum 338,778 (70.5787%, **REVIEW**); setup maximum 348,202 (72.5421%). This
+covers only the eight-Mono subset of 019a; mixed/stereo and burst workloads,
+listening, interrupt-entry latency and the one-hour phase soak remain open.
+The candidate includes whole-note admission, prospective choke priority,
+startup pitch lookup, LFO configuration reuse and planner/filter ITCM placement.
+Daisy SHA256 `386259b62c24a2dd338e441026be99b939b739fd3729fe1655fb830a29eb0e5c`;
+ESP32 unchanged as above. Evidence:
+`logs/stereo-0-ladder-20260919-033711.log` / `.json` and
+`logs/callback-final2-run.log`. See [timing evidence](callback-performance-log.md)
+for the earlier candidates; no net peak improvement or complete gate is claimed.
+
+**2026-09-18 correlated profiling and final regression (UTC Sep 19):** Build
+with both `WAVEX_PROFILING_ENABLED=ON` and `WAVEX_PROFILE_CALLBACK_DETAIL=ON`,
+then run the eight-Mono benchmark for 185 seconds including three Pattern
+save/load/restart cycles. Inspect `callback_peak` and all `peak_stage` records
+with the same window ID, including setup; repeat acceptance with detail off.
+Diagnostic pass criteria are intact correlated records, eight matching trigger
+calls in the peak, zero reported stream underruns, and no use of this overhead-
+bearing image as normal timing-gate evidence. These diagnostic criteria passed;
+[the stage table](callback-performance-log.md#correlated-peak-attribution-diagnostic-image)
+records the setup and workload peaks. No capacity or phase gate closes here.
+Image SHA256 `c65fe60a19cbb3d36d8a88b6d46bfe22d47502ddbdc01504fe0187d0a454a716`;
+`logs/callback-detail-boot.log`, `logs/callback-detail-peaks.json`, and
+`logs/stereo-0-ladder-20260919-035249.log` / `.json` retain the evidence.
+
+Normal profiling-off Daisy image SHA256
+`afa12b533956996e4ccb1a0af720f1b195c62f4aa4118b37066608b5ded959ec`
+was restored afterward. The final source passes **773 Daisy host tests**, **40
+selected ASan/UBSan cases**, and both report-helper tests; Stage A, Stage B and
+the optional detailed profiling image compile. The combined two-board HIL
+rerun is **incomplete**: three Daisy sequencer cases passed, twelve UI-dependent
+cases skipped because a concurrent frontend session changed its console to
+USB; the retry reached the first group test but lost its console acknowledgement
+during a further ESP32 reflash. This is not a new group-allocation failure or a
+passing final regression. Preserve `logs/callback-final-hil.xml`,
+`logs/callback-final-hil-retry.xml` and their `*-run.log` files. Repeat the
+15-case group/stereo/sequencer selection with stable exclusive bench access.
+The earlier two group passes above remain valid for their recorded image.
+
+**2026-09-19 sequencer ITCM iteration:** Retain the measured placement of
+scheduler start/step and transport hot paths in ITCM (35,680 / 65,536 bytes).
+The full control and candidate each captured 605.2 seconds, and a subsequent
+185.1-second unchanged-control return check reproduced the higher cost.
+Candidate average/peak were 35.1% / 64.76%, versus 36.7% / 71.15% for the full
+control; setup improved from 72.98% to 65.99%. No stream underruns were observed.
+See [the exact images, counters and comparison](callback-performance-log.md#sequencer-placement-trial--2026-09-19).
+
+The candidate harness failed in its tenth Pattern cycle: the UI performed Back
+navigation, but native-USB console ACK 940623 was absent. Nine cycles were
+confirmed and the full timing capture is retained, but this is **not** a complete
+workflow/phase pass. The short control repeat completed all three file cycles.
+The native-USB console issue remains open in the roadmap; do not silently replay
+mutating commands when their acknowledgement is missing. Repeat the full
+workload on the exact clean commit before using it for a phase/release decision.
+
+Normal profiling-off Daisy image restored:
+`155a07258a991511524c92eab1a93f6310661e5dd30f23919d9752147a2c8982`.
+Frontend image:
+`2c1f693d3a0dfdbd369b36e74cedc06ee22c4b55c0d1e9d3e574a742ba5a5403`.
+All 773 Daisy host tests and the repository build/test hooks pass; Stage B also
+compiles. Normal-image HIL initially stopped on a missing `STATE` ACK before
+its first audio assertion (`logs/seq-final-hil.xml`). A read-only probe recovered;
+the retry passed nine group/stereo cases, then failed when the frontend rejected
+`PAGE MUTE 0` as unknown (`logs/seq-final-hil-retry.xml`). The separate sequencer
+selection passed all four cases in 22.37 seconds (`logs/seq-final-tracks.xml`).
+These partial results do not complete the combined regression or capacity gate.
+Resolve the console failures and finish the remaining stereo workflow checks;
+mixed/stereo capacity, repeated-note bursts, interrupt-entry latency, listening
+and the one-hour soak stay open.
+
+**2026-09-20 follow-up:** The previously interrupted normal-image regression
+now passes in the 26-case selection recorded at HV-020/HV-021 below. The unchanged
+profiling image `f6c8a1957f89e08a590d989462aac553dd8cfd3a559914ba532068b8bb3c04fa`
+also passes the full two-stereo/four-Mono workload: 605.3 s of DWT windows,
+ten Pattern save/load cycles, zero stream underruns, average 30.2%, workload
+peak 56.0135% and boot/setup-inclusive peak 56.85%. See
+[the capture and image identities](callback-performance-log.md#mixed-channel-sequencersampler-validation--2026-09-20).
+This closes that functional regression and mixed-channel capture, not HV-019:
+other mixes, burst/latency checks, listening, the one-hour soak and clean-commit
+repeat remain open. A Daisy-only reflash also exposed a peer-restart/browse
+failure; restarting the frontend recovered it, with later fixes/results at HV-022.
+After restoring normal profiling-off Daisy firmware and restarting the frontend,
+the final smoke check found ten root browse entries, a ready stopped Sequencer,
+zero voices/streams/underruns and zero dropped replies; the UI was left at the
+main menu (`logs/seq-sampler-final-smoke.log`).
+
+**2026-09-20 full-mix follow-up — 019a capacity failure:** All five mixes and
+a return-to-Mono segment now have more than ten minutes of DWT windows in the
+61-minute zero-stream-underrun run linked at HV-005. Its final transition/file
+cycle raised the overall peak to 74.5896%; this supersedes the earlier lower
+steady-state peaks for capacity acceptance. Detailed transition attribution
+did not reproduce that high window. The two four-layer repeated-note runs
+subsequently pass ten minutes each (Mono peak 57.1544%, stereo peak 43.4917%;
+20 combined Pattern cycles and 1,009 foreground-injected MIDI notes).
+A separate 16-Track/four-layer pressure screen fails the deadline: 114.5108%
+workload peak, 118.0392% including setup, with only eight render channels.
+Zero stream underruns do not clear that failure. Saved policy, held-key
+ownership, listening, interrupt-entry latency and clean-commit repeat remain
+open; the full 019b/019c gates are not satisfied by the soak.
+
+## HV-020 — Complete kit and pad-pattern workflow
+
+**Introduced:** Full-kit HIL, 2026-09-18.
+**Design / gate:** [Phase 2.5 kit workflow](roadmap.md#phase-25--sampler-instrument-layer),
+[Track/Instrument model](features/track-and-patch-model.md),
+[sequencer](features/sequencer.md).
+**Setup:** Both boards, two short distinguishable WAVs on a backed-up card,
+unique Instrument/Pattern names, serial and audio capture. The automated case
+replaces the live session and preserves saved source files.
+
+**2026-09-20 regression:** The complete 16-pad WXI/Pattern round trip passes
+in the combined 26-case console/group/stereo/sequencer selection
+(`logs/seq-sampler-final.xml`, 192.37 s). This includes all four routing/retirement
+cases, live and sequenced four-layer stealing, all five channel mixes, Mono
+changes while held, WXI Mono recall, Project gain/pan/mute and Solo preserving
+manual mutes. These are digital meters and state assertions, not listening or
+reboot/failure-recovery acceptance. Daisy normal image SHA256
+`155a07258a991511524c92eab1a93f6310661e5dd30f23919d9752147a2c8982`;
+ESP32 SHA256
+`78c63611b1f5425d41639b0211d5969b83eb25925655e1fc54ffe4ebd6dfbffe`.
+The kit case took 60.22 s and recalled `HIL16 74033046462253` at directory
+index 90, providing another populated-directory result for 020d.
+
+**2026-09-20 final normal-image regression:** Daisy profiling/detail/RTT Off
+image `0e5ed82752a443dbc1cfae35f3d175045c06ab28334d53427d0a5737600e87aa`
+and frontend `82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`
+ran the final console, group, stereo, sequencer, kit and pagination selection.
+The initial run had 26 passes and one kit-test failure in 176.25 seconds:
+the test redundantly touched Saved while already in that directory, then
+selected before the asynchronous touch refreshed the list. The test now skips
+that redundant navigation and requires the selected filename alongside Load
+readiness. The focused full-kit repeat passed in 60.70 seconds.
+A second full-kit repeat with Saved already restored passed in 60.39 seconds,
+exercising the previously failing branch without a second Saved touch
+(`logs/batch-kit-restored-retest.xml` / `.log`).
+Evidence: `logs/batch-final.xml`, `logs/batch-final-hil.log`,
+`logs/batch-kit-retest.xml`, and `logs/batch-kit-retest.log`. Preserve the failed
+attempt; these functional checks do not close listening, reboot or failure
+recovery. The same source passes 779 Daisy and 450 shared host cases, four Python
+checks with nine subtests, and both output configurations compile.
+Final cleanup stopped sequencing/streaming, cleared the bench's RAM Tracks and
+samples, and returned the frontend to Main Menu: zero active voices, stream
+underruns, console drops and reply drops; root listing has ten entries and the
+Sequencer reports ready/stopped (`logs/batch-final-smoke.log` / `-result.json`).
+
+- [ ] **020a — Complete kit:** Run `tests/hil/test_kit_sequence.py`. Assign all
+  16 pads, alternating two resident samples and setting choke on even pads.
+  Save a WXI copy, load it onto another Track and inspect every pad assignment
+  and choke value while a separate Track retains its held note.
+  **Pass:** Every mapping survives the copy; the other Track remains bound
+  and sounding. Duplicate-save and cancel behavior is additionally covered by
+  `tests/hil/test_kit_editor.py`.
+- [ ] **020b — Pad-addressed pattern:** Program 16 steps on the recalled Kit's
+  Track, addressing pads 1 through 16. Save/New/Load the Pattern and inspect
+  all enabled bits and note values. Start/Stop and listen through a full loop.
+  **Pass:** The expected alternating sounds play in order, choke affects only
+  the intended Kit, Pattern recall preserves Track bindings, and no underruns
+  or stuck notes occur. Automated voice-count readback is not a listening test.
+- [ ] **020d — Populated saved directory:** With more than 50 WXI entries,
+  save a uniquely named Kit after the first 50 directory positions, browse to
+  it, select it and recall all pad assignments. Re-enter the browser and repeat.
+  **Pass:** The later Kit remains reachable; loading preserves other Tracks.
+  Host pagination also covers index 255 and the final partial page. The
+  500-entry target remains outside this protocol limit.
+- [ ] **020c — Recovery:** Reboot both boards, reload the Kit and Pattern and
+  repeat 020b. Exercise missing dependencies, card removal during Save and
+  insufficient staging memory, preserving the earlier saved copies.
+  **Pass:** Successful copies reload; failure never installs a partial Kit or
+  overwrites source files. Record image identities and per-case evidence.
+
+**2026-09-18 browser and supporting regressions:** The replacement card exposed
+a real 50-entry frontend cutoff: 86 saved Instrument entries existed, but only
+50 were reachable. Both browsers and the Daisy index cache now use the existing
+256-entry listing limit. A host regression pages through all 256 entries and
+selects index 255 without wrapping. Both firmware builds and 1,570 host tests
+(450 shared, 362 frontend, 758 backend) pass. No 500-entry support is implied.
+
+On normal QSPI `-O2` Daisy firmware with profiling Off, eight supporting HIL
+cases pass: kit save/recall/overrides, parameter locks, Track routing/retirement
+and grid editing. `logs/kit-sequencer-final.xml` also retains the full-kit test's
+initial failure: it pressed Load during reference inspection. That harness
+now waits for Load to become enabled, in addition to waiting for paginated
+entries and save completion; no load command is retried blindly.
+
+The corrected full-kit case passes in **117.95 s** (`logs/full-kit-final.xml`):
+`HIL16 75321629692998` was selected at directory index **88**. All 16 alternating
+sample assignments and choke values survive WXI recall onto Track 3; another
+Track retains its binding, with its held voice preserved during kit editing.
+All 16 enabled steps and pad notes 60–75 survive Pattern Save/New/Load, followed
+by two loops at 120 BPM, Start/Stop and zero reported underruns/dropped bytes.
+Together with the eight supporting cases, all nine selected HIL cases pass.
+These are automated readback/playback checks; 020a/b/d have supporting bench
+evidence, while listening and 020c recovery remain unverified.
+
+Tested images: Daisy SHA256
+`69228096000d06074a22a5561173e93662816e1025e1b2a27a47677fa1ff729c`;
+ESP32 app SHA256
+`be9965b1aa45707366d352c21ef4f4386b51dc01a1a080df2b08900f8cfdfb4e`.
+Build/flash and checks: `logs/kit-browser-precommit.log`,
+`logs/kit-browser-precommit-final.log`, `logs/kit-hil-python-checks-final.log`,
+`logs/kit-final-text-checks.log`, `logs/kit-browser-daisy-flash.log`, and
+`logs/kit-browser-esp32-flash.log`. Formatting findings from intermediate runs
+were corrected; all affected checks subsequently pass. Physical audio capture,
+reboot/failure recovery and the complete Phase 2 gate remain open.
+
 ## HV-021 — USB console and Daisy RTT
 
 **Introduced:** Debug transport experiment, 2026-09-19.
@@ -1207,6 +1577,30 @@ finish each paginated request before navigating again; they do not establish
 correct cancellation under overlapping directory changes or recovery from
 arbitrary dropped/late packets.
 
+## HV-023 — Stream read recovery cursor
+
+**Introduced:** 2026-09-20. **Gate:** [streaming CRC recovery](roadmap.md#streaming-crc-recovery).
+**Setup:** disposable/read-only WAV fixture, trimmed region with an internal loop,
+Daisy logs and a foreground FatFs read-failure injection build. Preserve the
+source file and record the tested binary hashes.
+
+- [ ] Start streaming a region whose end precedes the end of the WAV data chunk.
+  Record the absolute offset before a regular slot read. Inject enough failed
+  reads to enter the existing reopen/retry path, without consuming their bytes.
+- [ ] Verify the recovery log seeks to that failed read's exact offset, retries
+  the same frames, and retains channel order. Repeat after a loop rewind, with
+  stereo PCM16 and PCM24 fixtures and a loop start inside the selected region.
+- [ ] Force reopen/seek failure and confirm bounded abort and responsive controls.
+  Record stream underruns, ring low-water and foreground service latency.
+
+**Pass:** no skip to the full-file tail, no stale or duplicated slot publication,
+correct region/loop continuation, and no unbounded retry. A compile or an ordinary
+error-free playback run does not satisfy fault-injection or latency acceptance.
+**Current result:** code retries the captured `read_at` position instead of
+subtracting region-relative bytes remaining from full-file data size. The
+injected-failure bench procedure is unrun; a deterministic injection build is
+still required. The broader CRC-recovery deadline decision remains open.
+
 ## Recording a validation session
 
 Append a record for each run and update the relevant boxes and queue status.
@@ -1232,27 +1626,3 @@ Failure follow-up / remaining cases:
 - [Flashing](flashing.md)
 - [Performance monitoring](performance_monitoring.md)
 - [Callback performance evidence](callback-performance-log.md)
-
-## HV-023 — Stream read recovery cursor
-
-**Introduced:** 2026-09-20. **Gate:** [streaming CRC recovery](roadmap.md#streaming-crc-recovery).
-**Setup:** disposable/read-only WAV fixture, trimmed region with an internal loop,
-Daisy logs and a foreground FatFs read-failure injection build. Preserve the
-source file and record the tested binary hashes.
-
-- [ ] Start streaming a region whose end precedes the end of the WAV data chunk.
-  Record the absolute offset before a regular slot read. Inject enough failed
-  reads to enter the existing reopen/retry path, without consuming their bytes.
-- [ ] Verify the recovery log seeks to that failed read's exact offset, retries
-  the same frames, and retains channel order. Repeat after a loop rewind, with
-  stereo PCM16 and PCM24 fixtures and a loop start inside the selected region.
-- [ ] Force reopen/seek failure and confirm bounded abort and responsive controls.
-  Record stream underruns, ring low-water and foreground service latency.
-
-**Pass:** no skip to the full-file tail, no stale or duplicated slot publication,
-correct region/loop continuation, and no unbounded retry. A compile or an ordinary
-error-free playback run does not satisfy fault-injection or latency acceptance.
-**Current result:** code retries the captured `read_at` position instead of
-subtracting region-relative bytes remaining from full-file data size. The
-injected-failure bench procedure is unrun; a deterministic injection build is
-still required. The broader CRC-recovery deadline decision remains open.

@@ -3,7 +3,7 @@
 import time
 
 import pytest
-from test_pattern_files import _files, _new
+from test_pattern_files import _back, _files, _new
 
 
 @pytest.mark.both
@@ -14,8 +14,7 @@ def test_parameter_locks_edit_clear_and_survive_pattern_recall(esp32, daisy):
     esp.wait_state(seqready=1)
     _files(esp)
     _new(esp)
-    esp.softkey("Back")
-    esp.wait_state(seqready=1)
+    _back(esp)
     esp.page("FOCUS", 1, 1)
     esp.wait_state(seqready=1)
     esp.page("TOGGLE")
@@ -54,14 +53,18 @@ def test_parameter_locks_edit_clear_and_survive_pattern_recall(esp32, daisy):
     name = "HIL locks " + str(int(time.time()))
     esp.page("NAME", name)
     esp.softkey("Save copy")
-    esp.wait_state(fileready=1, fileerror=0, timeout=10)
+    esp.wait_state(
+        fileready=1, fileerror=0, filename=name.replace(" ", "_"), timeout=10
+    )
     _new(esp)
     esp.page("NAME", name)
     esp.softkey("Load")
     esp.wait_state(fileconfirm=2)
     esp.softkey("Confirm")
-    esp.wait_state(fileready=1, fileerror=0, timeout=10)
-    esp.softkey("Back")
+    esp.wait_state(
+        fileready=1, fileerror=0, filename=name.replace(" ", "_"), timeout=10
+    )
+    _back(esp)
     esp.wait_state(seqready=1, seqbits=1)
     esp.key("SHIFT")
     esp.wait_state(shift=1)
@@ -76,7 +79,7 @@ def test_parameter_locks_edit_clear_and_survive_pattern_recall(esp32, daisy):
     esp.wait_state(seqlocks=0, shift=0)
     _files(esp)
     _new(esp)
-    esp.softkey("Back")
+    _back(esp)
     esp.wait_state(seqready=1, seqbits=0)
     esp.home()
     daisy.wait_state(underruns=0, dropped=0)

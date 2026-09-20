@@ -30,7 +30,12 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     name = "HIL kit " + str(int(time.time()))
     esp.page("NAME", name)
     esp.softkey("Confirm")
-    esp.wait_state(kitready=1, kiteditable=1, kitname=name.replace(" ", "_"))
+    esp.wait_state(
+        kitready=1,
+        kiteditable=1,
+        kitview=0,
+        kitname=name.replace(" ", "_"),
+    )
     assert daisy.state()["voices"] == "1"
     esp.page("PAD", 16)
     esp.softkey("Assign")
@@ -69,7 +74,7 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.softkey("Save copy")
     esp.wait_state(kitview=1)
     esp.softkey("Confirm")
-    esp.wait_state(kitready=1, kiterror=0, timeout=10)
+    esp.wait_state(kitready=1, kitview=0, kiterror=0, timeout=10)
     esp.softkey("Save copy")
     esp.wait_state(kitview=1)
     esp.softkey("Confirm")
@@ -82,8 +87,13 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.wait_state(page="Instrument_Browser")
     esp.softkey("Saved")
     esp.wait_state(dir="/wavex/instruments", entries=lambda n: int(n) > 1)
-    esp.page("SEL", name + ".wxi")
-    esp.wait_state(sel=(name + ".wxi").replace(" ", "_"), sk2="Load")
+    esp.select_file(name + ".wxi")
+    esp.wait_state(
+        sel=(name + ".wxi").replace(" ", "_"),
+        sk2="Load",
+        sk2en=1,
+        timeout=15,
+    )
     previous_target = daisy.tracks()[2]
     esp.softkey("Load")
     esp.wait_state(picker=1, sk0="Cancel")
@@ -97,7 +107,12 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.home()
     esp.open_menu("Instrument")
     esp.softkey("Pad Map")
-    esp.wait_state(kitready=1, kiteditable=1, kitname=name.replace(" ", "_"))
+    esp.wait_state(
+        kitready=1,
+        kiteditable=1,
+        kitview=0,
+        kitname=name.replace(" ", "_"),
+    )
     esp.page("PAD", 16)
     esp.wait_state(kitready=1, kitsample=a, kitchoke=1)
     esp.key("SHIFT")

@@ -1,22 +1,18 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-18.
+**Last updated:** 2026-09-20.
 
 This document tracks remaining implementation, open decisions and phase gates.
 Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-Phase 0/1 are retired as separate planning sections. Their unfinished concurrent
-streaming, recording, platform maintenance and soak requirements are retained
-below; retiring the sections does not certify their hardware gates. Phase numbers
-remain stable, with deferred Phase 3 moved to the end.
-
-**Next software work:** Remaining Bank follow-ups (Project restoration policy and
-the deferred working-copy decision), then the
-remaining Phase 2.5 tasks in order. The authorized touchscreen/software work can continue
-while panel wiring is pending; the full Phase 2 gate remains open.
+**Next software work:** Complete held-key ownership, saved polyphony policies
+and controls, then the remaining Phase 2.5 tasks in order while panel wiring
+is pending. Same-frame layered admission is implemented and its reproduced
+16-Track deadline failure passes the extended pressure check. Residual capacity
+and physical gates remain open below.
 
 ## Contents
 
@@ -33,10 +29,8 @@ while panel wiring is pending; the full Phase 2 gate remains open.
 ## Phase 1.5 — Sample editing
 
 1. Persist standalone marker/gain edits with the WXCF sidecar model; settle
-   Save As naming and sidecar versus render-to-new-file behavior. Project
-   snapshots already retain sample edits.
+   Save As naming and sidecar versus render-to-new-file behavior.
 2. Define partial-load behavior for samples too large for resident RAM.
-   Explicit resident-sample selection is implemented; panel checks are HV-017.
 3. Finish marker interaction: loop seam verification, zero-crossing snap
    protocol/policy for stereo, and playback-time loop crossfade.
 4. Reconcile streaming/RAM channel behavior and expose `channel_mode` in the
@@ -47,38 +41,44 @@ that region without a UI freeze.
 
 ## Phase 2 — Groovebox core: sequencer and pads
 
-Sequencer/grid editing, voice-scoped locks, Pattern slots/files, Songs, Project
-save/load, Mixer, stereo/Mono switching, waveform playback heads and MIDI
-clock/SPP now have implementations. Their remaining work is physical validation,
-not rebuilding those features. Melodic notes and live recording belong to 2.5.
-
 1. Verify sample-offset timing, edit boundaries and prepared note/velocity
    resolution for the four-Track gate (HV-005).
-2. Validate persistence/reboot/failure recovery and card storage, Mixer,
-   stereo/Mono, waveform feedback and LFO controls at their existing checklist
-   entries. Selected save/load HIL cases pass; the full gates remain open.
+2. Close the [outstanding hardware checks](#outstanding-hardware-verification)
+   for persistence, recovery, audio controls and feedback.
 3. Complete panel integration and MIDI synchronization below.
 4. Complete the callback capacity and one-hour soak requirements below.
+
+Melodic notes and live recording follow in Phase 2.5.
 
 ### 2.C — Callback capacity checkpoint
 
 Use [callback-performance-log.md](callback-performance-log.md) for measured
-images, workloads, repeated captures and rejected experiments. Prior ten-minute
-captures do not close the one-hour soak or establish capacity for later features.
+images and workloads. Same-frame admission now avoids work for layers stolen
+before rendering. The 16-Track/four-layer pressure preset passes 605.86 seconds
+and ten Pattern cycles at 66.0025% peak (66.8390% including setup), with zero
+stream underruns. The earlier 74.5896% mixed-channel transition remains
+unresolved; a ten-minute rapid mix rotation peaked at 59.9650% with zero stream
+underruns and did not reproduce it. Repeat the complete
+mixed-channel one-hour soak on the final image and retain HV-019 as partial.
+
+**Continuation decision, 2026-09-20:** the user authorized proceeding after this
+measured capacity pass while retaining unresolved findings here. Continue the
+remaining sampler/sequencer work with per-change DWT checks; this exception does
+not raise the thresholds, close a phase gate, authorize more render channels or
+claim release readiness. Keep the backend-upgrade planning evidence available.
 
 - Remeasure every callback expansion using the current full workload: both
   oscillators, modulation, locks, live edits, streaming and file operations.
-- Run the full channel-budget one-hour zero-underrun soak, including stereo and
-  Mono mixes. Preserve the earlier eight-MIDI-voice playback acceptance and
-  panel-controlled filter/gain checks; both output/CV configurations must compile.
+- Repeat the full channel-budget one-hour soak after the admission change,
+  including stereo and Mono mixes. Complete physical MIDI and panel-controlled
+  filter/gain checks; both output/CV configurations must compile.
 - Keep default-disabled DSP comparisons separate from production evidence.
   A voice-count change or backend port needs its own measured decision.
 
 ### 2.P — Panel controls and MIDI I/O (physical integration)
 
-The keypad, temporary TLC5947 LED backend, MCP3208/RV112FF pot handling and
-MIDI input/output firmware exist. Wiring and physical acceptance remain open.
-Use [panel-controls.md](features/panel-controls.md) and the checklist:
+Complete wiring and physical acceptance using
+[panel-controls.md](features/panel-controls.md) and the checklist:
 
 - **HV-011:** TCA8418 wiring, matrix/key mapping, held-key recovery, shared
   touch behavior and latency.
@@ -89,8 +89,7 @@ Use [panel-controls.md](features/panel-controls.md) and the checklist:
 - **HV-014:** DIN wiring and latency, USB enumeration, clock jitter,
   Start/Continue/Stop and SPP synchronization with a DAW.
 - **HV-018:** 8-DSI-TOUCH-A display startup, touch coordinates, brightness,
-  wake and rendering under load; current startup failure is recorded in the
-  hardware-validation checklist.
+  wake and rendering under load.
 
 **Gate (2.P):** from the panel alone, jump to Instrument, change cutoff with a
 pot and hear it, latch Shift and fire a shifted softkey, then BACK out, with
@@ -101,39 +100,30 @@ panel; remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 
 ## Phase 2.5 — Sampler instrument layer
 
-Instrument/Kit editors, two-oscillator voices, envelopes/LFOs, held-note
-Apply/Revert and Mixer v1 are implemented. Continue from the
-[Track/Instrument/Bank model](features/track-and-patch-model.md):
+Continue from the [Track/Instrument/Bank model](features/track-and-patch-model.md),
+subject to the callback checkpoint:
 
-1. **Bank performance recall and editing follow-up.** The [Bank Manager and
-   staged selected-Track recall](features/bank-persistence.md) are host-tested
-   and compile-verified. New/Open/Save copy and explicit Store/Clear copy preserve
-   immutable source files. Sparse Bank HIL passed on 2026-09-18; full SD/recall
-   and timing acceptance remains HV-016. Explicit sample preload is implemented
-   with atomic Pool admission. Channel-routed MIDI Program Change recall also
-   has a sparse two-board pass; full timing/electrical MIDI validation remains
-   open. Slot-to-slot copy/move into new named Banks is implemented; full
-   media/timing validation remains HV-016. Decide whether a deferred unsaved Bank
-   working copy improves the current explicit named-copy workflow. Persist the
-   selected Bank path with Projects once its restore/admission policy is defined.
-2. **Polyphony policy, after measurement.** Implement saved Mono/Auto/1–8-note
-   caps and Own only / Own first / Any stealing with Track inheritance/overrides.
-   Kit-wide and per-pad refinements remain proposed. Define stable note-group
-   identity, transactional multi-layer/stereo admission, note-off/retrigger and
-   old-file defaults. Include persistence, Apply/Revert, UI and audible-steal/DWT
-   checks; this does not raise the global channel budget. See the
+1. **Polyphony policy.** Complete held-key/repeated-key
+   ownership, Mono fallback and note-off/retrigger behavior on the whole-note
+   runtime. Keep routed-MIDI admission/refusal observable: the combined
+   16-Track/four-layer screen stayed below 70% but refused 540 complete notes
+   at the bounded foreground queue. Do not equate console RX drops with musical
+   admission failures. Add saved Mono/Auto/1–8-note
+   caps and Own only / Own first / Any stealing with Track inheritance/overrides;
+   define old-file defaults. Include wire/storage support, Apply/Revert, UI and
+   audible-steal/DWT checks (HV-019). Kit-wide and per-pad refinements remain
+   proposed; the global channel budget does not increase. See the
    [allocation proposal](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
-3. **Melodic sequencing.** Resolve the [note-length decision](#note-lengths-and-one-shot-playback--decision-pending),
+2. **Melodic sequencing.** Resolve the [note-length decision](#note-lengths-and-one-shot-playback--decision-pending),
    then add chord/tie lanes, step/live recording and erase.
-4. **Remaining modulation.** Add MIDI CC/channel-pressure forwarding,
+3. **Remaining modulation.** Add MIDI CC/channel-pressure forwarding,
    additional destinations/UI and live lock recording. Analog/group lock
-   lifetimes need a separate ownership design; voice-scoped lock application
-   is already complete.
-5. **Sampling/recording v1 and arpeggiator.** Rebuild recording against the
+   lifetimes need a separate ownership design.
+4. **Sampling/recording v1 and arpeggiator.** Rebuild recording against the
    voice/streaming architecture with fixed allocations outside the callback.
    Add admission-controlled concurrent streamed voices; the current SD/ring
    path is singleton-only. Preserve resident playback during these operations.
-6. **Instrument browsing follow-up.** Add tag metadata/filtering.
+5. **Instrument browsing follow-up.** Add tag metadata/filtering.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build and
 save a 16-pad kit and a multisampled keyboard Instrument; load a Bank and recall
@@ -173,31 +163,31 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–018. Keep partial/deferred checks open;
-formatting remains deferred until the user tests it. Save/load HIL and selected
-bench passes do not replace physical or full-phase acceptance.
-
-Additional physical checks retained from the earlier roadmap:
+image identities and results for HV-001–023. Keep partial/deferred checks open
+until all acceptance criteria pass. Complete the following validation work:
 
 | Area | Remaining verification |
 |---|---|
+| Card and save recovery | Wider-bus write reliability, fallback streaming performance, write soaks, near-full media and interrupted operations (HV-001–003). |
+| Composition and mix | Project, Pattern and Song reboot/failure recovery, audio timing, Mixer/master, stereo/Mono, waveform tracking and LFO checks (HV-004, HV-006–010, HV-015). |
+| Banks | Full-Bank recall/preload, MIDI Program Change timing, media failure/recovery and remaining Project/Bank restoration and rollback cases (HV-016). |
+| Kits | Listening, reboot and failure recovery for complete kits and pad-addressed Patterns (HV-020). |
 | Touch/display | Independent multi-touch release, Shift plus softkeys, two simultaneous dials/pads, navigation while held, five contacts, corner coordinates and wake from blanking; rotation/PPA corruption and tearing. |
 | UI/input | Brightness, scrolling, MIDI filtering, encoder behavior, live Diagnostics and LVGL responsiveness during control bursts and sample loading. |
 | Boot/settings | Partition migration and settings persistence through reboot. |
 | Audio/storage | Correct 44.1/48 kHz pitch; UART traffic during streaming; SD read/write and hot-unmount soaks. |
 | Filters | Audible SVF response, ladder self-oscillation and high-resonance/drive behavior using `scripts/bench_filter_listen.py`. |
 | Sample retirement | Delayed/stopped callbacks and concurrent imports; timeout must preserve storage. Measure DWT headroom and soak after these transitions. |
-| Sample Edit | Waveform fetch, handles, loop seams, browser detail and stereo readability beyond existing HIL coverage. |
-| Load-to-Track/Pool | Hear Keys output and verify Pool-full/arena-full refusal. Paging, deduplication and replacement already have HIL coverage. |
+| Sample Edit | Resident-sample selection (HV-017), waveform fetch, handles, loop seams, browser detail and stereo readability. |
+| Load-to-Track/Pool | Hear Keys output and verify Pool-full/arena-full refusal. |
 | Region fades | Measure `Render()` with fades enabled before claiming a performance improvement. |
 
 ### Composition and performance workflows
 
-The [Project/voice model](features/project-menu-and-voice-model.md) owns the
-workflow design. Its implemented storage, stereo and Mixer work now has a single
-validation home: HV-001–004 and HV-006–010; timing/soak remains HV-005. Assignment
-and replacement must preserve selected-Track continuity and mix through held
-notes, sequencing and reconnects. Future Scenes are scheduled only in Phase 5.
+Validate assignment and replacement against the
+[Project/voice model](features/project-menu-and-voice-model.md): preserve
+selected-Track continuity and mix through held notes, sequencing and reconnects.
+Use HV-001–010 for storage, audio and composition checks; Scenes remain Phase 5.
 
 ## Rules for every phase
 
@@ -257,7 +247,7 @@ before implementing gates/ties. Decide sequence duration versus one-shot/gated
 Instrument/Zone playback, release tails, overlapping notes, chord lanes, tempo
 changes and transport-stop cleanup. Note-off scheduling belongs on the Daisy
 audio clock with bounded storage and stable note identity. Fixed-length one-shot
-regions used in benchmarks do not implement this behavior.
+regions used in benchmarks are not acceptance evidence for gates/ties.
 
 ### Performance, build, and transport
 
@@ -272,10 +262,22 @@ regions used in benchmarks do not implement this behavior.
   QSPI math helpers (`powf`, `tanf`, `arm_sin_f32`) before selective relocation.
   A persistent bootloader-SRAM alternative requires an image below 480 KiB,
   D1/D2/D3 headroom, matched streaming/voice soak and flash/boot/DWT evidence.
+- **Exponential LUT candidate:** first benchmark the existing table-based libm
+  `exp2f` against `powf(2, x)` for moving modulation and pitch locks. Consider a
+  shared one-octave `2^x` table only if that leaves material cost. Keep these
+  separate from code-placement trials. Use the existing CMSIS interpolation kernel,
+  explicit startup initialization, finite/range handling and exact unity;
+  measure numerical/pitch error and DWT cost before adoption. Sine LFOs, fades
+  and integer note ratios are already tabulated. Filter tuning above 12 kHz
+  and saturation tables need independent response/stability/listening checks.
 - **Event/link attribution:** distinguish trigger, lock and live-snapshot costs
   before moving preparation out of the callback. Investigate UART queue-full
   bursts and repeated polling; coalesce replaceable telemetry where justified.
   Rejected enqueue attempts are not automatically lost musical events.
+- **Browse request correlation:** the legacy directory reply has no request/path
+  identity. Add a versioned correlated read before supporting safe cancellation
+  of overlapping directory changes and automatic retry after arbitrary lost or
+  delayed replies. Serializing bench requests is not proof of that behavior.
 - **Backend upgrade planning:** retain the [RT1170 plan](rt1170-migration.md),
   including the proposed M4 link/storage service after an M7-only audio baseline.
   Resolve shared-memory/cache handoffs, SD-stall command latency and bus contention.
@@ -283,8 +285,6 @@ regions used in benchmarks do not implement this behavior.
 - **Platform maintenance:** pin ESP-IDF to a 5.5 tag and run SD/panel checks;
   treat IDF 6 as a separate spike. Reduce overlapping ESP32 ownership as related
   modules change.
-- **Build warnings:** bound the sample metadata page byte-count narrowing;
-  resolve undefined `FF_USE_LFN` checks and the loader's enum/int conditional.
 
 #### SPI-link revival requires hardware verification
 
@@ -329,14 +329,12 @@ HV-023 before claiming recovery acceptance.
 - [ ] Investigate font sizes and vertical layout on the 1280×800 panel.
   The display adds 80 pixels of height. Evaluate content space below the
   title/status bar, page tabs and soft-buttons on the real panel.
+- Resolve tear-free landscape scanout and verify backlight registers on hardware
+  (HV-018).
+- If ten-contact support is adopted, add a GT9271-capable read path; the current
+  GT911 driver rejects reports above five.
 
-The 8-DSI-TOUCH-A migration selects the JD9365 BSP profile, RGB565, PPA
-rotation and 1280×800 landscape geometry. It retains partial flushes and five
-touch pointers. Hardware acceptance remains open; compilation and host widget
-tests do not close the phase gate. Resolve tear-free landscape scanout and
-verify backlight registers on hardware before claiming double buffering.
-Ten-contact support requires a GT9271-capable read path because the current
-GT911 driver rejects reports above five.
+#### Other frontend maintenance
 
 - Reconcile Play's displayed octave and Pads/Keys range labels without changing
   MIDI note numbers.
@@ -355,18 +353,16 @@ GT911 driver rejects reports above five.
 - Reproduce non-frame-aligned WAV data artifacts with a minimal fixture; identify
   the parser/stream fault before changing offsets.
 - Add bounded directory paging when the 500-entry browse target is required;
-  current listings stop at 256.
-- Define reference-aware rename/delete/reorder behavior and protocol. Sample
-  unloading and resident metadata paging already exist.
+  extend the one-byte paging contract and bounded storage beyond 256 entries.
+- Define reference-aware rename/delete/reorder behavior and protocol.
 - **Wavetable source, after 2.5:** follow [oscillator-sources.md](features/oscillator-sources.md).
   Resolve import metadata, cycle/frame limits, interpolation/anti-aliasing,
   modulation, saved chunks, RAM admission and DWT budget before scheduling.
 - **Oscillator sync/FM, after 2.5:** decide master/slave direction, hard/soft
   sample sync, frequency/phase modulation, routing/depth/feedback, alias control,
   source compatibility, persistence and callback budget.
-- **Waveform extensions:** reverse playback and Track/Zone-specific cursors
-  follow future playback/context support; the current forward playback line is
-  implemented and awaits HV-010.
+- **Waveform extensions:** define playback/context support for reverse playback
+  and Track/Zone-specific cursors.
 
 ### Hardware, diagnostics, and logging
 
@@ -375,9 +371,9 @@ GT911 driver rejects reports above five.
   cost before changing its release/build-profile policy.
 - Evaluate a third filter topology only with a design and measured capacity:
   Korg35/diode-ladder candidates remain unscheduled. Share inactive topology
-  storage if additional implementations justify it. The earlier ladder selection
-  experiment is complete; the current ladder is ZDF.
-- Fix wrapping resident Sample IDs in Diagnostics and verify a populated Pool.
+  storage if additional implementations justify it.
+- Verify Diagnostics with a populated Pool and Sample IDs above 255; the wire
+  entry, backend copy and table formatter already retain the 16-bit ID.
   Audit active-voice/round-trip and MIDI/drop telemetry for remaining gaps before
   adding protocol fields. Recheck audition ACK routing so legitimate messages
   do not increment the Link tab's `unknown` count.

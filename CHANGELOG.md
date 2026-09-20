@@ -13,16 +13,13 @@ versioning and release process.
 
 ### Added
 
-- Repeatable isolated-peer restart checks with image identities and per-run
-  captures.
+- Repeatable isolated-peer restart checks and callback bench scenarios for
+  cycling all stereo/Mono mixes, layered notes and foreground MIDI trigger
+  bursts, with image identities and per-run captures.
 
 - Optional Daisy RTT foreground log mirror over SWD, with nonblocking loss
   counters and a byte-for-byte USB/RTT comparison script; normal builds keep
   USB CDC logging and require no RTT dependency.
-
-
-
-
 
 - Optional correlated callback-peak profiling reports note queue, live controls,
   sequencer preparation, voice initialization, modulation and rendering from
@@ -34,6 +31,9 @@ versioning and release process.
   choke groups cannot choke sibling layers, and matching chokes keep priority
   over unrelated held notes at capacity. Saved polyphony controls and MIDI
   held-key fallback remain pending.
+
+- Full 16-pad kit and pad-pattern hardware regression: alternating sample/choke
+  assignments, WXI recall onto another Track, and all-pad Pattern save/load.
 
 - Host-tested whole-note admission planner for the polyphony roadmap: bounded
   layered/stereo reservations, Track-instance ownership, local note caps and
@@ -537,7 +537,6 @@ versioning and release process.
   114.51% callback peak to 66.00% over ten minutes, preserving whole-note steals,
   choke ordering, sample offsets and random seeds. Full mixed-channel soak and
   physical acceptance remain open.
-
 - WAV read recovery retries the failed absolute read position, preserving trimmed
   region and loop boundaries instead of calculating a position from the full file.
   SD fault-injection validation remains pending.
@@ -552,9 +551,18 @@ versioning and release process.
   of resetting selection to the parent directory. Restart HIL follows logger
   files truncated in place.
 
+- Native-USB debug replies use one bounded driver enqueue instead of the
+  best-effort character writer, with failed enqueues exposed as `reply_dropped`.
+  Sequencer/sampler hardware tests wait for confirmed mixer and Instrument
+  readiness before issuing the next edit.
+
 - Sample and Instrument browsers now expose all 256 entries supported by the
   current listing protocol, instead of hiding saved kits after entry 50. Daisy
   retains the matching complete index cache for late-page audition lookups.
+
+- Kit hardware tests wait for paginated entries, sample-reference inspection
+  and confirmed save completion; parameter-lock tests and the stereo capacity
+  benchmark use the current Pattern Manager navigation.
 
 - Use the conservative SD bus defaults in `hardware_config.h` after the
   inserted card repeatedly failed format/folder writes with CRC errors in
@@ -683,9 +691,10 @@ versioning and release process.
 - ESP32 logs, console commands, HIL replies and screenshots use native USB
   Serial/JTAG instead of the 115,200-baud CH343 bridge. Flash/monitor targets
   pause and resume the managed logger to avoid competing for USB replies.
+
 - Cache per-voice LFO configuration and precompute integer-note pitch ratios
-  before audio starts, avoiding repeated trigger-time math while preserving the
-  existing tuning, retrigger, free-run, delay and fade behavior. Keep bounded
+  before audio starts, avoiding repeated trigger-time math while preserving
+  the existing tuning, retrigger, free-run, delay and fade behavior. Keep bounded
   group admission and filter tuning in ITCM; matched DWT results and remaining
   capacity checks are recorded in the callback performance log.
 

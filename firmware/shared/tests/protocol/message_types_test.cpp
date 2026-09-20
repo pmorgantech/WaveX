@@ -802,9 +802,9 @@ TEST_F(MessageTypeTest, SampleMemStatusMessage) {
         /*in_use_bytes=*/3145728,
         /*failed_allocs=*/1);
 
-    ASSERT_TRUE(original.AddEntry(SampleMemEntryMessage(1, 65536, 65536, 0, 0, 0, 48000, 2, 16)));
+    ASSERT_TRUE(original.AddEntry(SampleMemEntryMessage(256, 65536, 65536, 0, 0, 0, 48000, 2, 16)));
     ASSERT_TRUE(
-        original.AddEntry(SampleMemEntryMessage(2, 1048576, 524288, 0xFF, 3, 8, 44100, 1, 24)));
+        original.AddEntry(SampleMemEntryMessage(65535, 1048576, 524288, 0xFF, 3, 8, 44100, 1, 24)));
     EXPECT_EQ(original.sample_count, 2);
 
     size_t created = ProtocolHandler::CreatePacket(
@@ -821,6 +821,8 @@ TEST_F(MessageTypeTest, SampleMemStatusMessage) {
     EXPECT_TRUE(result);
     EXPECT_EQ(parsed.category, original.category);
     EXPECT_EQ(parsed.sample_count, original.sample_count);
+    EXPECT_EQ(parsed.entries[0].sample_id, 256);
+    EXPECT_EQ(parsed.entries[1].sample_id, 65535);
     EXPECT_EQ(parsed.small_total_bytes, original.small_total_bytes);
     EXPECT_EQ(parsed.small_free_bytes, original.small_free_bytes);
     EXPECT_EQ(parsed.large_total_bytes, original.large_total_bytes);

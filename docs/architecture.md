@@ -39,7 +39,7 @@ Dual-MCU split, each processor doing what it is best at:
 │                              │ 2 Mbaud  │                                  │
 │  • LVGL 9.5 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
 │    (1280×800 MIPI-DSI+GT9271) │◄────────►│  • Sample streaming from SD      │
-│  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC 4-bit + FatFs)         │
+│  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC + FatFs)               │
 │    button matrix, TLC5947 LEDs│         │  • 64 MB SDRAM sample RAM        │
 │  • MIDI (UART DIN + USB)     │ (SPI link│  • CV outputs (VCF/VCA/CV-Gate)  │
 │  • Sample browser / metadata │ wired but│  • PCM1690 8-ch TDM DAC (planned)│
@@ -79,7 +79,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
 | Multi-out DAC | PCM1690 8-ch | SAI2 TDM-8 + I2C control | planned (Phase: analog voice board) |
-| SD card | microSD, SDMMC 4-bit via libDaisy `SdmmcHandler` + FatFs | SDMMC | working (SPI-SD legacy code still in tree) |
+| SD card | microSD, SDMMC via libDaisy `SdmmcHandler` + FatFs | SDMMC | working (SPI-SD legacy code still in tree) |
 | CV DACs | **open decision — see §3.3** | I2C or SPI | prototype (MCP4728 I2C in code) |
 | Inter-MCU link (live) | UART @ 2 Mbaud, framing in `firmware/shared/uart_protocol/` | UART1 (ESP) ↔ UART4 (Daisy) | working — carries **all** inter-MCU traffic |
 | Inter-MCU link (SPI) | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP → Daisy (`WAVEX_ESP_ATTN_OUT` / `WAVEX_DAISY_ATTN_IN`) | SPI1 (Daisy) / SPI3_HOST slave (ESP) | wired but **compiled out** (`WAVEX_SPI_LINK_ENABLED=0` in `link_config.h`); revival requires bench re-validation |
@@ -182,6 +182,12 @@ interrupt remains live, but link and foreground CV servicing can pause. The
 backend sends an accepted state before starting; the UI polls for the retained
 result and never retries erasure automatically. A timeout/reboot must not be
 interpreted as success. Mount failure never causes automatic formatting.
+
+The SD bus defaults live in `firmware/shared/config/hardware_config.h`.
+The 2026-09-18 format bench required conservative settings after CRC/timeout
+failures despite successful mount/read probes. Format/folder creation and
+Pattern save/reboot/reload passed with the fallback; sustained streaming and
+write-soak acceptance remain open in [HV-001](hardware-validation.md#hv-001--sd-card-formatting).
 
 Formatting creates the content roots in `storage/card_layout.hpp`, matching
 [the card layout](features/track-and-patch-model.md#33-persistence-wxi-over-wxcf) plus the
@@ -308,7 +314,24 @@ filter/envelope/modulation path. Optional VA, noise, and wavetable sources
 remain deferred; the wavetable's slot, type value and mod destination are
 reserved, and none is part of the current roadmap phase.
 
-**Implementation status (as-built sampler path)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue, and the UART message dispatcher feeds that path — `HandleNoteMessage` calls `AudioEngine::OnNoteOn()` (`daisy_inter_mcu_message_handlers.cpp`), fixed 2026-07-05 (`code_review_20260705.md` C1) — so it is reachable from hardware MIDI input, pending the hardware verification tracked in `roadmap.md` § Outstanding hardware verification. Not yet implemented: concurrent streamed voices (the streaming WAV-ring-buffer path remains singleton and is not voice-manager-owned), VA oscillator/noise/LFO/mod matrix, or wavetable sources.
+**Implementation status (as-built sampler path):** the RAM sampler admits
+whole musical notes, including up to four layers with paired sample oscillators,
+against the configured eight-channel budget. Native stereo consumes two channels;
+explicit Mono consumes one. Stable group identities scope stealing and release.
+Same-frame sequencer events plan from immutable zone metadata first, then copy
+parameters/apply locks/initialize only layers that survive admission. Different
+sample offsets remain separate batches. The foreground note queue publishes
+all layers together or refuses the note. Saved allocation policy and held-key
+fallback remain open in the roadmap.
+
+Each renderer supports region/loop markers, fades, native-rate compensation,
+pitch, SVF/ladder filtering, three envelopes, two LFOs and the modulation matrix.
+The callback receives prepared state through bounded handoffs and performs no
+storage or peripheral I/O. Concurrent streamed voices, VA/noise and wavetable
+sources remain unimplemented; the SD audition stream is separate and singleton.
+Measured callback limits and remaining hardware checks are recorded in
+[callback-performance-log.md](callback-performance-log.md) and
+[hardware-validation.md](hardware-validation.md).
 
 The analog output section is deliberately **two-stage**, selected by build flags (see §5.4):
 
@@ -342,7 +365,7 @@ registry of resident samples, whoever loaded them. The **Performance** is the
 current live set of Track/Instrument bindings, routing, mixer state, and shared
 effects; v1 stores one such set directly in the Project rather than introducing
 another file type. Patterns own time and parameter locks. The as-built sequencer addresses each
-row to the matching Track at MIDI note 60 through a foreground-prepared
+row to the matching Track at the step's MIDI note through a foreground-prepared
 immutable voice map; see [sequencer.md](features/sequencer.md) for the current
 note and velocity-resolution limits. Changing Pattern
 therefore does not silently replace the Performance's sound set. Scenes may
@@ -483,16 +506,18 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 ## 10. Known Design Gaps (summary — details and sequencing in `roadmap.md`)
 
 1. **Sequencer integration**: the scheduler drives sample-offset triggers
-   through prepared immutable zones. The touch grid edits each step's note
+   through prepared immutable zones and whole-note layer admission shared with
+   live sampler triggers. The touch grid edits each step's note
    and velocity; clock sync/SPP, parameter locks and persistence are implemented.
    The full hardware Phase 2 gate remains open.
 2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
    while streamed playback remains a singleton path outside `VoiceManager`.
 3. **Sampler Instrument workflow**: the Zone model, SFZ import, the shared
    selected Track and the Sample Pool (one indexed, refcounted registry;
-   imports on any number of Tracks share samples by path) exist, but pad
-   mapping, Instrument save/load, the Bank, the two-oscillator voice, and the
-   editor UI remain open Phase 2.5 work.
+   imports on any number of Tracks share samples by path), pad mapping, WXI
+   save/load, Banks, two oscillators and Instrument editors exist. Saved
+   polyphony policies/controls, held-key fallback, recording and melodic
+   sequencing remain open Phase 2.5 work.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the
    bounded render-job scheduler and destructive editing/mangling pipeline are
    unimplemented.

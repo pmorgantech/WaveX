@@ -46,6 +46,18 @@ def _mono(daisy, track, enabled):
     assert state["completed"] == str(request) and state["error"] == "0", state
 
 
+def _project_mix(esp, command, value):
+    """Serialize edits against backend-confirmed Project mixer state.
+
+    PAGE acknowledges submission; mixready becomes true only after readback.
+    Never replay a mutation after a missing acknowledgement.
+    """
+    field = {"LEVEL": "mixgain", "PAN": "mixpan", "MUTE": "mixmute"}[command]
+    esp.wait_state(page="Project", mixready=1)
+    esp.page(command, value)
+    return esp.wait_state(page="Project", mixready=1, **{field: value})
+
+
 def _release(daisy):
     for track in range(16):
         daisy.note(track, 60, on=False)
@@ -202,13 +214,14 @@ def test_mono_toggle_preserves_held_stereo_cost_until_next_note(
     esp32.track(0)
     esp32.open_menu("Instrument")
     esp32.page("TAB", "Filter")
+    esp32.wait_state(tab="Filter", editready=1, editpending=0)
     for command, field, value in (
         ("CUTOFF", "instcutoff", 43690),
         ("RES", "instres", 44564),
         ("DRIVE", "filterdrive", 1000),
     ):
         esp32.page(command, value)
-        esp32.wait_state(**{field: value, "editpending": 0})
+        esp32.wait_state(**{field: value, "editpending": 0, "editready": 1})
     esp32.home()
     for track in range(4):
         daisy.note(track, 60)
@@ -251,28 +264,28 @@ def test_project_pan_gain_mute_and_mono_revert_reach_held_audio(
     esp.wait_state(mixready=1, track=0)
     original = esp.state()
     try:
-        esp.page("LEVEL", 6000)
-        esp.page("PAN", 32768)
-        esp.page("MUTE", 0)
+        _project_mix(esp, "LEVEL", 6000)
+        _project_mix(esp, "PAN", 32768)
+        _project_mix(esp, "MUTE", 0)
         esp.wait_state(mixgain=6000, mixpan=32768, mixmute=0)
         assert min(_peak(daisy)) > 100
-        esp.page("PAN", 0)
+        _project_mix(esp, "PAN", 0)
         esp.wait_state(mixpan=0)
         left, right = _peak(daisy)
         assert left > 100 and right == 0
-        esp.page("PAN", 65535)
+        _project_mix(esp, "PAN", 65535)
         esp.wait_state(mixpan=65535)
         left, right = _peak(daisy)
         assert left == 0 and right > 100
-        esp.page("PAN", 32768)
-        esp.page("LEVEL", 0)
+        _project_mix(esp, "PAN", 32768)
+        _project_mix(esp, "LEVEL", 0)
         esp.wait_state(mixgain=0)
         assert _peak(daisy) == [0, 0]
-        esp.page("LEVEL", 6000)
-        esp.page("MUTE", 1)
+        _project_mix(esp, "LEVEL", 6000)
+        _project_mix(esp, "MUTE", 1)
         esp.wait_state(mixgain=6000, mixmute=1)
         assert _peak(daisy) == [0, 0]
-        esp.page("MUTE", 0)
+        _project_mix(esp, "MUTE", 0)
         esp.wait_state(mixmute=0)
         assert min(_peak(daisy)) > 100
         assert daisy.state()["voices"] == "1"
@@ -292,9 +305,9 @@ def test_project_pan_gain_mute_and_mono_revert_reach_held_audio(
         esp.wait_state(oscmono=0, editdirty=0, editpending=0)
     finally:
         esp.open_menu("Project")
-        esp.page("LEVEL", int(original["mixgain"]))
-        esp.page("PAN", int(original["mixpan"]))
-        esp.page("MUTE", int(original["mixmute"]))
+        _project_mix(esp, "LEVEL", int(original["mixgain"]))
+        _project_mix(esp, "PAN", int(original["mixpan"]))
+        _project_mix(esp, "MUTE", int(original["mixmute"]))
         esp.home()
 
 
@@ -379,7 +392,7 @@ def test_solo_preserves_manual_mute_edits_while_soloed(
         daisy.wait_state(voices=2)
         esp.track(0)
         esp.open_menu("Project")
-        esp.page("MUTE", 1)
+        _project_mix(esp, "MUTE", 1)
         esp.wait_state(mixmute=1)
         esp.open_menu("Sequencer")
         esp.wait_state(seqready=1)
@@ -389,7 +402,7 @@ def test_solo_preserves_manual_mute_edits_while_soloed(
         esp.open_menu("Project")
         esp.page("SELECT", 2)
         esp.wait_state(track=1, mixready=1)
-        esp.page("MUTE", 1)
+        _project_mix(esp, "MUTE", 1)
         esp.wait_state(mixmute=1)
         assert _peak(daisy) == [0, 0]
         esp.open_menu("Sequencer")
@@ -400,7 +413,7 @@ def test_solo_preserves_manual_mute_edits_while_soloed(
         for track in (1, 2):
             esp.page("SELECT", track)
             esp.wait_state(track=track - 1, mixready=1, mixmute=1)
-            esp.page("MUTE", 0)
+            _project_mix(esp, "MUTE", 0)
             esp.wait_state(mixmute=0)
         assert min(_peak(daisy)) > 100
         assert daisy.state()["voices"] == "2"

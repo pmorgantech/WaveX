@@ -18,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests/hil"))
+from test_pattern_files import _back as pattern_back  # noqa: E402
+from test_pattern_files import _files as pattern_files  # noqa: E402
 from wavex_target import Daisy, Esp32  # noqa: E402
 
 REQUESTS = itertools.count(int(time.time() * 1000) & 0x7FFFFFFF)
@@ -31,6 +33,39 @@ def send(daisy, kind, fmt, *values):
 def accepted(state, request):
     assert state["completed"] == str(request), state
     assert state["error"] == "0", state
+
+
+def add_layers(daisy, track, sample_id, count):
+    for zone in range(1, count):
+        state = daisy.cmd("OSC", track, 0)
+        request = next(REQUESTS)
+        send(
+            daisy,
+            0x68,
+            "<IIBBBBHHBBBBB",
+            request,
+            int(state["revision"]),
+            track,
+            zone,
+            2,
+            0,
+            0,
+            sample_id,
+            0,
+            127,
+            1,
+            127,
+            60,
+        )
+        deadline = time.monotonic() + 10
+        while True:
+            state = daisy.cmd("OSC", track, 0)
+            if state["completed"] == str(request) and state["busy"] == "0":
+                accepted(state, request)
+                assert state["zones"] == str(zone + 1), state
+                break
+            assert time.monotonic() < deadline, state
+            time.sleep(0.05)
 
 
 def osc(daisy, track, index, mono, op=1):
@@ -181,6 +216,29 @@ def main():
         required=True,
     )
     parser.add_argument("--seconds", type=float, default=605)
+    parser.add_argument("--layers", type=int, choices=(1, 2, 4), default=1)
+    parser.add_argument(
+        "--midi-bursts",
+        action="store_true",
+        help="Also inject a simultaneous MIDI-channel hit every control pass",
+    )
+    parser.add_argument(
+        "--burst-tracks",
+        type=int,
+        choices=range(1, 17),
+        help="Simultaneous Tracks, including over-capacity steals",
+    )
+    parser.add_argument(
+        "--cycle-mixes",
+        action="store_true",
+        help="Cycle all five mixes every 610s, starting with eight Mono",
+    )
+    parser.add_argument(
+        "--mix-seconds",
+        type=float,
+        default=610,
+        help="Mix interval; short diagnostic runs cannot pass the timing gate",
+    )
     parser.add_argument(
         "--topology",
         choices=("svf", "ladder"),
@@ -194,10 +252,22 @@ def main():
     args = parser.parse_args()
     if args.seconds <= 0:
         parser.error("--seconds must be positive")
+    if args.mix_seconds <= 0:
+        parser.error("--mix-seconds must be positive")
+    if args.cycle_mixes and args.stereo != 0:
+        parser.error("--cycle-mixes requires --stereo 0")
+    has_bursts = args.layers > 1 or args.burst_tracks or args.midi_bursts
+    if has_bursts and args.cycle_mixes:
+        parser.error("layer/trigger bursts run separately from --cycle-mixes")
+    if (args.layers > 1 or args.burst_tracks) and args.stereo not in (0, 4):
+        parser.error("layered bursts require homogeneous --stereo 0 or 4")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     stem = ROOT / "logs" / f"stereo-{args.stereo}-{args.topology}-{stamp}"
     mono = 8 - 2 * args.stereo
     voices = mono + args.stereo
+    active_tracks = args.burst_tracks or voices // args.layers
+    if active_tracks * args.layers < voices:
+        parser.error("burst must fill the channel budget")
     d, e = Daisy(), Esp32()
     offset = None
     data = {
@@ -207,12 +277,18 @@ def main():
         "mono": mono,
         "voices": voices,
         "channels": 8,
+        "layers": args.layers,
+        "active_tracks": active_tracks,
+        "midi_bursts": 0,
+        "mix_interval_seconds": args.mix_seconds if args.cycle_mixes else None,
         "topology": args.topology,
         "seconds_requested": args.seconds,
         "sample": args.sample,
         "states": [],
         "file_cycles": [],
+        "mixes": [],
         "scenario": (
+            f"{active_tracks} active Tracks, {args.layers} layers per note; "
             "two oscillators per voice from the same stereo PCM, "
             "Osc2 +17 cents; full-drive 24 dB filter; three envelopes; "
             "two 20 Hz sine LFOs; eight routes per Instrument; "
@@ -277,6 +353,12 @@ def main():
         e.track(0)
         e.open_menu("Sample")
         e.page("TAB", "Browse")
+        # The bench card's remembered directory may be paginated after a
+        # recovery test. Finish that automatic listing before navigating.
+        initial = e.wait_state(tab="Browse")
+        fixture_counts = {"/": 10, "/Drums/Kicks": 51, "/Drums/Loops": 28}
+        if initial["dir"] in fixture_counts:
+            e.wait_state(entries=fixture_counts[initial["dir"]], timeout=15)
         e.page("DIR", str(Path(args.sample).parent))
         e.wait_state(entries=lambda n: int(n) > 1)
         e.page("SEL", Path(args.sample).name)
@@ -306,25 +388,34 @@ def main():
             0,
         )
         data["instruments"] = []
-        for track in range(voices):
+        if args.midi_bursts:
+            for track in range(16):
+                d.set_midi_in(track, 1 if track < active_tracks else 255)
+        for track in range(active_tracks):
             d.bind_track(track, sid)
+            add_layers(d, track, sid, args.layers)
+            force_mono = (
+                args.stereo == 0
+                if args.layers > 1 or args.burst_tracks
+                else track >= args.stereo
+            )
             data["instruments"].append(
                 configure(
                     d,
                     track,
-                    track >= args.stereo,
+                    force_mono,
                     int(args.topology == "ladder"),
                 )
             )
         pattern_op(5, value16=16)
         pattern_op(7, value8=60)
         for track in range(16):
-            pattern_op(4, track, value8=int(track < voices))
+            pattern_op(4, track, value8=int(track < active_tracks))
             for step in range(16):
-                enabled = int(track < voices and step % 2 == 0)
+                enabled = int(track < active_tracks and step % 2 == 0)
                 pattern_op(0, track, step, enabled, 100)
                 pattern_op(11, track, step, 60)
-                if track < voices and step % 2 == 0:
+                if track < active_tracks and step % 2 == 0:
                     for parameter, value in (
                         (2, 50000),
                         (3, 45000),
@@ -361,6 +452,16 @@ def main():
             time.gmtime(),
         )
         tick, next_file, next_report = 0, 60.0, 0.0
+        next_mix = args.mix_seconds
+        stereo = args.stereo
+        data["mixes"].append(
+            {
+                "elapsed": 0.0,
+                "stereo": stereo,
+                "voices": voices,
+                "log_offset": 0,
+            },
+        )
         print(
             json.dumps(
                 {"started": str(stem), "voices": voices, "channels": 8},
@@ -368,17 +469,44 @@ def main():
             flush=True,
         )
         while time.monotonic() - start < args.seconds:
+            elapsed = time.monotonic() - start
+            if args.cycle_mixes and elapsed >= next_mix:
+                stereo = (stereo + 1) % 5
+                voices = 8 - stereo
+                active_tracks = voices
+                # Keep transport and streaming running. All eight Instruments
+                # were prepared at startup; edits use the normal live path.
+                for track in range(8):
+                    pattern_op(4, track, value8=int(track < voices))
+                    if track >= voices:
+                        d.note(track, 60, on=False)
+                    for index in (0, 1):
+                        osc(d, track, index, track >= stereo)
+                d.wait_state(voices=voices, streaming=1, timeout=8)
+                data["mixes"].append(
+                    {
+                        "elapsed": time.monotonic() - start,
+                        "stereo": stereo,
+                        "voices": voices,
+                        "log_offset": Path(d.logfile).stat().st_size - offset,
+                    }
+                )
+                print(json.dumps({"mix": data["mixes"][-1]}), flush=True)
+                next_mix += args.mix_seconds
+            if args.midi_bursts:
+                # This is the real foreground MIDI fan-out/queue path, injected
+                # through the console; it does not validate physical MIDI I/O.
+                d.midi_note(1, 60, 100)
+                data["midi_bursts"] += 1
             filter_edit(
                 d,
-                tick % voices,
+                tick % active_tracks,
                 int(args.topology == "ladder"),
                 bool(tick % 2),
             )
             elapsed = time.monotonic() - start
             if elapsed >= next_file:
-                e.key("SHIFT")
-                e.softkey("Files")
-                e.wait_state(fileready=1)
+                pattern_files(e)
                 # Pattern names have 23 usable characters. Keep date and time.
                 compact_stamp = stamp[2:].replace("-", "")
                 name = f"SC {compact_stamp} {int(next_file)}"
@@ -403,7 +531,7 @@ def main():
                 )
                 send(d, 0x4B, "<H", sid)
                 transport(True)
-                e.softkey("Back")
+                pattern_back(e)
                 e.wait_state(seqready=1, seqplaying=1)
                 d.wait_state(voices=voices, streaming=1)
                 data["file_cycles"].append(
@@ -416,7 +544,9 @@ def main():
             assert state["underruns"] == baseline["underruns"], state
             assert state["dropped"] == "0", state
             if elapsed >= next_report:
-                data["states"].append({"elapsed": elapsed, **state})
+                data["states"].append(
+                    {"elapsed": elapsed, "stereo": stereo, **state},
+                )
                 persist()
                 print(json.dumps(data["states"][-1]), flush=True)
                 next_report += 15
@@ -435,6 +565,8 @@ def main():
             send(d, 0x33, "<I", 0)
             for track in range(16):
                 d.note(track, 60, on=False)
+            if args.midi_bursts:
+                d.reset_routing()
             e.home()
         finally:
             d.close()

@@ -354,7 +354,9 @@ selected-Track recall, atomic sample preload with explicit residency pins and
 channel-routed MIDI Program Change recall.
 The operation names and progress sketch below remain
 **target design**; the as-built wire contract is in
-[the protocol reference](inter-mcu-protocol.md). Project Bank-path persistence and save-with-samples remain future work.
+[the protocol reference](inter-mcu-protocol.md). Projects persist and restore the
+selected Bank index; sample preload remains explicit. V1 retains named-copy
+editing rather than an unsaved Bank copy. Save-with-samples remains future work.
 
 Every machine surveyed (Digitakt's 128-Sound pool, Octatrack's 128 Flex slots, E-mu's bank image, EP-133's numbered sounds, MIDI itself) has a numbered table of ready sounds. WaveX's is the **Bank**:
 
