@@ -44,6 +44,8 @@ struct uart_stats_t {
     uint32_t crc_errors = 0;
     uint32_t frame_sync_errors = 0;
     uint32_t queue_overflows = 0;
+    uint32_t tx_queue_full = 0;
+    uint32_t rx_overflows = 0;
     uint32_t tx_errors = 0;
     uint32_t seq_drops = 0;    // duplicate/out-of-order frames dropped by SequenceTracker
     uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
@@ -113,6 +115,7 @@ void append_rx_data_isr(const uint8_t* data, size_t len) {
         data += (len - RX_PENDING_CAPACITY);
         len = RX_PENDING_CAPACITY;
         s_stats.queue_overflows++;
+        s_stats.rx_overflows++;
     }
 
     if (s_rx_pending_len + len > RX_PENDING_CAPACITY) {
@@ -121,6 +124,7 @@ void append_rx_data_isr(const uint8_t* data, size_t len) {
         // multi-kilobyte memmove inside the UART DMA interrupt.
         s_rx_pending_len = 0;
         s_stats.frame_sync_errors++;
+        s_stats.rx_overflows++;
     }
 
     // Copy from DMA buffer into our pending buffer
@@ -138,6 +142,7 @@ void pull_pending_into_frame_buffer() {
     WaveX::UartProtocol::ScanStats append_stats{};
     if (s_scanner.Append(s_rx_pending, s_rx_pending_len, append_stats) > 0) {
         s_stats.queue_overflows++;
+        s_stats.rx_overflows++;
     }
     s_rx_pending_len = 0;
 }
@@ -469,6 +474,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
 
     if (s_tx_count >= static_cast<int>(MSG_QUEUE_SIZE)) {
         s_stats.queue_overflows++;
+        s_stats.tx_queue_full++;
         // Once per burst, not once per attempt: callers retry every
         // main-loop pass (a directory listing, a binding refresh), and a
         // line per attempt flooded the log ring badly enough to drop the
@@ -714,7 +720,7 @@ void UartLinkLogStats() {
     }
     WaveX::Log::PrintLine(
         "DAISY: UART HEALTH sent=%lu received=%lu crc=%lu sync=%lu overflow=%lu "
-        "txerr=%lu seqdrop=%lu resync=%lu",
+        "txerr=%lu seqdrop=%lu resync=%lu txfull=%lu rxoverflow=%lu",
         static_cast<unsigned long>(health.packets_sent),
         static_cast<unsigned long>(health.packets_received),
         static_cast<unsigned long>(health.crc_errors),
@@ -722,7 +728,9 @@ void UartLinkLogStats() {
         static_cast<unsigned long>(health.queue_overflows),
         static_cast<unsigned long>(health.tx_errors),
         static_cast<unsigned long>(health.seq_drops),
-        static_cast<unsigned long>(health.seq_resyncs));
+        static_cast<unsigned long>(health.seq_resyncs),
+        static_cast<unsigned long>(health.tx_queue_full),
+        static_cast<unsigned long>(health.rx_overflows));
 #endif
     UART_LOGI("daisy_uart",
               "UART stats: sent=%u received=%u crc=%u sync=%u overflow=%u txerr=%u seqdrop=%u "

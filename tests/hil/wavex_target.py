@@ -58,6 +58,10 @@ class LogTail:
             self.fh.close()
             self.fh = open(self.path, "rb")
             self.ino = st.st_ino
+        elif st.st_size < self.fh.tell():
+            # make esp32-reset restarts loggers with the same file truncated
+            # in place. Do not wait at its previous session's byte offset.
+            self.fh.seek(0)
 
     def lines(self, timeout):
         """Yields complete lines (bytes, stripped) for `timeout` seconds."""
@@ -236,6 +240,20 @@ class Esp32(Target):
 
     def page(self, *args):
         return self.cmd("PAGE", *args)
+
+    def select_file(self, name, timeout=10.0):
+        """Select an entry as directory pages arrive; never resend Load."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return self.page("SEL", name)
+            except TargetError as error:
+                if (
+                    not str(error).endswith("ERR noentry")
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+            time.sleep(0.1)
 
     def softkeys(self, state=None):
         """{label: (index, enabled, (x, y))} for the row STATE reports."""

@@ -21,6 +21,25 @@ def test_esp32_state_has_the_navigator_basics(at_home):
     assert "dropped" in st
 
 
+@pytest.mark.both
+def test_long_ui_replies_and_short_acks_remain_complete(esp32, daisy):
+    # Instrument STATE is much larger than PING. Alternate them through the
+    # real console while the UI polls the backend; never retry lost replies.
+    esp32.open_menu("Instrument")
+    try:
+        before = esp32.state()
+        assert "reply_dropped" in before
+        for _ in range(400):
+            assert esp32.cmd("PING") == {}
+            state = esp32.state()
+            assert state["page"] == "Instrument"
+            assert state["reply_dropped"] == before["reply_dropped"]
+            assert "oscmono" in state  # Tail of the long state response.
+        assert daisy.probe()
+    finally:
+        esp32.home()
+
+
 @pytest.mark.esp32
 def test_esp32_bad_arguments_are_errors_not_silence(esp32):
     with pytest.raises(TargetError, match="badkey"):

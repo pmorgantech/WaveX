@@ -641,6 +641,8 @@ struct FileEntryWire {
 // filter byte is optional; legacy requests list all supported audio files.
 // This directory limit matches the device's browser path/cache storage.
 static constexpr size_t BROWSE_DIRECTORY_PATH_MAX = 96;
+// Current bounded listing, including the parent entry; every index fits on wire.
+static constexpr size_t BROWSE_DIRECTORY_ENTRY_LIMIT = 256;
 enum class BrowseFilter : uint8_t { All = 0, Samples = 1, Instruments = 2 };
 inline bool BrowseFilterValid(BrowseFilter filter) {
     return static_cast<uint8_t>(filter) <= static_cast<uint8_t>(BrowseFilter::Instruments);

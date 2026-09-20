@@ -6,6 +6,7 @@ Needs a card with the WAVs `--hil-sample` / `--hil-sample2` point at
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -72,6 +73,48 @@ def _load_and_wait(esp, timeout=25.0):
             "loaded_onto_Track" in s or "Load_failed" in s or "Error" in s
         ),
     )
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_later_browse_pages_preserve_an_early_sample_selection(esp32, daisy):
+    esp = esp32
+    track = _free_track(daisy)
+    esp.track(track)
+    esp.open_menu("Sample")
+    esp.page("TAB", "Browse")
+    initial = esp.wait_state(tab="Browse")
+    counts = {"/": 10, "/Drums/Kicks": 51, "/Drums/Loops": 28}
+    if initial["dir"] not in counts:
+        pytest.skip("remembered directory is outside the bench fixtures")
+    esp.wait_state(entries=counts[initial["dir"]], timeout=10)
+    esp.page("DIR", "/")
+    esp.wait_state(dir="/", entries=10)
+    # This regression uses the bench's 51-entry directory. The test must
+    # actually select before the last page, otherwise it proves nothing.
+    log_offset = Path(esp.logfile).stat().st_size
+    esp.page("DIR", "/Drums/Kicks")
+    first = esp.wait_state(entries=lambda n: int(n) >= 20, timeout=10)
+    if int(first["entries"]) >= 51:
+        pytest.skip("all pages arrived before the early-selection window")
+    esp.page("SEL", "bassdr01.wav")
+    esp.wait_state(entries=51, sel="bassdr01.wav", timeout=10)
+    # STATE polling can miss the early-selection window. The UI's ordered
+    # event log establishes that selection preceded the final page instead.
+    with open(esp.logfile, "rb") as capture:
+        capture.seek(log_offset)
+        events = capture.read().decode(errors="replace")
+    selected = events.find("File selected by index 1: bassdr01.wav")
+    completed = events.find("Pagination complete: loaded 51 entries")
+    if selected < 0 or completed < 0 or selected >= completed:
+        pytest.skip("selection before the final page was not captured")
+    # One more UI pass catches a deferred metadata update restoring index 0.
+    assert esp.state()["sel"] == "bassdr01.wav"
+    loaded = _load_and_wait(esp)
+    assert loaded["status"].startswith(
+        f"bassdr01.wav_loaded_onto_Track_{track + 1}"
+    ), loaded
+    assert daisy.tracks()[track] == f"sample:{loaded['lastid']}"
 
 
 @pytest.mark.both

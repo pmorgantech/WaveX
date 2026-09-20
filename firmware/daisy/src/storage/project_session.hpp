@@ -2,6 +2,7 @@
 #include "audio/mixer_control_handoff.hpp"
 #include "audio/sample_pool_stage.hpp"
 #include "audio/sfz_loader.hpp"
+#include "bank_session.hpp"
 #include "project_file_job.hpp"
 #include "project_patterns.hpp"
 #include "project_songs.hpp"
@@ -20,6 +21,7 @@ class ProjectSession {
     };
     ProjectSession(SampleMemMgr&,
                    AudioEngine::SamplePool&,
+                   BankSession&,
                    Sequencer::PatternExchange&,
                    AudioEngine::MixerControlHandoff&,
                    uint8_t* io,
@@ -62,6 +64,7 @@ class ProjectSession {
     };
     struct Candidate {
         BankFile::Index bank;
+        char bank_name[24]{};
         AudioEngine::Tracks tracks;
         AudioEngine::SamplePool::Record records[AudioEngine::SamplePool::kCapacity];
         AudioEngine::SamplePool pool{records};
@@ -79,6 +82,7 @@ class ProjectSession {
     uint8_t InstrumentError(uint8_t error) const;
     SampleMemMgr& memory_;
     AudioEngine::SamplePool& pool_;
+    BankSession& bank_;
     Sequencer::PatternExchange& exchange_;
     AudioEngine::MixerControlHandoff& mixer_;
     uint8_t* io_;

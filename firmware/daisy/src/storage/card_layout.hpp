@@ -10,11 +10,20 @@ inline constexpr const char* kCardDirectories[] = {"0:/wavex",
                                                    "0:/wavex/projects",
                                                    "0:/wavex/recordings",
                                                    "0:/wavex/patterns"};
-inline bool CreateCardDirectories() {
+struct CardDirectoryFailure {
+    const char* path = nullptr;  // Points into kCardDirectories; never owns storage.
+    FRESULT result = FR_OK;
+};
+inline bool CreateCardDirectories(CardDirectoryFailure* failure = nullptr) {
+    if (failure)
+        *failure = {};
     for (const char* path: kCardDirectories) {
         const auto result = f_mkdir(path);
-        if (result != FR_OK && result != FR_EXIST)
+        if (result != FR_OK && result != FR_EXIST) {
+            if (failure)
+                *failure = {path, result};
             return false;
+        }
     }
     return true;
 }

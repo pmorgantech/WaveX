@@ -282,19 +282,34 @@ uint32_t MediaGeneration() {
 }
 
 bool FormatCard() {
-    if (!CanFormat())
+    if (!CanFormat()) {
+        WaveX::Log::PrintLine("SD format: card not ready; no format attempted");
         return false;
+    }
     // AXI SRAM, full cache lines, never the DTCM stack. SD_write maintains
     // cache coherence before its IDMA transfer.
     alignas(32) static BYTE work[4096];
     s_mounted = false;
     ++s_media_generation;
-    if (f_mount(nullptr, "0:", 0) != FR_OK)
+    const auto unmounted = f_mount(nullptr, "0:", 0);
+    if (unmounted != FR_OK) {
+        WaveX::Log::PrintLine("SD format: unmount failed (FatFs=%d)", (int)unmounted);
         return false;
+    }
     // libDaisy vendors FatFs R0.12c's five-argument API. Create a partition
     // and FAT32 for normal SD media (FAT12/16 permitted for small cards).
+    WaveX::Log::PrintLine("SD format: starting at %s", CurrentSpeedName());
+    const uint32_t started = System::GetNow();
     const auto formatted = f_mkfs("0:", FM_FAT | FM_FAT32, 0, work, sizeof(work));
+    // Capture before remounting: subsequent HAL I/O can overwrite the cause.
+    WaveX::Log::PrintLine("SD format: mkfs FatFs=%d hal_err=0x%08lX elapsed=%lu ms",
+                          (int)formatted,
+                          (unsigned long)HAL_SD_GetError(&hsd1),
+                          (unsigned long)(System::GetNow() - started));
     const auto mounted = f_mount(&s_sd_fs, "0:", 1);
+    WaveX::Log::PrintLine("SD format: remount FatFs=%d hal_err=0x%08lX",
+                          (int)mounted,
+                          (unsigned long)HAL_SD_GetError(&hsd1));
     s_mounted = mounted == FR_OK;
 #if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
     s_reinit_state = ReinitState::Idle;
@@ -303,7 +318,16 @@ bool FormatCard() {
 #endif
     if (formatted != FR_OK || !s_mounted)
         return false;
-    return CreateCardDirectories();
+    CardDirectoryFailure failure;
+    if (!CreateCardDirectories(&failure)) {
+        WaveX::Log::PrintLine("SD format: mkdir %s failed (FatFs=%d hal_err=0x%08lX)",
+                              failure.path,
+                              (int)failure.result,
+                              (unsigned long)HAL_SD_GetError(&hsd1));
+        return false;
+    }
+    WaveX::Log::PrintLine("SD format: complete; WaveX folders ready");
+    return true;
 }
 
 void SetCardEventCallback(CardEventCallback cb) {

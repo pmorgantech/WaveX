@@ -377,7 +377,7 @@ class FileBrowserResponseTest : public ::testing::Test {
         config_ = wavex_file_browser_config_t{};
         config_.root_path = "/";
         config_.filter = WaveX::Protocol::BrowseFilter::Samples;
-        config_.max_entries = 50;
+        config_.max_entries = WaveX::Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT;
         config_.show_hidden = false;
         config_.comm_interface = comm_;
 
@@ -490,6 +490,11 @@ TEST_F(FileBrowserResponseTest, ParentDirEntryIsSortedFirstOutsideRoot) {
 // trigger a follow-up request at the right start index; the second response
 // must append, not replace.
 TEST_F(FileBrowserResponseTest, PaginationRequestsNextPageAndAccumulates) {
+    unsigned directory_notifications = 0;
+    wavex_file_browser_set_directory_changed_callback(
+        browser_,
+        [](const char*, void* context) { ++*static_cast<unsigned*>(context); },
+        &directory_notifications);
     const auto& cap = GetInterMcuCapture();
     ASSERT_EQ(cap.browse_req_calls, 1);  // from create
 
@@ -506,6 +511,8 @@ TEST_F(FileBrowserResponseTest, PaginationRequestsNextPageAndAccumulates) {
     // ...and the next page was requested where this one ended.
     EXPECT_EQ(cap.browse_req_calls, 2);
     EXPECT_EQ(cap.browse_req_start_index, 20);
+    EXPECT_EQ(directory_notifications, 1u);
+    wavex_file_browser_set_selection(browser_, 1);
 
     std::vector<FileEntryWire> page1;
     for (int i = 20; i < 25; ++i) {
@@ -520,6 +527,8 @@ TEST_F(FileBrowserResponseTest, PaginationRequestsNextPageAndAccumulates) {
     EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 24)->name, "f24.wav");
     // Pagination is complete: no third request.
     EXPECT_EQ(cap.browse_req_calls, 2);
+    EXPECT_EQ(directory_notifications, 1u);
+    EXPECT_EQ(wavex_file_browser_get_selected_index(browser_), 1u);
 }
 
 // An empty listing is authoritative and can arrive UNSOLICITED (SD ejected):
@@ -662,4 +671,29 @@ TEST_F(FileBrowserResponseTest, UnterminatedWireNameIsBoundedEvenInDebugLogging)
     ASSERT_NE(entry, nullptr);
     EXPECT_EQ(strlen(entry->name), sizeof(entry->name) - 1);
     EXPECT_EQ(std::string(entry->name), std::string(47, 'n'));
+}
+
+// Every supported directory index remains selectable, including the final
+// partial page. The next request must never wrap its one-byte wire index.
+TEST_F(FileBrowserResponseTest, CompleteDirectoryReachesFinalIndexWithoutWrapping) {
+    const auto& capture = GetInterMcuCapture();
+    constexpr unsigned count = WaveX::Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT;
+    for (unsigned start = 0; start < count; start += 20) {
+        ASSERT_EQ(capture.browse_req_start_index, start);
+        std::vector<FileEntryWire> entries;
+        for (unsigned index = start; index < start + 20 && index < count; ++index) {
+            char name[20];
+            std::snprintf(name, sizeof(name), "kit%03u.wxi", index);
+            entries.emplace_back(0, 100, name);
+        }
+        Respond(count, entries);
+    }
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), count);
+    EXPECT_EQ(capture.browse_req_calls, 13);
+    EXPECT_EQ(capture.browse_req_start_index, 240);
+    wavex_file_browser_set_selection(browser_, 255);
+    const auto* selected = wavex_file_browser_get_selected(browser_);
+    ASSERT_NE(selected, nullptr);
+    EXPECT_STREQ(selected->name, "kit255.wxi");
+    EXPECT_STREQ(selected->path, "/kit255.wxi");
 }

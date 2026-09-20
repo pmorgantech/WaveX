@@ -70,7 +70,7 @@ Use Passed or Failed after recording the corresponding evidence.
 
 | ID | Check | Status | Latest result / prerequisite |
 |---|---|---|---|
-| HV-001 | SD format, confirmation and recovery | Deferred | User will test later; no physical format run |
+| HV-001 | SD format, confirmation and recovery | Partial pass | Format/folders and Pattern reboot/reload pass with conservative bus defaults; write-soak/streaming and remaining checks open |
 | HV-002 | Full-card save rejection and recovery | Pending | Host/compile verified; near-full test card needed |
 | HV-003 | Instrument save/recall admission | Pending | Host/compile verified; large and admitted WAV fixtures needed |
 | HV-004 | Stereo/Mono physical follow-up | Partial | Switching reported working by user, 2026-09-16; remaining checks below |
@@ -89,6 +89,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-017 | Sample Edit selection | Pending | Real-LVGL host checks; physical selection/render/audio unrun |
 | HV-018 | 8-inch display bring-up | Partial | RGB565 restored visible UI, confirmed by user 2026-09-18; touch/brightness/load checks remain open |
 | HV-021 | USB console and Daisy RTT | Partial; RTT integrity failed | ESP32 USB console passes; Daisy USB retained pending a reliable RTT probe/readout and active-audio soak |
+| HV-022 | Peer restart and browse delivery | Passed (listed cases) | Six isolated restarts, full listings, and early-selection/load regression pass; uncorrelated overlapping browse requests remain outside this check |
 
 ## HV-001 — SD card formatting
 
@@ -96,6 +97,52 @@ Use Passed or Failed after recording the corresponding evidence.
 **Setup:** both updated images, disposable card containing recognizable test
 files, second card for replacement checks, serial logs and the physical panel.
 **Behavior:** [card maintenance](features/inter-mcu-protocol.md#card-maintenance).
+
+**2026-09-18 failure report:** the user observed "Card preparation failed"
+after requesting a format. `logs/daisy.log` shows an inserted 7,497 MiB card
+mounting and playing a WAV before the storage-lost notification. The running
+image identity and exact FatFs failure were not captured, so this does not
+establish whether formatting or the following remount failed. A subsequent
+read-only ST-Link read of the running SD handle (no halt/reset) found
+`ErrorCode=0x00002000` (`SDMMC_ERROR_ILLEGAL_CMD`), with 15,353,856 logical
+512-byte blocks matching the inserted card. This is the retained HAL error,
+not proof of the first failing command. The gate remains open.
+Stage diagnostics now record the `mkfs` result before remount can overwrite
+the HAL error, the remount result, and any failed directory path/result. Capture
+those `SD format:` lines and the tested image SHA-256 on the next explicitly
+confirmed test-card attempt. Do not infer a successful erase from a failure.
+
+**2026-09-18 authorized hardware retry:** the same 7,497 MiB card was formatted
+through Settings → Storage → Format Card → Erase all data, using the real UI
+touch path through the debug harness. UART remained the inter-MCU transport.
+Only the Daisy was flashed; the frontend boot log identifies ESP32 app ELF
+`1ede590a3...` (2026-09-18 17:50:39 build).
+
+| Daisy binary SHA-256 | SD experiment | Observed result |
+|---|---|---|
+| `dcf33e4abd9bf2d491008c66517487802833e6a147f99034d5d0f6c4aa7c8e65` | Original bus configuration | `mkfs` failed immediately: FatFs 1, HAL `0x6` (data CRC + command timeout); remount then failed with HAL `0x2000`. |
+| `98a101984e39c3adddfb9796bd0e925b2d3797b30a343c24d7e7a046c71cdfac` | Lower clock, original bus width | `mkfs` passed in 1,316 ms and remounted, but creating `/wavex/projects` failed with FatFs 1 / HAL `0x6`. |
+| `a80f62a90625e95ccd6b6ee8d20f5027c4baac6bddb2354a0e2ec02001514b5f` | Conservative clock and narrow bus, now the defaults in `hardware_config.h` | `mkfs` passed in 981 ms, remount passed, all WaveX folders were created and the UI showed success. |
+
+Twelve consecutive named Pattern saves then passed. Loading `SD check 12`
+restored Track 1 / step 1 enabled with note 73; after an ST-Link reset, the card
+mounted and the same Pattern restored those values again. These test Patterns
+remain on the card. Daisy reported zero underruns/dropped note events at the
+checkpoints, with no samples loaded or playing. UART TX queue-full messages
+were observed around storage/reboot transitions, so this is not a link-soak
+pass. Evidence: `logs/sd-format-daisy-20260918.log`,
+`logs/sd-format-retry{,-12mhz,-1bit}-20260918.log`,
+`logs/sd-format-save-check-20260918.log`,
+`logs/sd-format-reboot-check-20260918.log`, and
+`logs/sd-format-success-20260918.png` (local bench artifacts).
+Final pre-commit checks passed both firmware builds and all shared, ESP32 and
+Daisy host suites; transcript: `logs/sd-format-precommit-20260918.log`.
+
+**Remaining:** isolate card/socket/wiring integrity before restoring a wider
+bus; successful reads alone do not prove write stability. Measure sustained
+WAV streaming and write soak with the fallback defaults. Cancellation,
+replacement, interruption, active-playback formatting and WAV/Instrument
+reboot recovery remain unrun; the full HV-001/phase gate stays open.
 
 - [ ] **001a — Cancel:** open Settings → Storage → Format Card. Confirm the
   warning **ALL CARD DATA WILL BE LOST** and both Cancel / Erase all data are
@@ -197,6 +244,15 @@ and [performance acceptance policy](performance_monitoring.md).
   renderer comparison with equivalent workload/build conditions and image
   attribution in the callback performance log.
 
+**2026-09-20 — 005b partial / REVIEW:** The full channel-budget workload ran
+for 3,667.23 seconds with all five stereo/Mono mixes, live transitions and 61
+Pattern save/load cycles. Stream underruns and sampled console RX drops stayed
+zero. The callback averaged 31.17%, but the final mix-change/file-cycle window
+peaked at 74.5896%, so the capacity acceptance requirement remains open.
+See [the exact workloads, images and captures](callback-performance-log.md#full-channel-soak-and-transition-peak--2026-09-20).
+This is digital state/DWT evidence; physical MIDI, panel and listening checks
+are not covered, and console RX drops are not a musical-note queue counter.
+
 The complete Phase 2 gate also depends on unfinished MIDI clock, panel and
 session-persistence work listed in the roadmap. Passing these checks alone
 does not close it; add their runnable entries as those implementations arrive.
@@ -285,6 +341,8 @@ paths. Preserve earlier files when testing failure/recovery.
   UART errors/queue pressure, peak RAM usage and underruns. **Pass:** No audio
   underruns and timing satisfies the performance policy; complete HV-005's
   separate soak gate. Do not infer timing from host test duration.
+- [ ] Restore saved Bank selections and inject dependency failures using
+  **HV-016j** below. Project success must publish the matching Bank index.
 
 **Blocker/result:** Physical session not run. Record tested image identities,
 date and evidence below; no reboot/durability/timing result is implied by the
@@ -1060,6 +1118,93 @@ restore logs, `esp32-jtag.log`, `uart.png`, `usb.png`, `usb-final.png`,
 `rtt-400khz.json`, `rtt-400khz-error.log`, `rtt-buffer.bin`, and
 `rtt-no-reader.json`. These generated artifacts are gitignored. Repeat RTT
 integrity with a different probe/host stack before removing any USB buffering.
+
+**2026-09-20 sustained reply regression:** The prior frontend image
+`2c1f693d3a0dfdbd369b36e74cedc06ee22c4b55c0d1e9d3e574a742ba5a5403`
+lost one of 400 consecutive Key Map STATE acknowledgements
+(`logs/console-state-baseline.log`), reproducing the workload blocker without
+replaying any mutation. The replacement image
+`78c63611b1f5425d41639b0211d5969b83eb25925655e1fc54ffe4ebd6dfbffe`
+enqueues each reply as one driver write and reports rejected enqueues through
+`reply_dropped`. Both successive HIL attempts passed 400 Instrument STATE replies
+interleaved with 400 PING replies, with no rejected enqueue. The complete final
+selection passes 26 cases; ESP32 build and all 362 host tests pass.
+
+The earlier `PAGE MUTE` rejection was a test readiness race, not a missing
+command: the test sent its next edit before confirmed mixer readback. A second
+race issued cutoff immediately after entering Filter. Both tests now wait for
+readiness and the confirmed value. Preserve failed attempts in
+`logs/seq-sampler-pass.xml` and `logs/seq-sampler-usb.xml`, and the successful
+`logs/seq-sampler-final.xml`. This evidence does not establish arbitrary USB
+disconnect recovery or close the Daisy RTT gates.
+
+## HV-022 — Peer restart and browse delivery
+
+**Introduced:** Restart/backpressure recovery, 2026-09-20.
+**Design / gate:** [UART transport](features/inter-mcu-protocol.md),
+[Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
+**Setup:** Both boards, managed USB loggers, a persistent Daisy image and the
+replacement card fixtures: `/` (10 entries), `/Drums/Kicks` (51) and
+`/Drums/Loops` (28). The bench script replaces the current unsaved session.
+
+- [x] **022a — Isolated restarts:** Run `scripts/bench_peer_restart.py --image
+  firmware/daisy/build-recovery/wavex-daisy.bin --cycles 3` inside the hardware
+  devcontainer. It leaves the other MCU running, completes each paginated
+  listing, loads the kick fixture, checks note admission/release and waits for
+  Sequencer readback after each reset.
+  **Pass:** All six restarts recover without restarting the other board; exact
+  fixture counts, sample load, note release and Sequencer readiness succeed.
+- [x] **022b — Browse pressure and selection:** Repeat the capacity harness
+  setup, which generates status traffic, and select an early-page sample while
+  later pages arrive. **Pass:** The listing arrives after TX backpressure;
+  pagination preserves the selection and Load addresses that file.
+
+**Initial failures:** The earlier empty-root capture explicitly reports
+`Failed to send browse response (queue full?)`; its combined overflow count
+was not evidence of Daisy RX loss. A retained main-loop response now retries
+that enqueue. Subsequent reset testing exposed selection reset on final-page
+arrival and an ESP32 hardware FIFO overrun (`UART overflow (3)`) that lost a
+root listing. Preserve `logs/peer-restart-20260920-041252.*` (selection) and
+`logs/peer-restart-20260920-041751.*` (FIFO loss). The logger-restart test also
+exposed a host tailer stuck past EOF after in-place truncation; that is a
+harness failure, with board replies present in the raw log.
+
+**2026-09-20 restart result:** All six isolated resets passed after the transport
+and selection fixes. Capture `logs/peer-restart-20260920-042644.log` / `.json`
+records exact 51/10/28/10 entry counts on every cycle, successful sample load,
+note admission/release and Sequencer readiness. Daisy profiling image:
+`bbb29c9e2ef70a4708829871344ce5076c777f6c7a568b0670cd0d58146495ac`;
+ESP32 image: `82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`.
+No ESP32 FIFO-overflow log occurs in that final capture. Daisy host tests:
+776 pass; ESP32 host tests: 362 pass. Both Stage A and Stage B compile.
+The two log-tail restart/rotation tests pass. Earlier failed attempts remain
+preserved rather than counted as successful resets.
+
+**Normal-image regression:** Daisy profiling-Off/detail-Off/RTT-Off SHA256
+`45fed7701b849639d4d911a5f13fef7ef997b2d8b6e83b3fe600087ae39d0660`,
+with the same ESP32 image, passes all 26 existing console, note-group,
+stereo/Mono, sequencer, Solo and complete-kit cases in 192.48 seconds
+(`logs/recovery-capacity-final.xml`). The new pagination case initially skipped
+because STATE polling missed the early selection. Its ordered UI event log
+showed selection before the final page; the focused test now requires that
+ordering and verifies the selected file's successful load and Track binding.
+It passes in 2.82 seconds (`logs/recovery-browse-selection.xml`). Thus all 27
+selected cases have passed across the combined run and focused rerun.
+The repeated capacity setups also completed their full listings under normal
+status traffic. Host coverage separately forces outbox enqueue failures and
+checks that later successful enqueue preserves the complete response.
+
+**Final state:** Normal firmware remains installed. The bench session was
+cleared, root browsing returned ten entries, and the Sequencer reported ready
+and stopped. Daisy reported zero voices, resident samples, streams, underruns
+and console RX drops; the frontend reported zero rejected replies. The UI was
+left at Main Menu. Evidence: `logs/recovery-capacity-final-smoke.log` and
+`logs/recovery-capacity-final-smoke-result.json`. No source WAV was modified.
+
+The browse wire format still lacks request/path correlation. These checks
+finish each paginated request before navigating again; they do not establish
+correct cancellation under overlapping directory changes or recovery from
+arbitrary dropped/late packets.
 
 ## Recording a validation session
 

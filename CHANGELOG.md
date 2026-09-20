@@ -13,9 +13,25 @@ versioning and release process.
 
 ### Added
 
+- Repeatable isolated-peer restart checks with image identities and per-run
+  captures.
+
 - Optional Daisy RTT foreground log mirror over SWD, with nonblocking loss
   counters and a byte-for-byte USB/RTT comparison script; normal builds keep
   USB CDC logging and require no RTT dependency.
+
+
+
+
+
+- Project Save copy captures the selected Bank; Load restores its file identity
+  and slot index with the completed Project transaction. New and Projects with
+  no Bank reference clear the selection. Missing/invalid Banks or failed Track
+  dependencies retain the previous session. Bank sample preload remains explicit.
+
+- SD-format serial diagnostics retain the formatting and remount FatFs/HAL
+  results and identify failed WaveX directory creation.
+
 - ESP32 display bring-up for Waveshare 8-DSI-TOUCH-A using the existing
   JD9365/GT911 BSP stack: RGB565, PPA-rotated 1280×800 landscape, PSRAM draw
   buffers and updated UI geometry. The current partial-flush path is not
@@ -498,6 +514,24 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Browser replies survive Daisy transmit-queue backpressure; the latest pending
+  listing is retried from the main loop. UART health separates RX overruns
+  from rejected TX enqueue attempts. ESP32 UART service uses the IDF IRAM ISR
+  and an earlier FIFO threshold, and drains recoverable ring-full events.
+- Finishing directory pagination preserves an already selected sample instead
+  of resetting selection to the parent directory. Restart HIL follows logger
+  files truncated in place.
+
+- Sample and Instrument browsers now expose all 256 entries supported by the
+  current listing protocol, instead of hiding saved kits after entry 50. Daisy
+  retains the matching complete index cache for late-page audition lookups.
+
+- Use the conservative SD bus defaults in `hardware_config.h` after the
+  inserted card repeatedly failed format/folder writes with CRC errors in
+  the previous configuration. Physical formatting, repeated Pattern saves
+  and reboot/reload pass with the fallback. Faster/wider bus operation and
+  streaming throughput/soak remain open at HV-001.
 
 - Use RGB565 for the 8-inch display after RGB888 produced a stable scrambled
   physical image despite a clean UI snapshot. The same panel geometry, PPA

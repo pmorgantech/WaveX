@@ -20,7 +20,14 @@ TEST(CardSpace, CreatesExpectedFoldersAndReportsDirectoryFailure) {
     EXPECT_NE(fs.GetDirectory("0:/wavex/patterns"), nullptr);
     EXPECT_TRUE(CreateCardDirectories());
     fs.mkdir_result = FR_DISK_ERR;
-    EXPECT_FALSE(CreateCardDirectories());
+    CardDirectoryFailure failure;
+    EXPECT_FALSE(CreateCardDirectories(&failure));
+    EXPECT_STREQ(failure.path, "0:/wavex");
+    EXPECT_EQ(failure.result, FR_DISK_ERR);
+    fs.mkdir_result = FR_OK;
+    EXPECT_TRUE(CreateCardDirectories(&failure));
+    EXPECT_EQ(failure.path, nullptr);
+    EXPECT_EQ(failure.result, FR_OK);
     fs.Reset();
 }
 TEST(CardSpace, CountsRoundedClustersAndDirectoryHeadroomWithoutOverflow) {

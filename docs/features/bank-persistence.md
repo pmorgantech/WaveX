@@ -13,6 +13,7 @@ implemented. Electrical MIDI and full-load timing remain hardware gates.
 - [Foreground transactions](#foreground-transactions)
 - [SD transaction adapter](#sd-transaction-adapter)
 - [Bank Manager and Track recall](#bank-manager-and-track-recall)
+- [Project restoration and editing policy](#project-restoration-and-editing-policy)
 - [Slot copy and move](#slot-copy-and-move)
 - [Sample preload](#sample-preload)
 - [MIDI Program Change recall](#midi-program-change-recall)
@@ -104,7 +105,7 @@ The initial UI opens files by name; it has no file-list or slot-grid browser.
 index and saved Bank name. This first version uses immutable named files:
 Store copy snapshots the selected Track into a slot of a new Bank, Clear copy
 empties that slot in a new Bank, and Save copy duplicates the active file.
-Only a successful write followed by an index reload changes the active Bank.
+Successful writes select the new Bank only after an index reload.
 There is no unsaved Bank working copy. Editing a recalled Track never updates
 the Bank; explicitly Store copy to keep those edits. Embedded Instrument labels
 may contain punctuation such as an imported `.sfz` name; the stricter safe-name
@@ -130,6 +131,37 @@ Resident sequencing and MIDI clock continue while the foreground job runs.
 Sample audition closes and competing edits/new note requests are held off;
 note-off and clock/transport handling remain available. Worst-case foreground
 service latency and audible continuity require the physical checks below.
+
+## Project restoration and editing policy
+
+Project Save copy captures the current Bank's file identity as
+`0:/wavex/banks/<name>.wxb`, using the same bounded filename rules as Bank
+operations. The filename is authoritative even when an externally renamed file
+has a different embedded label. Unsupported paths fail Project Load as a missing
+dependency rather than installing a Bank that later operations cannot address.
+No new file format or wire message is required: Projects already carry this path.
+
+Load stages and validates the index privately. Only after every Track/sample
+dependency succeeds does the Project commit install the Bank with the Pool,
+Tracks and mixer. A missing/corrupt Bank, failed close or later Track failure
+preserves the previous selection and revision. Successful New or Load with an
+empty Bank path clears the selection, including older Projects saved without a
+Bank reference. Every successful replacement advances the Bank revision and
+publishes readback, invalidating stale Bank confirmations.
+
+Restoration admits only the Project's Track snapshot dependencies. It does not
+recall a Bank slot or preload Bank-only WAVs; missing Bank-only samples therefore
+do not prevent Project Load. Preload and Program Change/explicit recall retain
+their existing admission and failure rules. User pins remain session-owned and
+are not reconstructed from the Bank reference. Reboot still requires explicit
+Project Load; there is no automatic startup Project recall.
+
+**V1 decision, 2026-09-18:** retain explicit immutable named-copy editing.
+Tracks already own editable sound copies, and Store/Clear/Copy/Move publish
+reviewable destinations. An unsaved Bank copy would introduce another mutable
+owner, dirty state and discard/recovery lifecycle without an established workflow
+requirement. Revisit it when repeated editing demonstrates that cost is justified;
+it is not a prerequisite for the next roadmap item.
 
 ## Slot copy and move
 
@@ -165,7 +197,7 @@ loaded privately. Every Bank dependency is pinned on successful completion,
 including samples already resident. Pins are explicit user residency requests,
 not Bank ownership: opening another Bank does not unpin them. Unload samples
 through the Pool when they are no longer needed. Pins retain residency for this
-session; they do not make Bank-path restoration automatic on reboot.
+session; Project Load restores the Bank reference but does not reconstruct pins.
 
 Only after all occupied slots succeed does the foreground publish the additive
 Pool metadata. No old PCM is retired, so no audio stop fence is required. A
@@ -260,9 +292,9 @@ callback DWT, CPU utilization, analog continuity or MIDI wire-jitter results.
 Timing instrumentation compiles out when the debug harness is disabled.
 
 The [physical gate](../hardware-validation.md#hv-016--bank-sd-transactions)
-remains open. Remaining Bank work is a decision on deferred unsaved Bank
-working copies and selected-Bank Project restoration. Project save/load does not yet persist the selected
-Bank path; reopen it by name after reboot. See the [roadmap](../roadmap.md).
+remains open, including Project restoration/reboot and failure cases in HV-016j.
+Project Bank selection and the v1 named-copy decision are implemented as above;
+see the [roadmap](../roadmap.md) for the next software work.
 
 ## Related
 

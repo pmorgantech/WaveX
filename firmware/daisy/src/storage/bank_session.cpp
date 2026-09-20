@@ -22,6 +22,35 @@ BankSession::~BankSession() {
     file_.Cancel();
     Cleanup();
 }
+void BankSession::CaptureProjectPath(char (&path)[BROWSE_PATH_MAX]) const {
+    path[0] = 0;
+    if (status_.loaded)
+        std::snprintf(path, sizeof(path), "0:/wavex/banks/%s.wxb", status_.name);
+}
+bool BankSession::ProjectBankName(const char* path, char (&name)[24]) {
+    name[0] = 0;
+    if (!path[0])
+        return true;
+    constexpr char prefix[] = "0:/wavex/banks/";
+    constexpr size_t prefix_bytes = sizeof(prefix) - 1;
+    const auto bytes = std::strlen(path);
+    if (bytes <= prefix_bytes + 4 || bytes >= prefix_bytes + sizeof(name) + 4 ||
+        std::strncmp(path, prefix, prefix_bytes) != 0 || std::strcmp(path + bytes - 4, ".wxb") != 0)
+        return false;
+    const auto name_bytes = bytes - prefix_bytes - 4;
+    std::memcpy(name, path + prefix_bytes, name_bytes);
+    name[name_bytes] = 0;
+    return BankFile::ValidName(name);
+}
+void BankSession::RestoreProject(const char* name, const BankFile::Index& index) {
+    index_ = index;
+    status_.loaded = name[0] != 0;
+    Protocol::detail::CopyWireString(status_.name, sizeof(status_.name), name);
+    if (++status_.revision == 0)
+        ++status_.revision;
+    RefreshSlot();
+    reply_ = true;
+}
 void BankSession::Cleanup() {
     if (candidate_) {
         if (SfzLoader::ProjectLoadActive()) {

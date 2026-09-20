@@ -1462,8 +1462,10 @@ TEST_F(SfzLoaderTest, ProjectSessionSaveNewRecallPreservesEditsMixAndHiddenSteps
     mixer.Update({MIX_OP_SET_MUTE, 15, 1});
     mixer.Update({MIX_OP_SET_MASTER, 0, 5700});
     mixer.Update({MIX_OP_SET_SOLO_MASK, 0, 1});
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1518,8 +1520,10 @@ TEST_F(SfzLoaderTest, ProjectSessionFailuresKeepTheLiveSessionAndCleanOwnedFiles
     transport.Init(48000, 48);
     MixerControlHandoff mixer;
     mixer.Init();
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1569,8 +1573,10 @@ TEST_F(SfzLoaderTest, ProjectSessionRequiresAudioAcknowledgementAndRejectsCompet
     transport.Init(48000, 48);
     MixerControlHandoff mixer;
     mixer.Init();
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1600,8 +1606,10 @@ TEST_F(SfzLoaderTest, ProjectSessionRetainsInactiveSlotsAndRefusesNoMemoryOrRepl
     transport.Init(48000, 48);
     MixerControlHandoff mixer;
     mixer.Init();
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1669,8 +1677,10 @@ TEST_F(SfzLoaderTest, ProjectPatternSlotsPreserveEditsAndSurviveProjectRecall) {
     transport.Init(48000, 48);
     WaveX::PatternStore::SetProjectPatternName("");
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1725,8 +1735,10 @@ TEST_F(SfzLoaderTest, ProjectPatternSlotsRejectConflictsAndPlayingWithoutMutatio
     transport.Init(48000, 48);
     WaveX::PatternStore::SetProjectPatternName("");
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1770,8 +1782,10 @@ TEST_F(SfzLoaderTest, ProjectPatternMemoryRefusalReturnsExchangeAndKeepsWorkingD
     transport.Init(48000, 48);
     transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 119, 0, 0});
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1800,8 +1814,10 @@ TEST_F(SfzLoaderTest, ProjectPatternQueueAllowsEditsAndReturnsOutgoingSnapshot) 
     transport.Init(48000, 48);
     transport.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 1, 0});
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1850,8 +1866,10 @@ TEST_F(SfzLoaderTest, SongArrangementEditsPlaybackAndProjectRecall) {
     transport.Init(48000, 48);
     transport.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 1, 0});
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -1945,8 +1963,10 @@ TEST_F(SfzLoaderTest, SongRejectsInvalidEditsAndStopWaitsForCallbackRelease) {
     SequencerTransport transport;
     transport.Init(48000, 48);
     MixerControlHandoff mixer;
+    WaveX::Storage::BankSession bank(memory_, pool_, io_.data(), io_.size(), {nullptr, nullptr});
     WaveX::Storage::ProjectSession session(memory_,
                                            pool_,
+                                           bank,
                                            exchange,
                                            mixer,
                                            io_.data(),
@@ -2179,6 +2199,191 @@ void SaveBankDependency(const char* name, const char* source, uint8_t slot, cons
     ASSERT_EQ(file.Status(), WaveX::Storage::BankFileJob::Result::Saved);
 }
 }  // namespace
+TEST_F(SfzLoaderTest, ProjectRestoresBankFileIdentityAndIndexWithoutPreloadingSamples) {
+    project_stop_allowed = true;
+    SaveBankDependency("Embedded name", nullptr, 127, "/missing-bank-only.wav");
+    // File identity may differ from its embedded name after an external rename.
+    constexpr char name[] = "12345678901234567890123";
+    auto& fs = MockFatFS::Instance();
+    fs.AddFile("0:/wavex/banks/12345678901234567890123.wxb",
+               *fs.GetFile("0:/wavex/banks/Embedded name.wxb"));
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           bank,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, name, 127)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(1, PROJECT_SAVE_COPY, "Bank reference")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_STREQ(session.Current()->bank_path, "0:/wavex/banks/12345678901234567890123.wxb");
+    auto stale = BankRequest(bank, 90, BANK_RECALL, "", 127);
+    const auto revision = bank.Status().revision;
+    bank.ReplySent();
+    ASSERT_TRUE(session.Request(ProjectRequest(2, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_FALSE(bank.Status().loaded);
+    EXPECT_FALSE(bank.Status().occupied);
+    EXPECT_STREQ(bank.Status().name, "");
+    EXPECT_STREQ(bank.Status().instrument, "");
+    EXPECT_NE(bank.Status().revision, revision);
+    EXPECT_TRUE(bank.ReplyPending());
+    ASSERT_TRUE(session.Request(ProjectRequest(3, PROJECT_LOAD, "Bank reference")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_TRUE(bank.Status().loaded);
+    EXPECT_TRUE(bank.Status().occupied);
+    EXPECT_STREQ(bank.Status().name, name);
+    EXPECT_STREQ(bank.Status().instrument, "Preload test");
+    EXPECT_EQ(pool_.Count(), 0u);
+    EXPECT_FALSE(SfzLoader::TrackLoaded(0));
+    EXPECT_FALSE(bank.Request(stale));
+    EXPECT_EQ(bank.Status().error, BANK_STALE);
+    // A fresh recall reaches the restored file; its missing WAV fails separately.
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 91, BANK_RECALL, "", 127)));
+    EXPECT_EQ(RunBank(bank), BANK_DEPENDENCY);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 92, BANK_NEW, "Replacement")));
+    // Project and Bank must never share their I/O buffer concurrently.
+    EXPECT_FALSE(session.Request(ProjectRequest(4, PROJECT_SAVE_COPY, "Busy")));
+    EXPECT_EQ(session.Status().error, PROJECT_BUSY);
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(5, PROJECT_SAVE_COPY, "Updated reference")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_STREQ(session.Current()->bank_path, "0:/wavex/banks/Replacement.wxb");
+    ASSERT_TRUE(session.Request(ProjectRequest(6, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_TRUE(session.Request(ProjectRequest(7, PROJECT_SAVE_COPY, "No Bank")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_STREQ(session.Current()->bank_path, "");
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 93, BANK_OPEN, name, 127)));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(8, PROJECT_LOAD, "No Bank")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_FALSE(bank.Status().loaded);
+    EXPECT_FALSE(bank.Status().occupied);
+}
+
+TEST_F(SfzLoaderTest, ProjectBankAndLaterTrackFailuresKeepTheOldSelectionAndSession) {
+    project_stop_allowed = true;
+    ASSERT_TRUE(Load(0));
+    SaveBankDependency("Saved", nullptr, 0, "/kits/a.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           bank,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Saved")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(1, PROJECT_SAVE_COPY, "Snapshot")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 2, BANK_NEW, "Keep")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    auto& fs = MockFatFS::Instance();
+    const auto saved = *fs.GetFile("0:/wavex/banks/Saved.wxb");
+    const auto revision = bank.Status().revision;
+    const auto sample = SampleId("/kits/a.wav");
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 777;
+    SfzLoader::SetInstrumentFilter(0, filter);
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    for (unsigned failure = 0; failure < 3; ++failure) {
+        if (failure == 0)
+            ASSERT_TRUE(fs.RemoveFile("0:/wavex/banks/Saved.wxb"));
+        else if (failure == 1)
+            fs.AddFile("0:/wavex/banks/Saved.wxb", {0, 1, 2, 3});
+        else {
+            fs.AddFile("0:/wavex/banks/Saved.wxb", saved);
+            ASSERT_TRUE(fs.RemoveFile("0:/wavex/projects/Snapshot/track01.wxi"));
+        }
+        ASSERT_TRUE(session.Request(ProjectRequest(2 + failure, PROJECT_LOAD, "Snapshot")));
+        RunProject(session, exchange, transport);
+        EXPECT_EQ(session.Status().error, PROJECT_DEPENDENCY);
+        EXPECT_EQ(bank.Status().revision, revision);
+        EXPECT_STREQ(bank.Status().name, "Keep");
+        EXPECT_FALSE(bank.Status().occupied);
+        EXPECT_STREQ(session.Current()->bank_path, "0:/wavex/banks/Saved.wxb");
+        EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 777);
+        EXPECT_EQ(SampleId("/kits/a.wav"), sample);
+        EXPECT_FALSE(SfzLoader::ProjectLoadActive());
+        memory_.stats(&after);
+        EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    }
+}
+
+TEST_F(SfzLoaderTest, ProjectRejectsBankPathsThatCannotBeAddressedByBankOperations) {
+    project_stop_allowed = true;
+    SaveBankDependency("Saved", nullptr, 0, "/kits/a.wav");
+    WaveX::Storage::BankSession bank(
+        memory_, pool_, io_.data(), io_.size(), {StopBankTest, PublishBankTest});
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           bank,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(bank.Request(BankRequest(bank, 1, BANK_OPEN, "Saved")));
+    ASSERT_EQ(RunBank(bank), BANK_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(1, PROJECT_SAVE_COPY, "Base")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    const auto revision = bank.Status().revision;
+    const char* paths[] = {"/elsewhere/Saved.wxb",
+                           "0:/wavex/banks/Saved.wav",
+                           "0:/wavex/banks/123456789012345678901234.wxb"};
+    unsigned id = 2;
+    for (const auto* path: paths) {
+        auto project = std::make_unique<WaveX::Sequencer::Project>(*session.Current());
+        std::snprintf(project->name, sizeof(project->name), "Bad path %u", id);
+        std::strcpy(project->bank_path, path);
+        auto& fs = MockFatFS::Instance();
+        fs.AddFile(path, *fs.GetFile("0:/wavex/banks/Saved.wxb"));
+        WaveX::Storage::ProjectFileJob file;
+        ASSERT_TRUE(file.SaveCopy(*project, id));
+        for (unsigned i = 0; i < 40000 && file.Busy(); ++i)
+            file.Pump();
+        ASSERT_EQ(file.Status(), WaveX::Storage::ProjectFileJob::Result::Saved);
+        ASSERT_TRUE(session.Request(ProjectRequest(id++, PROJECT_LOAD, project->name)));
+        RunProject(session, exchange, transport);
+        EXPECT_EQ(session.Status().error, PROJECT_DEPENDENCY);
+        EXPECT_EQ(bank.Status().revision, revision);
+        EXPECT_STREQ(bank.Status().name, "Saved");
+    }
+}
+
 TEST_F(SfzLoaderTest, BankPreloadPinsDependenciesWithoutStoppingOrChangingTracks) {
     ASSERT_TRUE(Load(0));
     ASSERT_TRUE(Load(1));

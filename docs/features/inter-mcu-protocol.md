@@ -15,7 +15,7 @@
 | ESP32 | ESP-IDF legacy interrupt-driven UART with 8 KiB RX / 4 KiB TX rings |
 | CRC | CRC16-CCITT over flags/type/sequence/payload framing bytes |
 
-The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. The shared selector defaults to UART. The opt-in SPI experiment uses the same length-bearing codec and payload catalog; see below.
+The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. Browse replies retain one main-loop-owned pending listing until the transport can accept it; a newer request or storage-loss notification replaces that unsent listing. This does not add wire acknowledgement or request correlation. The ESP32 uses the IDF IRAM UART ISR and a 64-byte RX FIFO threshold; recoverable driver-ring-full events are drained, while a hardware FIFO overrun still resets framing. The shared selector defaults to UART. The opt-in SPI experiment uses the same length-bearing codec and payload catalog; see below.
 
 ### Experimental SPI implementation
 
@@ -443,6 +443,10 @@ live in protocol.h. Directories remain visible, and the Daisy applies filtering
 before counting and pagination. Sample listings contain WAV; Instrument listings
 contain WXI and SFZ, case-insensitively. Empty, unterminated, overlong or malformed
 requests are rejected without accessing a silently shortened path.
+The current listing limit is 256 entries, including the parent entry. Frontend
+capacity and the Daisy index cache share `BROWSE_DIRECTORY_ENTRY_LIMIT`; late
+pages remain selectable and index-based audition resolves the same listing.
+The 500-entry target requires a wider paging contract and remains open.
 
 ### Keyboard Key Map (as built, 2026-09-11)
 

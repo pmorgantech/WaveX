@@ -14,6 +14,8 @@ void ProcessBrowseRequest(const char* path,
                           uint8_t max_entries = 20,
                           Protocol::BrowseFilter filter = Protocol::BrowseFilter::All);
 void ProcessSamplePlayRequest(const char* file_path);
+// Retry the latest unsent listing after transport backpressure, main-loop only.
+void PumpBrowseResponse();
 
 // Tell the frontend storage is gone: exit audition mode and clear the browser
 // list. Safe to call when nothing is playing.

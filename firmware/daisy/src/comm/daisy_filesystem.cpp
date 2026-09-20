@@ -26,6 +26,7 @@
 #include "spi_protocol/protocol.h"  // For WaveX::Protocol namespace
 #include "sys/dma.h"                // For DMA_BUFFER_MEM_SECTION
 
+#include "browse_response_outbox.hpp"
 #include "wav/wav_header_parser.hpp"
 
 // Hardware instance (shared with UART link) - accessed via WaveX::Comm::s_hw
@@ -45,9 +46,10 @@ class FileSystem {
 
 // Directory state for file browsing
 static char s_current_directory[96] = "/";
-static WaveX::Storage::FileEntry s_current_file_entries[50];  // Increased to accommodate more files
+static WaveX::Storage::FileEntry s_current_file_entries[BROWSE_DIRECTORY_ENTRY_LIMIT];
 static size_t s_current_file_count = 0;
 static bool s_directory_state_valid = false;
+static WaveX::Comm::BrowseResponseOutbox s_browse_response;
 // Keep FIL off the stack and aligned; place in default BSS (cache managed by driver).
 alignas(32) static FIL s_metadata_file;
 // Metadata read buffer: 4KB, aligned, in normal BSS (non-DTCM) so cache maintenance works.
@@ -290,7 +292,7 @@ void ProcessBrowseRequest(const char* path,
     // entries (50 x 65 B + 5 > 2048) - only the callers' max_entries=20
     // kept it safe.
     static FileEntry entries[50];
-    static constexpr size_t kBrowsePayloadCapacity = 2048;
+    static constexpr size_t kBrowsePayloadCapacity = BrowseResponseOutbox::kCapacity;
     static constexpr size_t kMaxBrowseEntries =
         (kBrowsePayloadCapacity - sizeof(uint32_t) - sizeof(uint8_t)) /
         sizeof(WaveX::Protocol::FileEntryWire);  // = 31 today
@@ -299,17 +301,26 @@ void ProcessBrowseRequest(const char* path,
 
     size_t total_count = 0;
     size_t entries_written = 0;
+    // A new request supersedes an older unsent page, even if listing fails.
+    uint8_t* browse_payload = s_browse_response.Begin();
 
     // Get directory listing from FatFS
     // OPTIMIZATION: If this is the first page (start_index == 0), get all entries first for
     // caching, then extract the paginated subset. This avoids calling ListDir twice.
-    static FileEntry all_entries[50];  // static: see staging note above
     size_t all_entries_count = 0;
 
     if (start_index == 0) {
-        // Get all entries for caching (max 50)
+        // Cache the complete bounded listing so late-page audition indices resolve.
+        s_directory_state_valid = false;
+        s_current_file_count = 0;
         uint32_t listdir_start_ms = daisy::System::GetNow();
-        bool success = ListDir(path, all_entries, 50, total_count, 0, all_entries_count, filter);
+        bool success = ListDir(path,
+                               s_current_file_entries,
+                               BROWSE_DIRECTORY_ENTRY_LIMIT,
+                               total_count,
+                               0,
+                               all_entries_count,
+                               filter);
         uint32_t listdir_end_ms = daisy::System::GetNow();
         uint32_t listdir_duration_ms = listdir_end_ms - listdir_start_ms;
 
@@ -324,11 +335,7 @@ void ProcessBrowseRequest(const char* path,
             return;
         }
 
-        // Cache all entries (up to cache limit)
-        s_current_file_count = (all_entries_count > 50) ? 50 : all_entries_count;
-        for (size_t i = 0; i < s_current_file_count; i++) {
-            s_current_file_entries[i] = all_entries[i];
-        }
+        s_current_file_count = all_entries_count;
         s_directory_state_valid = true;
 
         // Extract paginated subset for response
@@ -336,7 +343,7 @@ void ProcessBrowseRequest(const char* path,
         size_t end_index =
             (all_entries_count < actual_max_entries) ? all_entries_count : actual_max_entries;
         for (size_t i = 0; i < end_index; i++) {
-            entries[entries_written++] = all_entries[i];
+            entries[entries_written++] = s_current_file_entries[i];
         }
 
         if (WaveX::Comm::s_hw) {
@@ -381,7 +388,6 @@ void ProcessBrowseRequest(const char* path,
     }
 
     // Create browse response payload: total_count (4 bytes) + n_entries (1 byte) + entries
-    static uint8_t browse_payload[kBrowsePayloadCapacity];  // static: see staging note above
     size_t payload_size = 0;
 
     // Copy total_count
@@ -408,10 +414,17 @@ void ProcessBrowseRequest(const char* path,
                     (uint32_t)payload_size);
 
     // In range: payload_size <= kBrowsePayloadCapacity (2048) by construction.
-    int send_result = LinkSend(
-        WaveX::Protocol::MSG_BROWSE_RESP, browse_payload, static_cast<uint16_t>(payload_size));
-    if (send_result < 0) {
-        WAVEX_LOG_DAISY(STORAGE, "Failed to send browse response (queue full?)");
+    s_browse_response.Commit(payload_size);
+    PumpBrowseResponse();
+}
+
+void PumpBrowseResponse() {
+    // Do not block, dispatch recursively, or inflate overflow counters while
+    // the queue drains. Main calls this before background status producers.
+    if (LinkTxIdle()) {
+        s_browse_response.Pump([](const uint8_t* payload, uint16_t size) {
+            return LinkSend(MSG_BROWSE_RESP, payload, size);
+        });
     }
 }
 
@@ -436,8 +449,11 @@ void NotifyStorageLost() {
 
     // An empty browse response: total_count 0, n 0. Same shape the browser
     // already parses, so it clears the list through its normal path.
-    uint8_t empty_browse[sizeof(uint32_t) + sizeof(uint8_t)] = {0, 0, 0, 0, 0};
-    WaveX::Comm::LinkSend(MSG_BROWSE_RESP, empty_browse, sizeof(empty_browse));
+    auto* empty_browse = s_browse_response.Begin();
+    constexpr size_t empty_size = sizeof(uint32_t) + sizeof(uint8_t);
+    memset(empty_browse, 0, empty_size);
+    s_browse_response.Commit(empty_size);
+    PumpBrowseResponse();
 
     StorageStatusMessage status(0);
     WaveX::Comm::LinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));

@@ -2033,19 +2033,20 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     if (s_sample_memory_available) {
         s_pool = new (s_pool_bytes) SamplePool(
             reinterpret_cast<SamplePool::Record*>(WaveX::SdramLayout::kSampleRegistryBase));
-        s_project_session.Get().emplace(
-            s_sample_mem_mgr,
-            *s_pool,
-            s_pattern_exchange_storage.Get(),
-            s_mixer_controls,
-            s_sample_io,
-            sizeof(s_sample_io),
-            Storage::ProjectSession::Boundary{StopProjectVoices, PublishProject});
         s_bank_session.Get().emplace(s_sample_mem_mgr,
                                      *s_pool,
                                      s_sample_io,
                                      sizeof(s_sample_io),
                                      Storage::BankSession::Boundary{StopBankTrack, PublishProject});
+        s_project_session.Get().emplace(
+            s_sample_mem_mgr,
+            *s_pool,
+            *s_bank_session.Get(),
+            s_pattern_exchange_storage.Get(),
+            s_mixer_controls,
+            s_sample_io,
+            sizeof(s_sample_io),
+            Storage::ProjectSession::Boundary{StopProjectVoices, PublishProject});
         void* memory = nullptr;
         if (s_sample_mem_mgr.alloc(sizeof(SequencerVoiceState), &s_seq_voice_storage) &&
             s_sample_mem_mgr.ptr(s_seq_voice_storage, &memory)) {

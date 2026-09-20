@@ -124,6 +124,7 @@ UiRequest s_req;
 // Common navigation/softkey fields plus the full Instrument state can
 // exceed 640 bytes. Keep this mailbox static, outside the UI task stack.
 char s_reply[1024];
+std::atomic<uint32_t> s_reply_dropped{0};
 
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
 // UI-domain counters: no logging/allocation in display callbacks. Count only
@@ -250,16 +251,43 @@ bool post_input(wavex_ui::InputType type, uint8_t source, int16_t delta) {
     return wavex_ui::InputDispatcher::instance().post(evt);
 }
 
+void write_reply(const char* reply) {
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    // Console-task only. Enqueue a complete reply through the installed driver:
+    // the VFS printf path can silently discard individual bytes on TX timeout.
+    // Keep stdout writers out until this one bounded enqueue finishes. No UI
+    // lock is held here and a failed enqueue never re-executes the command.
+    char line[sizeof(s_reply) + 2];
+    const size_t len = std::strlen(reply);
+    if (len >= sizeof(s_reply)) {
+        s_reply_dropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    line[0] = '\n';  // Delimit from an incomplete asynchronous log chunk.
+    std::memcpy(line + 1, reply, len);
+    line[len + 1] = '\n';
+    flockfile(stdout);
+    fflush(stdout);
+    const int sent = usb_serial_jtag_write_bytes(line, len + 2, pdMS_TO_TICKS(100));
+    funlockfile(stdout);
+    if (sent != static_cast<int>(len + 2))
+        s_reply_dropped.fetch_add(1, std::memory_order_relaxed);
+#else
+    if (printf("%s\n", reply) < 0)
+        s_reply_dropped.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
 void reply_ok(int32_t seq) {
     char out[64];
     FormatOk(seq, out, sizeof(out));
-    printf("%s\n", out);
+    write_reply(out);
 }
 
 void reply_err(int32_t seq, const char* reason) {
     char out[96];
     FormatErr(seq, reason, out, sizeof(out));
-    printf("%s\n", out);
+    write_reply(out);
 }
 
 // Hands a verb to the UI task and waits for its reply. The console task is
@@ -280,7 +308,7 @@ void run_on_ui_task(const Command& c) {
     // start work (a directory listing) but replies before it completes.
     for (int waited = 0; waited < 3000; waited += 5) {
         if (s_req_state.load(std::memory_order_acquire) == ReqState::Done) {
-            printf("%s\n", s_reply);
+            write_reply(s_reply);
             s_req_state.store(ReqState::Idle, std::memory_order_release);
             return;
         }
@@ -461,7 +489,7 @@ void dispatch(const Command& c) {
             len = AppendKv(
                 out, sizeof(out), len, port == wavex_midi::Port::Din ? "din" : "usb", value);
         }
-        printf("%s\n", out);
+        write_reply(out);
     } else if (!strcmp(c.verb, "STATE") || !strcmp(c.verb, "PAGE") || !strcmp(c.verb, "TRACK") ||
                !strcmp(c.verb, "HOME") || !strcmp(c.verb, "LEDS") || !strcmp(c.verb, "PANEL")
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
@@ -534,6 +562,11 @@ void serve_state(int32_t seq) {
     size_t len = FormatOk(seq, s_reply, sizeof(s_reply));
     len = AppendKvText(s_reply, sizeof(s_reply), len, "page", page ? page->name() : "-");
     len = AppendKvInt(s_reply, sizeof(s_reply), len, "depth", static_cast<long>(nav.depth()));
+    len = AppendKvInt(s_reply,
+                      sizeof(s_reply),
+                      len,
+                      "reply_dropped",
+                      s_reply_dropped.load(std::memory_order_relaxed));
     len = AppendKvInt(s_reply, sizeof(s_reply), len, "shift", nav.isShifted() ? 1 : 0);
     len = AppendKv(
         s_reply, sizeof(s_reply), len, "root", wavex_ui::rootGroupName(nav.activeRootGroup()));

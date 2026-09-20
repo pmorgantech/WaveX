@@ -52,12 +52,12 @@ bool ListDir(const char* path,
     // ListDir is main-loop-only and non-reentrant. Directories with more
     // than 256 qualifying entries are silently truncated (pre-existing
     // limit; the roadmap's 500-entry browse target needs a redesign here).
-    static FileEntry all_entries[256];
+    static FileEntry all_entries[Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT];
     size_t all_count = 0;
 
     // Manually insert ".." entry at the beginning if not at root
     // FatFS may not always return ".." entries reliably
-    if (!is_root && all_count < 256) {
+    if (!is_root && all_count < Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT) {
         FileEntry& e = all_entries[all_count++];
         e.is_dir = 1;
         e.size_bytes = 0u;
@@ -96,7 +96,7 @@ bool ListDir(const char* path,
 
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
         if (is_dir || Protocol::BrowseFileMatches(name, filter)) {
-            if (all_count < 256) {  // Prevent buffer overflow
+            if (all_count < Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT) {  // Prevent buffer overflow
                 FileEntry& e = all_entries[all_count++];
                 e.is_dir = is_dir ? 1 : 0;
                 e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
@@ -109,7 +109,7 @@ bool ListDir(const char* path,
         // discarded, but each one still does real SD I/O on the main loop
         // (shared with the WAV streaming ring buffer). Stop scanning here
         // instead of walking the rest of a large directory.
-        if (all_count >= 256)
+        if (all_count >= Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT)
             break;
     }
     f_closedir(&dir);

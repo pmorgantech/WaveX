@@ -16,6 +16,7 @@ using Sequencer::Project;
 using Exchange = Sequencer::PatternExchange;
 ProjectSession::ProjectSession(SampleMemMgr& memory,
                                SamplePool& pool,
+                               BankSession& bank,
                                Exchange& exchange,
                                MixerControlHandoff& mixer,
                                uint8_t* io,
@@ -23,6 +24,7 @@ ProjectSession::ProjectSession(SampleMemMgr& memory,
                                Boundary boundary)
     : memory_(memory),
       pool_(pool),
+      bank_(bank),
       exchange_(exchange),
       mixer_(mixer),
       io_(io),
@@ -82,7 +84,7 @@ bool ProjectSession::Request(const ProjectOpMessage& request, bool external_busy
     if (request.op == PROJECT_GET || request.request_id == status_.active_request_id ||
         request.request_id == status_.completed_request_id)
         return false;
-    if (Busy() || external_busy || exchange_.state() != Exchange::State::Idle) {
+    if (Busy() || bank_.Busy() || external_busy || exchange_.state() != Exchange::State::Idle) {
         status_.completed_request_id = request.request_id;
         status_.completed_op = request.op;
         status_.error = PROJECT_BUSY;
@@ -188,6 +190,7 @@ void ProjectSession::CaptureSession() {
     scratch_->quantize = settings.quantize != 0;
     exchange_.Retire();
     Protocol::detail::CopyWireString(scratch_->name, sizeof(scratch_->name), request_.name);
+    bank_.CaptureProjectPath(scratch_->bank_path);
     const auto& mix = mixer_.Pending();
     scratch_->master_gain = mix.master_gain;
     std::snprintf(directory_, sizeof(directory_), "0:/wavex/projects/%s", request_.name);
@@ -416,6 +419,10 @@ void ProjectSession::Pump() {
                 break;
             }
             candidate_ = new (bytes) Candidate();
+            if (!BankSession::ProjectBankName(scratch_->bank_path, candidate_->bank_name)) {
+                Finish(PROJECT_DEPENDENCY);
+                break;
+            }
             pool_stage_.emplace(pool_, candidate_->pool, memory_);
             if (!pool_stage_->Begin() || !SfzLoader::BeginProjectLoad(candidate_->tracks)) {
                 Finish(PROJECT_BUSY);
@@ -520,6 +527,7 @@ void ProjectSession::Pump() {
             // until the callback installs the Pattern/settings and acknowledges.
             pool_stage_->Commit();
             SfzLoader::FinishProjectLoad(true);
+            bank_.RestoreProject(candidate_->bank_name, candidate_->bank);
             MixerControlHandoff::Controls mix;
             mix.master_gain = scratch_->master_gain;
             for (uint8_t t = 0; t < kNumTracks; ++t)

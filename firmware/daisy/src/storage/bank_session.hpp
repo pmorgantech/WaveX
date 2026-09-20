@@ -28,6 +28,13 @@ class BankSession {
     const Protocol::BankStatusMessage& Status() const { return status_; }
 
    private:
+    friend class ProjectSession;
+    // Project transactions hold the foreground storage lease. Capture uses the
+    // file identity, not the embedded display name. Restore cannot perform I/O
+    // or fail: call only with a validated index/name at the Project commit.
+    void CaptureProjectPath(char (&path)[Protocol::BROWSE_PATH_MAX]) const;
+    static bool ProjectBankName(const char* path, char (&name)[24]);
+    void RestoreProject(const char* name, const BankFile::Index& index);
     struct Candidate {
         Wxi::InstrumentFile document;
         AudioEngine::Tracks tracks;

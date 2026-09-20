@@ -296,9 +296,12 @@
 #define WAVEX_DAISY_SD_CARD_DETECT_PIN 15
 #endif
 
-// SD Card bus width (Daisy only) - 1 for 1-bit mode, 4 for 4-bit mode
+// SD Card bus width (Daisy only) - 1 for 1-bit mode, 4 for 4-bit mode.
+// The 2026-09-18 card-format bench failed writes in 4-bit mode even at
+// 12.5 MHz. Use the verified 1-bit fallback until the card/wiring path passes
+// a 4-bit write soak; read-only mount negotiation cannot prove write stability.
 #ifndef WAVEX_DAISY_SD_CARD_BUS_WIDTH
-#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 4
+#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 1
 #endif
 
 /**
@@ -331,16 +334,18 @@
  * failure under load steps it down again at runtime
  * (SdSdio::DowngradeSpeed()).
  *
- * Default to 2 (STANDARD): sustained pattern writes at 50 MHz produced
- * data-CRC failures and command timeouts on the bench even after successful
- * mount/read probes. Faster settings require read AND write soak validation.
+ * Default to 1 (MEDIUM_SLOW), with the 1-bit bus fallback above: the
+ * 2026-09-18 format/folder-creation bench failed at 25 MHz and 12.5 MHz in
+ * 4-bit mode, then passed at 12.5 MHz in 1-bit mode. Repeated Pattern saves
+ * and reboot/reload also passed. Streaming throughput/soak must be remeasured;
+ * faster/wider settings require read AND write soak validation.
  * Watch for "SD: negotiated DOWN" (fell back at boot)
  * or "SD: downgrading" (fell back later, under load) - either means the card
  * or wiring is not holding the configured rate, and the line names the rate
  * it settled on.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
-#define WAVEX_DAISY_SD_CARD_SPEED 2
+#define WAVEX_DAISY_SD_CARD_SPEED 1
 #endif
 
 // External Flash (Daisy only)

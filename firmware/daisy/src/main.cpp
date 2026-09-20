@@ -845,6 +845,7 @@ int main(void) {
         uint32_t current_time = System::GetNow();
 
         WaveX::Comm::LinkProcess();
+        WaveX::Comm::PumpBrowseResponse();
         WaveX::Storage::CardService::Pump();
 
         // Push at most one USB packet of buffered log output. Non-blocking:

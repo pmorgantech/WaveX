@@ -27,9 +27,8 @@ using WaveX::Comm::PacketRouter;
 constexpr char TAG[] = "esp_uart_link";
 
 constexpr size_t RX_TEMP_BUFFER = 256;
-// Sized to absorb a full driver-ring drain (see DRIVER_RX_RING below) plus
-// leftover partial frames, so drain_driver_rx() can't overflow it in the
-// common case (overflow is still handled - oldest bytes dropped, logged).
+// Frames are consumed between driver-ring chunks, leaving at most one partial
+// frame plus RX_TEMP_BUFFER bytes. Overflow remains counted for corrupt input.
 constexpr size_t RX_PENDING_CAPACITY = WAVEX_ESP_UART_INTER_BUF_SIZE * 4;
 constexpr size_t MSG_QUEUE_SIZE = 8;
 
@@ -232,6 +231,9 @@ void drain_driver_rx(uint8_t* temp) {
     int read;
     while ((read = uart_read_bytes(WAVEX_ESP_UART_INTER_NUM, temp, RX_TEMP_BUFFER, 0)) > 0) {
         append_rx_data(temp, static_cast<size_t>(read));
+        // A full driver ring plus a partial frame exceeds scanner capacity.
+        // Consume incrementally so a backlog cannot discard valid old bytes.
+        process_rx_frames();
     }
 }
 
@@ -276,7 +278,6 @@ void uart_task(void* /*param*/) {
                         break;
                     }
                     case UART_FIFO_OVF:
-                    case UART_BUFFER_FULL:
 #if WAVEX_LINK_LATENCY_PROFILE_ENABLED
                         ++rx_overflows;
 #endif
@@ -287,6 +288,13 @@ void uart_task(void* /*param*/) {
                         s_tx_wake_pending.store(false);
                         s_scanner.Clear();
                         s_stats.queue_overflows++;
+                        break;
+                    case UART_BUFFER_FULL:
+                        // IDF retains the last FIFO chunk when its ring fills.
+                        // Reading releases that stash and re-enables RX; flushing
+                        // here used to discard otherwise recoverable frames.
+                        drain_driver_rx(temp);
+                        process_rx_frames();
                         break;
                     case UART_BREAK:
                         UART_LOGW(TAG, "UART break detected");
@@ -454,6 +462,16 @@ esp_err_t uart_link_init(void) {
     }
 
     s_uart_driver_installed = true;
+    // The default 120-byte threshold leaves only eight bytes (40 us at
+    // 2 Mbaud) before the 128-byte FIFO overflows. Service half-full instead;
+    // the IDF ISR is kept in IRAM by sdkconfig.defaults during flash writes.
+    err = uart_set_rx_full_threshold(WAVEX_ESP_UART_INTER_NUM, 64);
+    if (err != ESP_OK) {
+        uart_driver_delete(WAVEX_ESP_UART_INTER_NUM);
+        s_uart_driver_installed = false;
+        s_uart_event_queue = nullptr;
+        return err;
+    }
     s_uart_mutex = xSemaphoreCreateMutex();
     if (!s_uart_mutex) {
         UART_LOGE(TAG, "Failed to create UART mutex");

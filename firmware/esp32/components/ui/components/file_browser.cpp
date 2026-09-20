@@ -1016,8 +1016,8 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
 
         // The wire field is uint8_t, so pagination cannot address past entry
         // 255. Stop rather than truncate: wrapping would silently re-request
-        // an earlier page and loop over it forever. Unreachable at the current
-        // 50-entry cap, but the cap is the only thing preventing it.
+        // an earlier page and loop over it forever. Keep this guard even when
+        // a caller configures a larger capacity than the supported listing.
         if (next_start > UINT8_MAX) {
             ESP_LOGW(TAG,
                      "Listing exceeds the %d entries the browse protocol can address; "
@@ -1058,9 +1058,10 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
             wavex_ui_mark_content_changed();
         }
 
-        if (browser->current_page > 0 && browser->dir_changed_cb) {
-            browser->dir_changed_cb(browser->current_path, browser->user_data);
-        }
+        // Appending the final page is not directory navigation. Re-notifying
+        // UISampleBrowser here reset its selected file to ".." after a user
+        // had already selected a first-page sample. The UI rebuild above
+        // preserves selection and updates the listing without that reset.
     }
 }
 

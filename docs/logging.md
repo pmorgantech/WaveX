@@ -90,7 +90,12 @@ by the console reader, but requires explicit host port overrides.
 
 Debug builds install ESP-IDF's interrupt-driven USB driver with a 4 KiB TX
 queue and 1 KiB RX queue and route stdout through its VFS. Commands keep their
-existing dedicated task and UI mailbox. Before that initialization (and in
+existing dedicated task and UI mailbox. Acknowledged debug replies enqueue
+one complete delimited line directly through that driver with a 100 ms enqueue
+timeout, serialized with stdout writers. They bypass the VFS character writer's
+best-effort byte drops. `STATE reply_dropped` counts failed reply enqueues;
+successful enqueue is not proof of host receipt. A lost acknowledgement never
+authorizes replaying a mutation. Before that initialization (and in
 release builds), ESP-IDF's default USB console implementation handles output.
 Use the Make flash/monitor targets: they pause the managed ESP32 logger and
 resume it, without rotating its file, after success or failure. Custom loggers

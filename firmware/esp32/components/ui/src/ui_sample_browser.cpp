@@ -238,7 +238,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
-    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .filter = instruments_ ? WaveX::Protocol::BrowseFilter::Instruments : WaveX::Protocol::BrowseFilter::Samples, .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
+    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .filter = instruments_ ? WaveX::Protocol::BrowseFilter::Instruments : WaveX::Protocol::BrowseFilter::Samples, .max_entries = WaveX::Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 

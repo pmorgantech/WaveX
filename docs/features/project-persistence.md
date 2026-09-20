@@ -132,7 +132,8 @@ available. Streaming audition stops to give the file job the card. A failed
 Load leaves the previous session intact with playback stopped.
 
 Save captures the callback-owned Pattern and transport settings, accepted
-mixer targets and all foreground Track settings. It exports quiet WXI copies
+mixer targets, all foreground Track settings and the selected Bank file path.
+It exports quiet WXI copies
 into a newly owned `wavex/projects/<name>/` directory and snapshots edits for
 every Track-referenced sample. WAV audio stays at its existing card path;
 this is not a self-contained audio collection or a PCM render. Free-space
@@ -148,11 +149,17 @@ File dimensions must match borrowed PCM as well as saved sample edits.
 Missing dependencies, malformed metadata, insufficient memory or a failed
 voice-stop acknowledgement abort before live replacement. The callback first
 acknowledges transport pause without changing its settings. After all staging
-succeeds, the owner commits the Pool/Tracks, publishes voice maps and mixer
+succeeds, the owner commits the Pool/Tracks and selected Bank index, publishes
+voice maps and mixer
 settings, and awaits callback installation of the active Pattern and transport
 settings before reporting completion. New uses the same stopped boundary with
 empty Tracks/Patterns/Songs and default settings. Explicitly pinned Pool
 samples remain resident; unreferenced, unpinned old PCM is retired.
+
+Bank restoration follows the [Bank policy](bank-persistence.md#project-restoration-and-editing-policy):
+the saved filename identifies the Bank, only its index is restored, and Bank-only
+samples are not preloaded. Missing/invalid Bank dependencies preserve the entire
+old session. New and empty Bank references clear the selection on commit.
 
 Solo is transient and cleared on successful Load/New; manual mutes are saved.
 The frontend invalidates sample metadata caches at completion, since a retained
@@ -169,9 +176,9 @@ selection captures outgoing edits before installing another Pattern.
   not establish a power-loss guarantee or a callback performance improvement.
 - Validate Song editing/playback on hardware ([HV-009](../hardware-validation.md#hv-009--song-arrangement-and-playback))
   after defining the roadmap's Daisy-clock transition and edit rules.
-- Bank selection/Program Change playback, portable audio collection and missing
-  asset repair follow their own roadmap designs. Project recall validates and
-  retains the Bank reference; it does not add Bank runtime execution.
+- Complete selected-Bank restoration and Program Change hardware checks in
+  [HV-016](../hardware-validation.md#hv-016--bank-sd-transactions). Portable audio
+  collection and missing asset repair follow their own roadmap designs.
 
 ## Validation
 
