@@ -914,3 +914,20 @@ TEST_F(PacketRouterTest, AllocationSnapshotsRejectTruncationAndInvalidPolicies) 
     router_->route_uart_message(MSG_ALLOC_SYNC, bytes, sizeof(state), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().allocation_calls, 2);
 }
+
+TEST_F(PacketRouterTest, MelodicSnapshotRejectsTruncationAndInvalidNotes) {
+    SeqNotesMessage m;
+    m.request_id = 1;
+    m.epoch = 2;
+    m.notes[0] = {0, 127, 0};
+    auto* bytes = reinterpret_cast<uint8_t*>(&m);
+    for (size_t n = 0; n < sizeof(m); ++n)
+        router_->route_uart_message(MSG_SEQ_NOTES, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_notes_calls, 0);
+    m.notes[0].velocity = 128;
+    router_->route_uart_message(MSG_SEQ_NOTES, bytes, sizeof(m), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_notes_calls, 0);
+    m.notes[0].velocity = 127;
+    router_->route_uart_message(MSG_SEQ_NOTES, bytes, sizeof(m), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_notes_calls, 1);
+}

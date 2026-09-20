@@ -69,7 +69,7 @@ repeat, booleans and finite numeric ranges are checked, and Song references
 must name populated Pattern slots before the decoder returns Done.
 
 The caller must own a private transaction workspace. The complete Project
-occupies roughly 3.5 MiB: never construct it on either MCU's stack or make it
+occupies roughly 5.3 MiB: never construct it on either MCU's stack or make it
 callback-visible. The device reserves retained and candidate documents through the sample
 allocator; they count against available sample memory. The retained document
 keeps inactive Pattern and Song slots between transactions. Candidate storage
@@ -206,3 +206,13 @@ replacement or recovery result is implied.
 See [roadmap.md](../roadmap.md), [sequencer.md](sequencer.md) and
 [track-and-patch-model.md](track-and-patch-model.md) for implementation order
 and the full target ownership model.
+
+### Melodic Pattern compatibility
+
+Project schema 1.3 writes four note/velocity/gate lanes in each Pattern step
+and a melodic bit in each Pattern-row flag. Older Pattern chunks decode their
+20-byte records as drum rows with empty lanes. Track allocation settings retain
+the schema 1.2 encoding. The file-size limit is 8 MiB; full-capacity Project
+round trips and per-Advance I/O bounds are host-tested. Two live transaction
+buffers can consume about 10.6 MiB of the shared SDRAM arena; allocation failure
+must preserve the current session rather than evicting its dependencies.

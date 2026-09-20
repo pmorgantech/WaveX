@@ -8,8 +8,7 @@
 //
 // A kit is a drum-mode Instrument. Each step selects one MIDI note (the
 // default 60..75 pad map is an Instrument convention, not a scheduler rule).
-// Chords, explicit gate lengths, note-off scheduling and live record remain
-// the separate Phase 2.5 melodic StepNotes extension.
+// Melodic rows use four explicit note lanes; drum rows retain their single hit.
 
 #include <cstdint>
 
@@ -69,6 +68,13 @@ struct ParamLock {
     uint16_t value = 0;
 };
 
+constexpr uint8_t kNoteLanes = 4;
+struct NoteLane {
+    uint8_t note = 60;
+    uint8_t velocity = 0;      // zero is empty; MIDI note zero remains valid
+    uint16_t gate_ticks = 24;  // 0 holds until this lane retriggers or transport stops
+};
+
 struct Step {
     bool on = false;
     uint8_t velocity = 100;     // 0-127
@@ -84,10 +90,12 @@ struct Step {
     uint8_t retrig_count = 0;
     uint8_t retrig_rate_ticks = 0;
     ParamLock param_locks[kMaxParamLocks];
+    NoteLane notes[kNoteLanes];
 };
 
 struct TrackSteps {
     bool enabled = true;  // mute
+    bool melodic = false;
     Step steps[kMaxSteps];
 };
 
@@ -109,6 +117,9 @@ struct Pattern {
 // SequencerScheduler::Start(), suitable for handing directly to a voice
 // trigger queue alongside the current block's frame range.
 struct TriggerEvent {
+    double tick = 0;
+    uint16_t gate_ticks = 0;
+    uint8_t lane = 0xff;  // 0xff is a legacy drum hit
     uint64_t frame = 0;
     uint8_t track = 0;
     uint8_t step = 0;

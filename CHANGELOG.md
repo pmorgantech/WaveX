@@ -13,6 +13,20 @@ versioning and release process.
 
 ### Added
 
+- Added melodic rows with four note lanes, musical tick gates including
+  explicit holds, callback-clock step/live capture with Off, step and
+  half-step quantization, held-pitch erase and Stop cleanup. The confirmed
+  Step Notes UI edits lane note, velocity and gate values, cycles all capture
+  modes and gives transient confirmed-step feedback for recording and erase;
+  queued pre-rebind presses are excluded from recording, and manual lane
+  replacement invalidates held-capture gate ownership. Pattern 1.1 and
+  Project 1.3 files retain the data while remaining backward-compatible with
+  older files.
+
+- Added chronological sequencer rendering so a later-frame steal cannot erase
+  audio rendered earlier in the callback, plus `--melodic` bench coverage for
+  four-lane chords with overlapping gates. Hardware acceptance remains open.
+
 - Added saved Instrument/Kit Poly/Mono, Auto/1–8-group and Own only/Own
   first/Any allocation policies, per-Track inheritance and overrides, and
   confirmed polyphony-page Apply/Revert controls. WXI, Bank and Project saves
@@ -49,7 +63,7 @@ versioning and release process.
   layered/stereo reservations, Track-instance ownership, local note caps and
   Own only / Own first / Any victim selection with side-effect-free refusal.
   The live allocator now uses this planner with Poly / Auto / Any defaults;
-  persistence, controls and full audio/DWT acceptance remain pending.
+  full audio/DWT acceptance remains open.
 
 - Project Save copy captures the selected Bank; Load restores its file identity
   and slot index with the completed Project transaction. New and Projects with

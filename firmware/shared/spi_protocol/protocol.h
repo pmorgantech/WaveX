@@ -150,6 +150,7 @@ enum MessageType : uint8_t {
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/inter-mcu-protocol.md - do not assign outside this block.
     MSG_SEQ_TRANSPORT = 0x50,     // E->D: play/stop/continue, tempo, clock source, input mode
+    MSG_SEQ_NOTES = 0x88,         // E->D single-step request / D->E melodic lane snapshot
     MSG_SEQ_PATTERN_OP = 0x51,    // E->D: small idempotent pattern edits (step/track/pattern)
     MSG_SEQ_PATTERN_SYNC = 0x52,  // E->D page request / D->E page snapshot
     MSG_SEQ_PLAYHEAD = 0x53,      // D->E: playhead/step/sync feedback (coalesced)
@@ -1999,6 +2000,9 @@ enum SeqPatternOpCode : uint8_t {
     // Atomic replacement: arg_s16 slot 0..3, arg_u8 parameter (0 clears),
     // arg_u16 value. Duplicate parameters in another slot are rejected.
     SEQ_OP_SET_PARAM_LOCK_SLOT = 13,
+    SEQ_OP_SET_NOTE_LANE = 14,  // arg_u8 lane; arg_u16 note | velocity<<8; arg_s16 gate ticks
+    SEQ_OP_SET_MELODIC = 15,    // arg_u8 0 drum / 1 melodic; preserves both representations
+    SEQ_OP_RECORD_TARGET = 16,  // arm the selected track and step; not Pattern data
 };
 struct SeqPatternOpMessage {
     uint8_t op;      // SeqPatternOpCode
@@ -2095,8 +2099,8 @@ struct SeqSlotPageMessage {
     uint8_t read_only = 0;  // frozen Song playback
 } __attribute__((packed));
 inline bool IsValidSeqSlotEdit(const SeqSlotEditMessage& m) {
-    return m.epoch && m.pattern < 128 && m.edit.op <= SEQ_OP_SET_PARAM_LOCK_SLOT &&
-           m.edit.track < 16 && m.edit.step < 64;
+    return m.epoch && m.pattern < 128 && m.edit.op <= SEQ_OP_RECORD_TARGET && m.edit.track < 16 &&
+           m.edit.step < 64;
 }
 inline bool IsValidSeqSlotPage(const SeqSlotPageMessage& m) {
     return m.read_only <= 1 && m.epoch && m.pattern < 128 && m.page.request_id &&
@@ -2105,6 +2109,36 @@ inline bool IsValidSeqSlotPage(const SeqSlotPageMessage& m) {
 }
 static_assert(sizeof(SeqSlotEditMessage) == 13 && sizeof(SeqSlotPageMessage) == 342,
               "Scoped Pattern wire sizes");
+
+// Single-step read avoids enlarging the 342-byte grid page beyond UART capacity.
+// Requests reuse SeqPatternRequestMessage; first_step is unaligned here.
+struct SeqNoteLaneState {
+    uint8_t note = 60, velocity = 0;
+    uint16_t gate_ticks = 24;
+} __attribute__((packed));
+struct SeqNotesMessage {
+    uint32_t request_id = 0, epoch = 0, revision = 0;
+    uint8_t pattern = 0, track = 0, step = 0;
+    uint8_t melodic = 0, read_only = 0, input_mode = 0, quantize = 0;
+    uint8_t clock_source = 0, playing = 0, record_step = 0;
+    uint16_t tempo_bpm_x100 = 12000;
+    SeqNoteLaneState notes[4]{};
+} __attribute__((packed));
+inline bool IsValidSeqNotesRequest(const SeqPatternRequestMessage& m) {
+    return m.request_id && m.track < 16 && m.first_step < 64 && !m.reserved;
+}
+inline bool IsValidSeqNotes(const SeqNotesMessage& m) {
+    if (!m.request_id || !m.epoch || m.pattern >= 128 || m.track >= 16 || m.step >= 64 ||
+        m.melodic > 1 || m.read_only > 1 || m.input_mode > SEQ_INPUT_LIVE_ERASE || m.quantize > 2 ||
+        m.clock_source > 1 || m.playing > 1 || m.record_step >= 64 || m.tempo_bpm_x100 < 2000 ||
+        m.tempo_bpm_x100 > 30000)
+        return false;
+    for (const auto& n: m.notes)
+        if (n.note > 127 || n.velocity > 127 || n.gate_ticks > 32767)
+            return false;
+    return true;
+}
+static_assert(sizeof(SeqNotesMessage) == 40, "melodic step wire size");
 
 // MSG_SEQ_PLAYHEAD (D->E): coalesced playhead + sync feedback for the UI.
 // measured_bpm_x100 mirrors SeqTransportMessage's tempo encoding.
@@ -3226,6 +3260,8 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_META_PAGE";
         case MSG_SEQ_TRANSPORT:
             return "SEQ_TRANSPORT";
+        case MSG_SEQ_NOTES:
+            return "SEQ_NOTES";
         case MSG_SEQ_PATTERN_OP:
             return "SEQ_PATTERN_OP";
         case MSG_SEQ_PATTERN_SYNC:

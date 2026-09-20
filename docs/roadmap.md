@@ -8,10 +8,11 @@ Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-**Next software work:** Melodic sequencing, then the remaining Phase 2.5 tasks
-in order while panel wiring is pending. Same-frame layered admission is
-implemented and its reproduced 16-Track deadline failure passes the extended pressure check. Residual capacity
-and physical gates remain open below.
+**Next software work:** The remaining Phase 2.5 tasks below, while panel wiring
+is pending. MIDI admission identity, saved polyphony/held-key controls and
+melodic implementation are complete; their remaining physical checks stay in
+the validation checklist. Callback capacity remains open, including the new
+melodic pressure results below.
 
 ## Contents
 
@@ -47,7 +48,8 @@ that region without a UI freeze.
 3. Complete panel integration and MIDI synchronization below.
 4. Complete the callback capacity and one-hour soak requirements below.
 
-Melodic notes and live recording follow in Phase 2.5.
+Melodic notes and live recording are implemented; Phase 2.5 retains their
+remaining hardware acceptance checks.
 
 ### 2.C — Callback capacity checkpoint
 
@@ -112,8 +114,16 @@ subject to the callback checkpoint:
    screen; arbitrary overload remains bounded, not guaranteed lossless.
    Per-pad policy refinements remain proposed. See the
    [allocation model](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
-2. **Melodic sequencing.** Resolve the [note-length decision](#note-lengths-and-one-shot-playback--decision-pending),
-   then add chord/tie lanes, step/live recording and erase.
+2. **Melodic validation (HV-024).** Four lanes, musical gate lengths/holds,
+   step/live recording, erase, editor and versioned persistence are implemented.
+   Complete the [melodic hardware gate](hardware-validation.md#hv-024--melodic-sequencing),
+   including physical MIDI, listening and the recorded progression soak.
+   **Capacity deferred:** short dual-oscillator/ladder/stream/file screens reached
+   77.1698% peak for eight melodic notes on the final source (44.1541% average),
+   and an earlier 94.6304% peak for 32-note overload.
+   Both exceed the current continuation threshold; zero sampled stream
+   underruns does not close this callback gate. See the
+   [DWT evidence](callback-performance-log.md#melodic-chord-pressure--2026-09-20).
 3. **Remaining modulation.** Add MIDI CC/channel-pressure forwarding,
    additional destinations/UI and live lock recording. Analog/group lock
    lifetimes need a separate ownership design.
@@ -238,14 +248,15 @@ Finish reference consistency checks against live transport/parameter behavior
 across platform and feature guides. Preserve the distinction between host
 coverage and hardware evidence (principles 13 and 15).
 
-### Note lengths and one-shot playback — decision pending
+### Melodic follow-ups
 
-Revisit the deferred [melodic sequencing draft](features/melodic-sequencing.md)
-before implementing gates/ties. Decide sequence duration versus one-shot/gated
-Instrument/Zone playback, release tails, overlapping notes, chord lanes, tempo
-changes and transport-stop cleanup. Note-off scheduling belongs on the Daisy
-audio clock with bounded storage and stable note identity. Fixed-length one-shot
-regions used in benchmarks are not acceptance evidence for gates/ties.
+The [as-built melodic contract](features/melodic-sequencing.md) resolves gate,
+one-shot, overlap, tempo and Stop ownership. Portamento/true legato, per-lane
+probability/microtiming, scale-constrained pitch editing and external melodic
+MIDI output remain deferred. Scale snapping specifically depends on the
+unimplemented Phase 5 tuning/root/mask model; current note entry is chromatic.
+Hardware acceptance stays in HV-024; do not treat
+host tests or a short callback screen as the full Phase 2.5 gate.
 
 ### Performance, build, and transport
 

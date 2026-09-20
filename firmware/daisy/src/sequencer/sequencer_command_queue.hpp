@@ -18,6 +18,7 @@ enum class SequencerCommandType : uint8_t {
     PatternOp,
     SlotEdit,
     SlotPage,
+    NotesRequest,
     PatternRequest,
     MidiClock,
     MidiCc,

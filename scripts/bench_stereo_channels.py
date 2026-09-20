@@ -249,12 +249,21 @@ def main():
         choices=("svf", "ladder"),
         default="ladder",
     )
+    parser.add_argument(
+        "--melodic",
+        action="store_true",
+        help="Four-lane chords with overlapping 96-tick gates on every active Track",  # noqa: E501
+    )
     parser.add_argument("--sample", default="/03 Lips of Ashes.wav")
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument(
         "--commit", required=True, help="Source commit used to build --image"
     )
     args = parser.parse_args()
+    if args.melodic and (
+        args.mono_keys or args.cycle_mixes or args.stereo not in (0, 4)
+    ):
+        parser.error("--melodic requires homogeneous channels and Poly policy")
     if args.mono_keys and not args.midi_bursts:
         parser.error("--mono-keys requires --midi-bursts")
     if args.seconds <= 0:
@@ -272,8 +281,11 @@ def main():
     stem = ROOT / "logs" / f"stereo-{args.stereo}-{args.topology}-{stamp}"
     mono = 8 - 2 * args.stereo
     voices = mono + args.stereo
-    active_tracks = args.burst_tracks or voices // args.layers
-    if active_tracks * args.layers < voices:
+    notes_per_track = 4 if args.melodic else 1
+    active_tracks = args.burst_tracks or voices // (
+        args.layers * notes_per_track
+    )  # noqa: E501
+    if active_tracks * args.layers * notes_per_track < voices:
         parser.error("burst must fill the channel budget")
     d, e = Daisy(), Esp32()
     offset = None
@@ -288,6 +300,7 @@ def main():
         "active_tracks": active_tracks,
         "midi_bursts": 0,
         "mono_keys": args.mono_keys,
+        "melodic": args.melodic,
         "mix_interval_seconds": args.mix_seconds if args.cycle_mixes else None,
         "topology": args.topology,
         "seconds_requested": args.seconds,
@@ -442,11 +455,25 @@ def main():
         pattern_op(5, value16=16)
         pattern_op(7, value8=60)
         for track in range(16):
+            pattern_op(15, track, value8=int(args.melodic))
             pattern_op(4, track, value8=int(track < active_tracks))
             for step in range(16):
                 enabled = int(track < active_tracks and step % 2 == 0)
                 pattern_op(0, track, step, enabled, 100)
                 pattern_op(11, track, step, 60)
+                if args.melodic and enabled:
+                    for lane, note in enumerate((60, 64, 67, 72)):
+                        send(
+                            d,
+                            0x51,
+                            "<BBBBHh",
+                            14,
+                            track,
+                            step,
+                            lane,
+                            note | (100 << 8),
+                            96,
+                        )
                 if track < active_tracks and step % 2 == 0:
                     for parameter, value in (
                         (2, 50000),

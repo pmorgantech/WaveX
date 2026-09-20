@@ -64,6 +64,26 @@ TEST_F(LiveNotes, FourLayerSixteenTrackFanoutUsesOneQueueEntry) {
     EXPECT_EQ(Held(0), 0u);
 }
 
+TEST_F(LiveNotes, RecordingObserverSeesBindingCutoffsAndMatchingReleases) {
+    notes.Press(0, 60, 100, 3);
+    notes.StopTracks(1, voices);
+    unsigned observed = 0;
+    notes.Drain(&map, voices, [&](const LiveNoteEvent& event) {
+        ++observed;
+        EXPECT_EQ(event.tracks, 2);
+        EXPECT_EQ(event.velocity, 100);
+    });
+    EXPECT_EQ(observed, 1u);
+    notes.Release(0, 60);
+    notes.Drain(&map, voices, [&](const LiveNoteEvent& event) {
+        ++observed;
+        EXPECT_EQ(event.velocity, 0);
+        EXPECT_EQ(event.id.serial, 1u);
+    });
+    EXPECT_EQ(observed, 2u);
+    EXPECT_EQ(Held(0), 0u);
+}
+
 TEST_F(LiveNotes, RepeatedKeysReleaseFifoAndDoNotReleaseSequencerOrOtherSource) {
     notes.Press(0, 60, 100, 1);
     notes.Press(0, 60, 100, 1);

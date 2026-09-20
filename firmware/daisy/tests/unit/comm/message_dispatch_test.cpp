@@ -1049,3 +1049,17 @@ TEST_F(MessageDispatchTest, AllocationEditsReachEngineOnlyAsCompletePayloadsOuts
     Dispatch(MSG_ALLOC_OP, op);
     EXPECT_EQ(GetDispatchRecord().allocation_ops.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, MelodicRequestChecksEveryLengthAndUnalignedStep) {
+    SeqPatternRequestMessage r{42, 15, 63, 0};
+    for (size_t n = 0; n < sizeof(r); ++n)
+        ProcessInterMcuMessage(MSG_SEQ_NOTES, 1, reinterpret_cast<uint8_t*>(&r), n);
+    EXPECT_TRUE(GetDispatchRecord().seq_notes_requests.empty());
+    r.reserved = 1;
+    Dispatch(MSG_SEQ_NOTES, r);
+    EXPECT_TRUE(GetDispatchRecord().seq_notes_requests.empty());
+    r.reserved = 0;
+    Dispatch(MSG_SEQ_NOTES, r);
+    ASSERT_EQ(GetDispatchRecord().seq_notes_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_notes_requests[0].first_step, 63);
+}

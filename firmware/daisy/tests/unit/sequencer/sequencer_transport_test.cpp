@@ -579,3 +579,87 @@ TEST(SequencerTransportTest, ExtremeInputTempoSaturatesWireReadback) {
     }
     EXPECT_EQ(t.BuildPlayhead().measured_bpm_x100, 65535);
 }
+
+TEST(SequencerTransportTest, StepRecordAdvancesAfterChordAndReplacementKeepsReleaseIdentity) {
+    auto t = MakeTransport();
+    t.ApplyTransport(
+        {SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_INTERNAL, SEQ_INPUT_STEP_RECORD, 1, 12000, 0});
+    for (uint8_t i = 0; i < 5; ++i)
+        t.RecordInput(0, static_cast<uint8_t>(60 + i), 1, 100, 1);
+    EXPECT_TRUE(t.pattern().tracks[0].melodic);
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].notes[0].note, 64);
+    for (uint8_t i = 0; i < 5; ++i)
+        t.RecordInput(0, static_cast<uint8_t>(60 + i), 1, 0, 0);
+    t.RecordInput(0, 70, 1, 100, 1);
+    EXPECT_EQ(t.pattern().tracks[0].steps[1].notes[0].note, 70);
+    SeqNotesMessage reply;
+    t.BuildNotes({1, 0, 0, 0}, reply);
+    EXPECT_TRUE(IsValidSeqNotes(reply));
+    EXPECT_EQ(reply.notes[0].note, 64);
+}
+TEST(SequencerTransportTest, LiveRecordQuantizationDurationAndSongSafeEpochs) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0});
+    RunTicks(t, 100);  // 19.2 ticks -> step 1 on nearest-step capture
+    t.RecordInput(0, 0, 1, 127, 1);
+    RunTicks(t, 250);
+    t.RecordInput(0, 0, 1, 0, 0);
+    const auto& step = t.pattern().tracks[0].steps[1];
+    EXPECT_EQ(step.notes[0].note, 0);
+    EXPECT_EQ(step.notes[0].velocity, 127);
+    EXPECT_EQ(step.notes[0].gate_ticks, 48);
+    EXPECT_EQ(step.micro_offset, 0);
+    t.ApplyTransport(
+        {SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 0, 12000, 0});
+    t.RecordInput(0, 72, 1, 110, 1);  // 67.2 ticks -> step 2 + 19 ticks
+    EXPECT_EQ(t.pattern().tracks[0].steps[2].micro_offset, 19);
+    auto replacement = std::make_unique<WaveX::Sequencer::Pattern>();
+    t.ReplacePattern(*replacement);
+    t.RecordInput(0, 72, 1, 0, 0);
+    EXPECT_EQ(t.pattern().tracks[0].steps[2].notes[0].velocity, 0);
+}
+TEST(SequencerTransportTest, LiveEraseOnlyMatchingPitchOnArmedTrack) {
+    auto t = MakeTransport();
+    for (uint8_t track = 0; track < 2; ++track) {
+        auto& row = t.pattern().tracks[track];
+        row.melodic = true;
+        row.steps[0].on = true;
+        row.steps[0].notes[0] = {60, 100, 24};
+        row.steps[0].notes[1] = {64, 100, 24};
+    }
+    t.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 16, 0});
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_ERASE, 1, 12000, 0});
+    t.RecordInput(0, 60, 1, 100, 1);
+    auto events = RunTicks(t, 1);
+    ASSERT_EQ(events.size(), 3u);
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].notes[0].velocity, 0);
+    EXPECT_EQ(t.pattern().tracks[1].steps[0].notes[0].velocity, 100);
+}
+
+TEST(SequencerTransportTest, ManualLaneReplacementInvalidatesHeldCaptureGate) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0});
+    t.RecordInput(0, 60, 1, 100, 1);
+    RunTicks(t, 250);
+    t.ApplyPatternOp({SEQ_OP_SET_NOTE_LANE, 0, 0, 0, 72 | (110 << 8), 96});
+    t.RecordInput(0, 60, 1, 0, 0);
+    const auto& lane = t.pattern().tracks[0].steps[0].notes[0];
+    EXPECT_EQ(lane.note, 72);
+    EXPECT_EQ(lane.velocity, 110);
+    EXPECT_EQ(lane.gate_ticks, 96);
+}
+
+TEST(SequencerTransportTest, HalfStepRecordUsesSharedOffsetAndPreservesReleaseDuration) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 2, 12000, 0});
+    RunTicks(t, 62);  // 11.904 ticks -> half of a 24-tick step
+    t.RecordInput(0, 60, 1, 100, 1);
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].micro_offset, 12);
+    RunTicks(t, 250);
+    t.RecordInput(0, 60, 1, 0, 0);
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].notes[0].gate_ticks, 48);
+    SeqNotesMessage reply;
+    t.BuildNotes({1, 0, 0, 0}, reply);
+    EXPECT_EQ(reply.quantize, 2);
+    EXPECT_TRUE(IsValidSeqNotes(reply));
+}

@@ -89,10 +89,10 @@ TEST(PatternFileTest, RoundTripsEveryFieldAndHiddenSteps) {
     for (int t = 0; t < 16; ++t) {
         EXPECT_EQ(copy.tracks[t].enabled, p.tracks[t].enabled);
         for (int s = 0; s < 64; ++s) {
-            uint8_t a[20], b[20];
+            uint8_t a[PatternFile::kStepBytes], b[PatternFile::kStepBytes];
             PatternFile::EncodeStep(p.tracks[t].steps[s], a);
             PatternFile::EncodeStep(copy.tracks[t].steps[s], b);
-            EXPECT_EQ(std::memcmp(a, b, 20), 0);
+            EXPECT_EQ(std::memcmp(a, b, sizeof(a)), 0);
         }
     }
 }
@@ -125,7 +125,7 @@ TEST(PatternFileTest, RejectsInvalidMetadataStepsAndDuplicateChunks) {
                                               {45, 6},
                                               {46, 49},
                                               {47, 1},
-                                              {56, 2},
+                                              {56, 4},
                                               {57, 2},
                                               {58, 128},
                                               {59, 128},
@@ -176,3 +176,37 @@ TEST(PatternFileTest, NamesAndDuplicateLocksCannotEnterAFile) {
     EXPECT_EQ(w.Advance(), Result::Invalid);
 }
 }  // namespace
+
+TEST(PatternFileTest, FourLanesAndLegacyRecordsClearReusedScratch) {
+    Sequencer::Pattern p;
+    p.tracks[15].melodic = true;
+    auto& notes = p.tracks[15].steps[63].notes;
+    for (uint8_t i = 0; i < 4; ++i)
+        notes[i] = {static_cast<uint8_t>(i * 40), 127, static_cast<uint16_t>(i * 100)};
+    auto m = encoded(p);
+    char name[24]{};
+    Sequencer::Pattern copy;
+    ASSERT_EQ(decode(m, copy, name), Result::Done);
+    EXPECT_TRUE(copy.tracks[15].melodic);
+    EXPECT_EQ(copy.tracks[15].steps[63].notes[3].gate_ticks, 300);
+    // Construct an actual 1.0 file by stripping each new lane payload.
+    Memory old;
+    old.bytes.insert(old.bytes.end(), m.bytes.begin(), m.bytes.begin() + 48);
+    for (unsigned t = 0; t < 16; ++t) {
+        const size_t offset = 48 + t * (8 + PatternFile::kTrackBytes);
+        old.bytes.insert(old.bytes.end(), m.bytes.begin() + offset, m.bytes.begin() + offset + 9);
+        auto* header = old.bytes.data() + old.bytes.size() - 9;
+        Wxcf::detail::WriteU16LE(header + 2, 0x0100);
+        Wxcf::detail::WriteU32LE(header + 4, 1281);
+        header[8] &= 1;
+        for (unsigned step = 0; step < 64; ++step) {
+            const auto begin = m.bytes.begin() + offset + 9 + step * PatternFile::kStepBytes;
+            old.bytes.insert(old.bytes.end(), begin, begin + 20);
+        }
+    }
+    Wxcf::detail::WriteU32LE(old.bytes.data() + 8, static_cast<uint32_t>(old.bytes.size()));
+    ASSERT_EQ(decode(old, copy, name), Result::Done);
+    EXPECT_FALSE(copy.tracks[15].melodic);
+    for (const auto& n: copy.tracks[15].steps[63].notes)
+        EXPECT_EQ(n.velocity, 0);
+}

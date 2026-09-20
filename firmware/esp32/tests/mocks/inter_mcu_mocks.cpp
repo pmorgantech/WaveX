@@ -177,3 +177,9 @@ void inter_mcu_store_seq_song_status(const WaveX::Protocol::SeqSongStatusMessage
     ++cap.seq_song_status_calls;
     cap.seq_song_status = status;
 }
+
+void inter_mcu_store_seq_notes(const WaveX::Protocol::SeqNotesMessage& m) {
+    auto& c = GetInterMcuCapture();
+    ++c.seq_notes_calls;
+    c.seq_notes = m;
+}

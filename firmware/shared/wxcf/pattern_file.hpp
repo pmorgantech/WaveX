@@ -9,10 +9,11 @@
 namespace WaveX {
 namespace PatternFile {
 constexpr uint16_t kFileType = 5;
-constexpr uint16_t kVersion = 0x0100;
+constexpr uint16_t kVersion = 0x0101;
 constexpr uint32_t kMaxFileBytes = 65536;
 constexpr size_t kNameBytes = 24;
-constexpr uint32_t kStepBytes = 20;
+constexpr uint32_t kLegacyStepBytes = 20;
+constexpr uint32_t kStepBytes = 36;
 constexpr uint32_t kTrackBytes = 1 + Sequencer::kMaxSteps * kStepBytes;
 constexpr uint32_t kFileBytes = 12 + 8 + 28 + Sequencer::kMaxTracks * (8 + kTrackBytes);
 enum class Result { More, Done, Invalid, IoError };
@@ -34,6 +35,9 @@ inline bool ValidStep(const Sequencer::Step& s) {
     if (s.note > 127 || s.velocity > 127 || s.probability > 100 ||
         s.retrig_count > Sequencer::kMaxRetrigCount)
         return false;
+    for (const auto& n: s.notes)
+        if (n.note > 127 || n.velocity > 127 || n.gate_ticks > 32767)
+            return false;
     for (uint8_t i = 0; i < Sequencer::kMaxParamLocks; ++i) {
         const auto& a = s.param_locks[i];
         if (!a.param_id && a.value)
@@ -66,8 +70,21 @@ inline void EncodeStep(const Sequencer::Step& s, uint8_t* b) {
         b[8 + 3 * i] = s.param_locks[i].param_id;
         Wxcf::detail::WriteU16LE(b + 9 + 3 * i, s.param_locks[i].value);
     }
+    for (uint8_t i = 0; i < 4; ++i) {
+        b[20 + 4 * i] = s.notes[i].note;
+        b[21 + 4 * i] = s.notes[i].velocity;
+        Wxcf::detail::WriteU16LE(b + 22 + 4 * i, s.notes[i].gate_ticks);
+    }
 }
-inline bool DecodeStep(const uint8_t* b, Sequencer::Step& s) {
+inline bool DecodeStep(const uint8_t* b, Sequencer::Step& s, bool melodic_format = true) {
+    for (uint8_t i = 0; i < 4; ++i) {
+        s.notes[i] = Sequencer::NoteLane{};
+        if (melodic_format) {
+            s.notes[i].note = b[20 + 4 * i];
+            s.notes[i].velocity = b[21 + 4 * i];
+            s.notes[i].gate_ticks = Wxcf::detail::ReadU16LE(b + 22 + 4 * i);
+        }
+    }
     if (b[0] > 1)
         return false;
     s.on = b[0];
@@ -108,7 +125,7 @@ class Encoder {
         }
         const auto& t = pattern_.tracks[track_];
         if (!step_) {
-            uint8_t enabled = t.enabled;
+            uint8_t enabled = t.enabled | (t.melodic ? 2 : 0);
             if (writer_.BeginChunk(0x100 + track_, kVersion, kTrackBytes) != Wxcf::Result::Ok ||
                 writer_.WriteData(&enabled, 1) != Wxcf::Result::Ok)
                 return result_ = Result::IoError;
@@ -161,9 +178,10 @@ class Decoder {
         }
         if (track_ < Sequencer::kMaxTracks) {
             uint8_t data[kStepBytes];
-            if (reader_.ReadPayload(data, sizeof(data)) != Wxcf::Result::Ok)
+            if (reader_.ReadPayload(data, melodic_format_ ? kStepBytes : kLegacyStepBytes) !=
+                Wxcf::Result::Ok)
                 return Fail(Result::IoError);
-            if (!DecodeStep(data, pattern_.tracks[track_].steps[step_]))
+            if (!DecodeStep(data, pattern_.tracks[track_].steps[step_], melodic_format_))
                 return Fail(Result::Invalid);
             if (++step_ == Sequencer::kMaxSteps) {
                 step_ = 0;
@@ -196,17 +214,21 @@ class Decoder {
             meta_ = true;
         } else if (h.chunk_id >= 0x100 && h.chunk_id < 0x100 + Sequencer::kMaxTracks) {
             const uint8_t track = static_cast<uint8_t>(h.chunk_id - 0x100);
-            if ((tracks_ & (1u << track)) || h.payload_len != kTrackBytes ||
+            melodic_format_ = h.chunk_version >= kVersion;
+            const auto track_bytes =
+                1 + Sequencer::kMaxSteps * (melodic_format_ ? kStepBytes : kLegacyStepBytes);
+            if ((tracks_ & (1u << track)) || h.payload_len != track_bytes ||
                 Wxcf::VersionMajor(h.chunk_version) != 1)
                 return Fail(Result::Invalid);
             uint8_t enabled = 0;
             if (reader_.ReadPayload(&enabled, 1) != Wxcf::Result::Ok)
                 return Fail(Result::IoError);
-            if (enabled > 1)
+            if (enabled > (melodic_format_ ? 3 : 1))
                 return Fail(Result::Invalid);
             tracks_ |= 1u << track;
             track_ = track;
-            pattern_.tracks[track].enabled = enabled != 0;
+            pattern_.tracks[track].enabled = (enabled & 1) != 0;
+            pattern_.tracks[track].melodic = (enabled & 2) != 0;
         } else
             skip_ = h.payload_len;
         return Result::More;
@@ -220,7 +242,7 @@ class Decoder {
     uint32_t consumed_ = 12, skip_ = 0;
     uint16_t tracks_ = 0;
     uint8_t track_ = Sequencer::kMaxTracks, step_ = 0;
-    bool started_ = false, meta_ = false;
+    bool started_ = false, meta_ = false, melodic_format_ = false;
     Result result_ = Result::More;
 };
 }  // namespace PatternFile

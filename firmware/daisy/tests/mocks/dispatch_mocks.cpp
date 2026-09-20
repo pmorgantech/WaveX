@@ -271,6 +271,9 @@ namespace WaveX::AudioEngine {
 void OnSeqSlotEdit(const Protocol::SeqSlotEditMessage& message) {
     Test::GetDispatchRecord().seq_slot_edits.push_back(message);
 }
+void OnSeqNotesRequest(const Protocol::SeqPatternRequestMessage& m) {
+    Test::GetDispatchRecord().seq_notes_requests.push_back(m);
+}
 void OnSeqSlotPageRequest(const Protocol::SeqPatternRequestMessage& message) {
     Test::GetDispatchRecord().seq_slot_pages.push_back(message);
 }

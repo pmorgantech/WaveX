@@ -94,6 +94,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 #endif
         return;
     }
+    if (msg_type == MSG_SEQ_NOTES) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SeqPatternRequestMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSeqNotesRequest(request))
+                AudioEngine::OnSeqNotesRequest(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_SEQ_SLOT_PAGE) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         SeqPatternRequestMessage request;

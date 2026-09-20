@@ -7,6 +7,7 @@
 #include "ui/mixer_solo.h"
 #include "ui/parameter_lock_model.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_notes_page.h"
 #include "ui/ui_pattern_slots_page.h"
 
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
@@ -98,7 +99,25 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
     ui_theme_apply_label_style(status_, false);
     lv_obj_set_pos(
         status_, controls_x, UI_SEQ_DETAIL_TOP + UI_SEQ_DETAIL_HEIGHT / 2 + UI_PADDING_SMALL);
-    lv_obj_set_width(status_, width);
+    lv_obj_set_width(status_, button_width);
+    auto* notes_button = lv_button_create(root_);
+    ui_theme_apply_button_style(notes_button, false);
+    lv_obj_set_size(notes_button, button_width, UI_SEQ_DETAIL_HEIGHT / 2);
+    lv_obj_set_pos(notes_button,
+                   controls_x + button_width + UI_GUTTER,
+                   UI_SEQ_DETAIL_TOP + UI_SEQ_DETAIL_HEIGHT / 2 + UI_PADDING_SMALL);
+    auto* notes_label = lv_label_create(notes_button);
+    lv_label_set_text(notes_label, "Notes");
+    lv_obj_set_style_text_font(notes_label, UI_FONT_SMALL, 0);
+    lv_obj_center(notes_label);
+    lv_obj_add_event_cb(
+        notes_button,
+        [](lv_event_t* event) {
+            auto* page = static_cast<UISequencerPage*>(lv_event_get_user_data(event));
+            UINavigator::instance().push(createNotesPage(page->selected_step_));
+        },
+        LV_EVENT_CLICKED,
+        this);
     lv_obj_set_style_text_font(status_, UI_FONT_SMALL, 0);
     lv_label_set_long_mode(status_, LV_LABEL_LONG_WRAP);
     for (uint8_t row = 0; row < 4; ++row) {
@@ -940,6 +959,11 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
     char verb[24]{};
     int a = 0, b = 0;
     SequencerGridModel::Step step;
+    if (args && !std::strcmp(args, "NOTES")) {
+        UINavigator::instance().push(createNotesPage(selected_step_));
+        std::snprintf(reply, cap, "ok");
+        return true;
+    }
     const int count = std::sscanf(args ? args : "", "%23s %d %d", verb, &a, &b);
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
     if (count == 1 && std::strcmp(verb, "LATENCY") == 0) {

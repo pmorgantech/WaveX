@@ -190,6 +190,13 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "SEQ_FILE_STATUS"))
                 inter_mcu_store_seq_file_status(message);
         } break;
+        case WaveX::Protocol::MSG_SEQ_NOTES: {
+            WaveX::Protocol::SeqNotesMessage message;
+            if (CopyMessage(payload, payload_len, message, "SEQ_NOTES") &&
+                WaveX::Protocol::IsValidSeqNotes(message))
+                inter_mcu_store_seq_notes(message);
+            break;
+        }
         case WaveX::Protocol::MSG_SEQ_SLOT_PAGE: {
             WaveX::Protocol::SeqSlotPageMessage message;
             if (payload_len == sizeof(message) &&

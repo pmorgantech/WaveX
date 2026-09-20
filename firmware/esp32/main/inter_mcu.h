@@ -424,3 +424,7 @@ esp_err_t inter_mcu_send_bank_slot_op(const WaveX::Protocol::BankSlotOpMessage&)
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage&);
 void inter_mcu_store_bank_status(const WaveX::Protocol::BankStatusMessage&);
 bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);
+
+esp_err_t inter_mcu_request_seq_notes(const WaveX::Protocol::SeqPatternRequestMessage&);
+void inter_mcu_store_seq_notes(const WaveX::Protocol::SeqNotesMessage&);
+bool inter_mcu_get_seq_notes(WaveX::Protocol::SeqNotesMessage*);

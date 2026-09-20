@@ -227,6 +227,7 @@ void OnMidiProgram(const WaveX::Protocol::MidiProgramMessage&);
 void OnBankSlotOp(const WaveX::Protocol::BankSlotOpMessage&);
 void OnBankOp(const WaveX::Protocol::BankOpMessage&);
 void OnSeqSlotEdit(const WaveX::Protocol::SeqSlotEditMessage&);
+void OnSeqNotesRequest(const WaveX::Protocol::SeqPatternRequestMessage&);
 void OnSeqSlotPageRequest(const WaveX::Protocol::SeqPatternRequestMessage&);
 void OnSongOp(const WaveX::Protocol::SeqSongOpMessage& request);
 void OnPatternSlotOp(const WaveX::Protocol::SeqSlotOpMessage& request);

@@ -3,8 +3,8 @@
 **Status:** The scheduler, transport, command queue, callback trigger path and
 playhead publication are implemented. Each of the 16 pattern rows addresses
 the matching Track's Instrument at the step's selected MIDI note. Velocity
-layers and crossfades use the step's velocity. Chords and melodic gate lanes
-remain future Phase 2.5 work.
+layers and crossfades use each note's velocity. Four-lane melodic rows, gates
+and note recording are implemented in the [melodic contract](melodic-sequencing.md).
 Voice-scoped parameter locks and their touch editor are implemented.
 Physical panel integration, MIDI clock hardware validation and
 song/project recovery checks remain open Phase 2 work in [roadmap.md](../roadmap.md).
@@ -85,21 +85,21 @@ bounds and fades. Wider ranges and overlapping layers keep the bounded,
 ordered zone scan; empty and retired pads remain silent.
 
 All resolved layers of one sequencer hit enter one callback-owned note group.
-Locks and the sample offset are prepared for every layer before admission.
+Compact costs are prepared before admission; surviving layers receive locks
+and start at the current render-segment boundary.
 Stealing retires whole groups, including all surviving layer/channel reservations;
 a refused hit neither steals partially nor applies a choke. Group IDs provide a
-release target independent of pitch or render-slot reuse. Gate scheduling and
-held-key capture remain unimplemented.
-
-These are one-note drum-shaped triggers. Changing note does not implement
-melodic gate lengths, automatic note-offs, chords or live recording.
+release target independent of pitch or render-slot reuse. Melodic gates belong
+to sounding group members and release at their sample deadline. Rendering
+advances to each event frame before admission, preserving earlier audio when a
+later event steals a group. Drum rows retain their single-note behavior.
 
 The target hierarchy is defined once in
 [track-and-patch-model.md](track-and-patch-model.md): Patterns address Tracks;
 Tracks hold Instruments; a Kit is a drum-mode Instrument; Songs own their
 arrangement and tempo. The target default is 32 steps. Bank/Project/Song
-storage have their own implementations and recovery gates; melodic chord and
-gate lanes remain separate from the current one-note step model.
+storage have their own implementations and recovery gates. Melodic row data
+shares the same Pattern owner and persistence path.
 
 Digital voice playback is already implemented in `voice_manager.hpp`:
 resident PCM16 mono/stereo, root-note-aware tuning, layering, choke/one-shot
@@ -137,7 +137,8 @@ The existing Play page provides Pads and Keys with shared note lifecycle,
 Track selection, binding status and live sound controls. Navigation and
 threading are described in [ui-architecture.md](../ui-architecture.md).
 
-Remaining surfaces include live lock recording and melodic gate/chord lanes.
+The Notes button opens the confirmed four-lane editor and note-recording controls.
+Live lock recording remains outstanding.
 Pattern selection and Song arrangement exist; panel keys, LEDs and endless-pot
 drivers still need physical integration and acceptance in
 [panel-controls.md](panel-controls.md). Do not describe a debug-console
@@ -160,12 +161,13 @@ A pattern contains all sixteen rows and all 64 steps, including hidden steps,
 mute, length, scale, swing, notes, velocity, probability, microtiming,
 retriggers and stored locks. It contains no tempo, Track instruments or
 runtime sample IDs. Loading stops sequencing after validation; current
-voices retain their own lifecycle. Tempo, clock settings and Track bindings
-stay in the session. Chords, gate lanes and song arrangement remain separate
-roadmap work.
+melodic voices release while drum/live voices retain their own lifecycle.
+Tempo, clock settings and Track bindings stay in the session. Row type, all
+four chord lanes and gate lengths are included; Song arrangement is Project-owned.
 
 The codec is [pattern_file.hpp](../../firmware/shared/wxcf/pattern_file.hpp):
-WXCF file type 5, schema 1.0, one metadata chunk and sixteen row chunks.
+WXCF file type 5, schema 1.1, one metadata chunk and sixteen row chunks.
+Schema 1.0 loads as drum rows with empty melodic lanes.
 Fields are explicitly little-endian; native C++ struct layout is never a
 file format. Duplicate/missing required chunks, invalid field values, newer
 major versions and truncation fail the load. Unknown chunks are skipped
@@ -288,4 +290,5 @@ sequence positions and apply admitted choke effects. Different sample offsets
 are separate batches. The bounded planner uses at most the configured render
 slots, and selection storage is capped by the scheduler event limit. See the
 [measured pressure result](../callback-performance-log.md#same-frame-admission-batching--2026-09-20);
-this optimization does not implement melodic gates or saved allocation controls.
+the later melodic integration adds chronological rendering and gates; saved
+allocation controls share the prepared Track policy.

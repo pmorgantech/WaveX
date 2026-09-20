@@ -1,75 +1,144 @@
-# Melodic Sequencing — Note Tracks, Chords, Live Record
+# Melodic sequencing — lanes, gates and recording
 
-**Status**: Target design (unimplemented). Phase 2.5 in `roadmap.md`.
-**Decision pending (2026-09-13):** note-length gates and one-shot/gated playback
-semantics are [backlogged for discussion](../roadmap.md#note-lengths-and-one-shot-playback--decision-pending).
-The gate/tie model below remains a proposal, not an approved implementation.
+**Status:** Implemented, 2026-09-20. Hardware acceptance is tracked in
+[HV-024](../hardware-validation.md#hv-024--melodic-sequencing).
+The broader [Phase 2.5 gate](../roadmap.md#phase-25--sampler-instrument-layer)
+remains open.
 
-**Dependencies**: Phase 2 sequencer core (`sequencer.md` — scheduler, pattern model, transport), `instrument-model.md` (keyboard-mode instruments are what melodic tracks play).
-**Lineage**: Emax's built-in sequencer recorded keyboard performances over its preset engine; that combination — multisampled instrument + note sequencer + analog voice path — is the target here.
+## Pattern ownership and persistence
 
----
+Every Pattern has sixteen rows of sixty-four steps. A row selects drum or
+melodic playback; switching type preserves both representations. The existing
+step on/off, probability, micro-offset and parameter locks govern the whole
+chord. Melodic playback ignores the drum retrigger fields.
 
-## 1. One pattern model, two track types
+Each step has four fixed lanes: MIDI note 0–127, velocity 0–127 and a gate of
+0–32767 ticks at 96 PPQN. **Velocity zero means empty**, so MIDI note zero is
+playable. An enabled step with no occupied lanes is silent. Nonzero lane edits
+enable their step. Drum rows retain their original single-note behavior.
 
-`sequencer.md` §3 defines `Tracks[≤16]` with drum-shaped steps. Rather than a parallel system, tracks gain a **type**:
+The callback owns edits and swaps pending data into the scheduled Pattern at
+the existing step boundary. Song playback borrows a frozen Project and rejects
+recording and edits. Scoped editor commands carry Pattern slot and epoch;
+replacing a Pattern invalidates an outgoing editor's commands.
 
-- **Drum track** (existing design): step = `{on, velocity, probability, micro_offset, retrig, param_locks}` and the track binds a pad/zone. Unchanged.
-- **Melodic track**: same step scaffold, plus per-step **note content**; the track binds an **instrument slot** (`instrument-model.md` §1) and pitch flows through to zone resolution.
+Pattern WXCF schema 1.1 uses 36-byte step records and a row melodic flag.
+Schema 1.0 still loads as drum rows with empty lanes, including into reused
+scratch storage. Project schema 1.3 embeds the same lanes; earlier Project
+Pattern chunks retain their 20-byte decoding. Hidden steps are saved too.
+Instrument/Track polyphony remains separate from Pattern data.
 
-```cpp
-// Extends sequencer.md §3's Step for type==MELODIC tracks
-struct StepNotes {                 // present only on melodic tracks (parallel array,
-    struct {                       // not a union in Step — keeps drum Step size unchanged)
-        uint8_t note;              // 0 = empty lane
-        uint8_t velocity;
-        uint16_t length_ticks;     // gate length, internal 96-PPQN ticks (0 = legato/tie)
-    } lane[4];                     // ≤ 4 simultaneous notes per step (chord)
-};
-```
+A native Pattern is approximately 40 KiB. The foreground exchange buffer lives
+in CPU-only D2 SRAM; the transport's active and pending buffers remain internal.
+No Pattern-sized temporary is placed on the callback stack. A complete Project
+is approximately 5.3 MiB, allocated from the existing SDRAM arena; loading can
+require both retained and candidate Projects. The file-size ceiling is 8 MiB.
+Allocation failure leaves the current session intact.
 
-Memory: 4 lanes × 4 B × 64 steps × 16 tracks = 16 KB worst case per pattern if *every* track were melodic — acceptable; allocate `StepNotes` arrays per-track only when the track is melodic (fixed pool of, say, 8 melodic-track buffers per pattern, `WAVEX_SEQ_MAX_MELODIC_TRACKS = 8`).
+## Gate and voice lifetime
 
-**Note-off scheduling**: drum steps are fire-and-forget; melodic notes need releases. The scheduler keeps a small sorted pending-off queue (≤ 32 entries: 8 tracks × 4 lanes): when a step fires, push `(frame + length_ticks·frames_per_tick, note, slot)`; the control tick drains due entries into `VoiceManager::Release`. `length_ticks == 0` means **tie**: no off is scheduled and the next step on the same lane retriggers legato (v1: retrigger; true glide/portamento is a later voice-manager feature — noted in §5).
+Positive gates end at the trigger's musical tick plus the lane duration.
+Tempo changes re-anchor the tick-to-frame conversion, preserving the remaining
+musical duration. Microtiming and swing affect the trigger and thus its gate.
+Positive gates may overlap later notes in the same lane, subject to admission.
 
-## 2. Editing surfaces
+Gate zero is **Hold**: it continues through rests until that row/lane plays
+again, or transport/binding/Pattern cleanup ends it. The next note retriggers
+its envelopes; this is not pitch glide or true legato. An attempted new lane
+trigger ends the previous hold even if the new note is refused at capacity.
+A muted row or switching it to drum mode also ends its melodic voices.
+Gates do not create sample loops or extend a finite source/envelope lifetime;
+natural completion or stealing may end a note earlier.
 
-1. **Step editor extension** (`sequencer.md` §5.2): on a melodic track, holding a step opens the note lane view — 4 lanes × (note, velocity, length). Encoder A = pitch (constrained by the active scale mask, `tuning-and-scales.md` §4), B = length, C = velocity.
-2. **Step-record mode** (Emax workflow): sequencer stopped or looping, hold a step and play notes on MIDI/pads — incoming `MSG_NOTE_ON` fills lanes of the held step. ESP-side interaction, emits normal pattern-op messages; the Daisy needs a "route incoming notes to the editor, not the engine" toggle → `SEQ_PATTERN_OP` gains `SEQ_OP_SET_STEP_NOTES {track, step, StepNotes}` and the routing toggle rides `MSG_SEQ_TRANSPORT` (`input_mode`: 0=play, 1=step-record).
-3. **Live record** (the important one — see §3).
+Melodic duration is explicit: it releases even a one-shot Zone. Live keyboard
+note-off and drum playback retain their existing one-shot semantics. Release
+tails use the sound's envelopes and continue to consume allocation capacity.
+Stop/restart/locate, Pattern replacement and Song boundaries clean up melodic
+ownership without releasing independent live keys. Sample/binding retirement
+still uses the existing callback fence.
 
-## 3. Live recording into the pattern
+Gate state belongs to each sounding group member, alongside its stable group
+identity. Stealing or reusing a render slot replaces that state, so no old
+queued note-off can cut a newer voice. There is no growing pending-off queue.
+This supersedes the proposed pending-off queue/overflow policy: each admitted
+voice carries its own gate, so gate storage cannot overflow independently of
+the fixed voice pool. Slot-reuse and finite/Hold release tests cover this model.
+The scheduler emits at most 64 events per callback, enough for sixteen
+simultaneous four-note chords. This event capacity does not increase the
+physical voice/channel budget: admission still keeps or refuses whole notes.
 
-Played notes get captured **on the Daisy**, because only the Daisy knows the musical time of an incoming note (ESP32 knows nothing about the playhead).
+Audio renders chronologically to each event frame before admitting that batch.
+A later steal therefore cannot remove earlier audio from the block. Global LFO
+and mixer updates remain once per callback; voice modulators advance by each
+render segment's duration. Gate releases occur at the exact sample within the
+segment. All state is fixed-capacity; the callback performs no allocation,
+logging, file access or blocking transactions.
 
-- While transport is playing and `input_mode == 2` (live-record), each `OnNoteOn` is (a) played immediately through the instrument path as normal, and (b) logged `(Φ_now, note, velocity, slot)`; `OnNoteOff` closes the pair giving `length_ticks`.
-- **Quantize on capture** to the nearest step by default (`quantize`: off/step/half-step, transport field); micro-offset stores the residual when quantize is off — the same `micro_offset` field drum steps already have, so nothing new in the scheduler.
-- Captured pairs are merged into the pattern between steps (the double-buffered row rule, `sequencer.md` §4) and echoed to the UI as ordinary step-change feedback so the grid lights up as you play. Overdub semantics: new notes fill empty lanes; a 5th note on a full step replaces the oldest lane (and the UI flashes the step).
-- **Erase gesture**: hold a pad/key while record-armed and passing the playhead clears matching lanes (Elektron-style live erase) — one more `input_mode` value.
+## Editor and capture
 
-## 4. Protocol deltas (within the 0x50 block; round-trip tests same commit)
+Open **Sequencer → Notes** beside the clock/Stop controls. Select a lane and
+edit note, velocity or gate with the tiles or focused encoder. Step −/+ can
+reach hidden steps. Shift exposes drum/melodic type, quantize and clear-lane
+controls. The four-lane summary and record cursor use confirmed backend state.
+Changes to the displayed step during recording/erase briefly show **Step updated**,
+including overdub replacements; identical polling does not retrigger the notice.
+Save through the existing Pattern or Project workflow.
 
-- `SEQ_PATTERN_OP` (0x51) new ops: `SET_TRACK_TYPE {track, type, instrument_slot}`, `SET_STEP_NOTES {track, step, StepNotes}` (20 B payload — fits the 64 B class), `CLEAR_STEP_NOTES`.
-- `MSG_SEQ_TRANSPORT` (0x50): add `input_mode` (play / step-record / live-record / live-erase) and `quantize`.
-- Playhead/step feedback (0x53) unchanged — melodic steps light the same way.
+The mode softkey cycles Play, Step rec, Live rec and Erase. Capture is armed for
+the selected Track/step on entering the editor or selecting another step.
+Other Tracks still monitor normally. Navigating away does not silently change
+the session's input mode. Quantize cycles **off / step / half-step** using the
+existing transport field. Half-step capture uses the step's shared micro-offset.
 
-## 5. Explicitly deferred
+- **Step record:** MIDI/direct-Track presses fill the selected step. The cursor
+  advances when all captured keys are released. Each lane initially receives
+  one grid interval of gate; stopped key-hold duration does not set a gate.
+- **Live record:** while running, the Daisy callback captures the consumed
+  key event's musical time. Quantize selects the nearest step or half-step;
+  without quantize, capture uses the preceding step and stores the first
+  note's residual as the shared step micro-offset, compensating for swing.
+  Note-off records a rounded duration of at least one tick. Notes within one
+  chord share step timing; there is no per-lane micro-offset.
+- **Overdub:** empty lanes fill first. A fifth note replaces the oldest capture
+  in that step; pre-existing lanes are treated as older than this capture pass.
+  The replaced capture loses its lane ownership, so its later release cannot
+  rewrite the replacement's duration.
+- **Erase:** hold pitches while the playhead passes to clear matching lanes on
+  the armed Track. Other pitches/Tracks are preserved. Monitoring remains live.
 
-- Portamento/glide and true legato (voice-level, needs a `Voice::GlideTo(note, time)`; design when asked).
-- Per-lane probability (v1: step-level probability applies to the whole chord).
-- Polyphonic aftertouch routing (waits on `param-locks-and-modulation.md` mod sources growing an aftertouch input).
-- MIDI *output* of melodic tracks (sequencing external gear) — natural follow-on: emit lane events as `MSG_SEQ_CLOCK_OUT`-style note messages to the ESP32 MIDI out; reserve `SEQ_OP` value now, implement post-gate.
+A fixed 64-key capture ledger uses the live queue's source/pitch/press identity,
+including repeated pitches. A full ledger refuses additional capture while
+normal monitoring proceeds. Input events refused before reaching the callback
+cannot be recorded. Queue-overflow release watermarks retire captures; their
+initial finite gate remains safe. Mode/target/run-epoch/Pattern changes clear
+capture ownership. Unfinished notes retain their initial one-step gate.
+Queued presses invalidated by a Track rebind are excluded from capture, as
+they are from playback. A manual lane replacement invalidates that lane's
+held capture, preventing its later release from rewriting the edited gate.
 
-## 6. Test plan
+The additive `MSG_SEQ_NOTES` request/reply and scoped lane/type/target edits
+are defined in [protocol.h](../../firmware/shared/spi_protocol/protocol.h) and
+mirrored in the [protocol guide](inter-mcu-protocol.md). The existing grid page
+stays within UART's payload limit; one melodic step has a separate readback.
 
-- Host: golden scheduler tests — melodic pattern in, `(frame, NoteOn/NoteOff)` stream out; tie handling; pending-off queue overflow behavior (oldest-off forced early, never dropped silently); quantize math including wrap at pattern end.
-- Host: live-record capture — synthetic `Φ`/note streams in, expected step contents out (quantize on/off, overdub replacement, erase).
-- Hardware (Phase 2.5 gate): record a 2-bar 4-note chord progression live over a playing drum pattern, then a 10-minute loop soak — zero underruns, no stuck notes (every On has a matching Off after transport stop: add a transport-stop "flush pending offs + release all melodic voices" rule, host-tested).
+## Validation and remaining work
 
-## 7. Implementation stages (one verified commit each)
+Host coverage includes full chords, MIDI note zero, whole-chord probability,
+64-event bounds, exact gate frames, old-slot/live-key isolation, tempo mapping,
+capture quantization/duration, oldest-lane replacement, erase and old/new file
+round trips. HIL procedures and dated results belong to HV-024.
 
-1. Pattern-model extension (`StepNotes` pool, track type) + scheduler note-off queue, host-tested golden streams.
-2. Protocol ops + round-trip tests + `inter-mcu-protocol.md` rows.
-3. Daisy live-record capture module (HAL-free, host-tested) + transport `input_mode` wiring + dispatch tests.
-4. ESP32 step editor note-lane view + step-record mode.
-5. Live-record UI (arm, quantize setting, step flash feedback); bench soak.
+Physical MIDI latency, listening, panel interaction and the complete Phase 2.5
+performance gate require their own evidence. `--melodic` in the callback bench
+adds four-note chord pressure to the existing dual-oscillator/stream/file load;
+a short screen does not replace the required soak.
+
+Portamento/true legato, per-lane probability/microtiming, scale-constrained pitch
+editing, polyphonic aftertouch and external melodic MIDI output remain separate
+follow-ups. The arpeggiator and audio sampling/recording are not part of this
+note recorder.
+
+The original pitch-entry proposal depended on an active scale mask. That mask
+and its source of truth are still the unimplemented Phase 5
+[tuning/scales design](tuning-and-scales.md); current pitch entry is chromatic.
+Scale snapping remains an explicit dependency, not a completed editor feature.

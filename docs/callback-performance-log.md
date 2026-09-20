@@ -26,6 +26,59 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Melodic chord pressure — 2026-09-20
+
+The first melodic screen requested **32 simultaneous notes** (eight Tracks ×
+four lanes) against the unchanged eight-channel budget. Both oscillators,
+ladder filters, modulation, locks, repeated MIDI fan-out, SD audition, live
+filter edits and one Pattern save/load remained active. Admission materializes
+only surviving whole notes; this was an overload workload, not a claim of
+32-voice capacity.
+
+The 80.45 s capture contains 16 complete windows / 80,016 callbacks. DWT average
+was **43.8639%** and maximum **454,226 cycles / 94.6304%** of the 480,000-cycle
+budget. This is above the continuation threshold. Sampled stream underruns and
+console RX drops were zero; no live-note queue-full warning appeared. Two
+logged UART TX-queue pressure warnings are distinct from MIDI admission loss.
+
+Evidence: `logs/stereo-0-ladder-20260920-175338.log/.json`, source `99f3ca1+`,
+Daisy QSPI `-O2` profiling image
+`1b3e430c43f78c288807333e49ecd1c0ea9a818ec752d4be19dd95a346519442`,
+ESP32 `8f76bc763cc9ef2ce3992262ea92e99f519b207c8e7b414594364f53af5468d8`.
+This short screen cannot enter the accepted-run table or pass the ten-minute
+gate. Capacity remediation remains open per the user's explicit allowance to
+document the limit and complete the functional sequencing work.
+
+The normal full-channel melodic screen used **two Tracks × four notes**, with
+the same sound/stream/edit/file load and 68 MIDI note-ons. In 80.61 s it
+captured 16 windows / 80,074 callbacks: average **211,793.20 cycles / 44.1236%**,
+maximum **364,600 cycles / 75.9583%**. Sampled stream underruns and console RX
+drops stayed zero; no live-note admission warning appeared. Two UART TX-pressure
+warning lines were logged during this run as well. Evidence:
+`logs/stereo-0-ladder-20260920-175655.log/.json`, same images as above.
+
+The eight-note case has more headroom than the 32-note overload, but **neither
+passes the current continuation threshold**. These pitched chord workloads
+are not matched speed comparisons with the previous unison/Mono-fallback
+screens. Keep final-image extended capacity, physical MIDI latency and audible
+quality checks open; the functional implementation does not certify capacity.
+
+**Final-source recheck:** after half-step capture, recording feedback and stale
+capture hardening, the same eight-note screen ran 80.49 s / 16 windows /
+80,125 callbacks. Average was **211,939.62 cycles / 44.1541%**; maximum was
+**370,415 cycles / 77.1698%**. There were 68 MIDI note-ons and one Pattern
+cycle, zero sampled stream underruns/console RX drops, no live-note admission
+warning, and two UART TX-pressure warning lines. The gate tool correctly
+rejects this sub-600-second capture; it is not entered in the accepted table.
+
+Evidence: `logs/stereo-0-ladder-20260920-183227.log/.json` and
+`logs/melodic-final-pressure-summary.json`, source `99f3ca1+`.
+Daisy QSPI `-O2` profile SHA256
+`a462346519a7783734f854f63e1dbc1b18ccdfa6445bf96a33f128e926a99730`;
+normal ESP32 `0b71e8aae8037f214ec785c20ebcc65a6b3d5d3e0ea6cc8ab2a45659f636027b`.
+Capacity remains deferred. This recheck does not establish a speed improvement
+or erase the earlier 32-note overload result.
+
 ## Saved policy and Mono held-key fallback — 2026-09-20
 
 Short diagnostic screen, **not** the ten-minute/one-hour acceptance gate:

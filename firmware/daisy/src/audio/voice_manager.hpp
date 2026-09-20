@@ -164,7 +164,10 @@ struct Voice : VoiceSampleState {
     bool one_shot = false;  // ignore note-off; stop at the sample/region end
     uint32_t age = 0;       // trigger order, for stealing/release-newest-first
     uint64_t group_id = 0;  // one admission identity shared by every layer
-    LiveNoteId live_note;   // empty for sequencer/audition triggers
+    double sequence_gate_tick = 0;
+    uint8_t sequence_lane = 0xff;
+    uint16_t sequence_release_offset = UINT16_MAX;
+    LiveNoteId live_note;  // empty for sequencer/audition triggers
 
     uint8_t render_channels = 1;  // reservation lasts through the release tail
     VoiceFilter filter, right_filter;
@@ -253,6 +256,9 @@ struct VoiceSampleParams {
     uint16_t fade_in_ms = 0, fade_out_ms = 0;
 };
 struct VoiceTriggerParams : VoiceSampleParams {
+    double sequence_gate_tick = 0;
+    uint8_t sequence_lane = 0xff;
+    uint16_t sequence_release_offset = UINT16_MAX;
     LiveNoteId live_note;
     VoiceSampleParams secondary;
     uint8_t trigger_note = 0xFF, velocity = 127;
@@ -586,7 +592,7 @@ class VoiceManager {
                           Describe describe,
                           Materialize materialize,
                           Admitted admitted = {}) {
-        if (count > 32)
+        if (count > 64)
             return 0;
         NoteTriggerBatch batch;
         uint32_t ages[WAVEX_NUM_VOICES]{}, random[WAVEX_NUM_VOICES]{};
@@ -667,6 +673,9 @@ class VoiceManager {
         v.start_offset_frames = params.start_offset_frames;
         v.track = params.track;
         v.live_note = params.live_note;
+        v.sequence_lane = params.sequence_lane;
+        v.sequence_gate_tick = params.sequence_gate_tick;
+        v.sequence_release_offset = params.sequence_release_offset;
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
         v.own_filter_env = params.own_filter_env;
@@ -779,6 +788,34 @@ class VoiceManager {
     }
 
    public:
+    // Deadlines belong to the sounding voice group, never to a reusable slot.
+    // A zero tick is a hold. Retriggering that lane schedules its old group's
+    // release at the new event's sample offset, including one-shot zones.
+    void EndSequenceLane(uint8_t track, uint8_t lane, uint16_t offset) {
+        for (auto& v: voices_)
+            if (v.state == VoiceState::Playing && v.sequence_lane == lane && v.track == track &&
+                v.sequence_gate_tick == 0)
+                v.sequence_release_offset = std::min(v.sequence_release_offset, offset);
+    }
+    void EndSequence(uint16_t tracks = 0xffff, uint16_t offset = 0) {
+        for (auto& v: voices_)
+            if (v.state == VoiceState::Playing && v.sequence_lane != 0xff &&
+                (tracks & (1u << v.track)))
+                v.sequence_release_offset = std::min(v.sequence_release_offset, offset);
+    }
+    template <typename FrameAtTick>
+    void PrepareSequenceGates(uint64_t start, uint16_t size, FrameAtTick frame_at_tick) {
+        for (auto& v: voices_)
+            if (v.state == VoiceState::Playing && v.sequence_lane != 0xff &&
+                v.sequence_gate_tick > 0) {
+                const auto frame = frame_at_tick(v.sequence_gate_tick);
+                if (frame < start + size)
+                    v.sequence_release_offset =
+                        std::min(v.sequence_release_offset,
+                                 static_cast<uint16_t>(frame <= start ? 0 : frame - start));
+            }
+    }
+
     void ReleaseLive(LiveNoteId id, bool through = false) {
         for (auto& v: voices_)
             if (v.state == VoiceState::Playing && !v.one_shot && v.live_note.Matches(id, through)) {
@@ -945,6 +982,13 @@ class VoiceManager {
             for (size_t i = 0; i < block_size; ++i) {
                 if (i < start_offset)
                     continue;
+                if (i == v.sequence_release_offset) {
+                    v.envelope.Release();
+                    v.env2.Release();
+                    v.env3.Release();
+                    v.sequence_lane = 0xff;
+                    v.sequence_release_offset = UINT16_MAX;
+                }
                 uint32_t frame = 0;
                 bool ended = false;
                 StereoFrame s = ReadSource(v, frame, ended);
@@ -1006,6 +1050,11 @@ class VoiceManager {
                 if (!ended)
                     v.AdvancePhase();
             }
+            // A scheduled hold/transport release may be beyond this segment.
+            if (v.sequence_release_offset != UINT16_MAX)
+                v.sequence_release_offset = static_cast<uint16_t>(
+                    v.sequence_release_offset > block_size ? v.sequence_release_offset - block_size
+                                                           : 0);
         }
     }
 

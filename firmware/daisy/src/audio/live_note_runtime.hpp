@@ -21,7 +21,12 @@ class LiveNoteRuntime {
     }
     bool Release(uint8_t source, uint8_t note) { return queue_.Release(source, note); }
     uint32_t Refused() const { return queue_.Refused(); }
-    bool Drain(const SequencerVoiceMap* map, VoiceManager& voices) {
+    struct IgnoreInput {
+        void operator()(const LiveNoteEvent&) const {}
+    };
+    bool OverflowReleased(LiveNoteId id) const { return queue_.OverflowReleased(id); }
+    template <typename Observe = IgnoreInput>
+    bool Drain(const SequencerVoiceMap* map, VoiceManager& voices, Observe observe = {}) {
         bool any_trigger = false;
         uint16_t mono = 0;
         if (map)
@@ -84,6 +89,17 @@ class LiveNoteRuntime {
             if (event.velocity && routed + cost > input_budget)
                 break;
             queue_.Pop(event);
+            // Recording and playback share the same surviving destinations.
+            // A binding change must not capture queued presses for its old Track.
+            if (event.velocity)
+                for (uint8_t track = 0; track < kNumTracks; ++track)
+                    if (cutoff_active_ & (1u << track)) {
+                        if (static_cast<int32_t>(event.sequence - cutoff_[track]) <= 0)
+                            event.tracks &= static_cast<uint16_t>(~(1u << track));
+                        else
+                            cutoff_active_ &= static_cast<uint16_t>(~(1u << track));
+                    }
+            observe(event);
             if (!event.velocity) {
                 flush();
                 voices.ReleaseLive(event.id);
@@ -96,11 +112,6 @@ class LiveNoteRuntime {
                 continue;
             const auto& prepared_map = *map;
             for (uint8_t track = 0; track < kNumTracks; ++track) {
-                if (cutoff_active_ & (1u << track)) {
-                    if (static_cast<int32_t>(event.sequence - cutoff_[track]) <= 0)
-                        continue;
-                    cutoff_active_ &= static_cast<uint16_t>(~(1u << track));
-                }
                 if (!(event.tracks & (1u << track)))
                     continue;
                 selected[prepared] = prepared_map.Select(track, event.id.note, event.velocity);

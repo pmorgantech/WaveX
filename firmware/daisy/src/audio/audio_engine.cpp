@@ -241,6 +241,7 @@ static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
 // Callback produces complete readbacks; foreground alone serializes them.
+static SnapshotMailbox<SeqNotesMessage> s_seq_notes_mailbox;
 struct SeqPageSnapshot {
     SeqSlotPageMessage value;
     bool scoped = false;
@@ -267,7 +268,8 @@ struct SequencerVoiceState {
 };
 static SequencerVoiceState* s_seq_voices = nullptr;
 // One AXI SRAM buffer whose ownership crosses only on release/acquire handoff.
-static WaveX::BssStatic<WaveX::Sequencer::PatternExchange> s_pattern_exchange_storage;
+static WaveX::BssStatic<WaveX::Sequencer::PatternExchange> s_pattern_exchange_storage
+    WAVEX_BACKGROUND_DATA;
 
 static wxsamp_t s_seq_voice_storage{};
 
@@ -346,7 +348,16 @@ static bool drain_note_queue() {
     if (s_seq_voices)
         s_seq_voices->mailbox.AcquireLatest();
     const bool triggered = s_live_notes.Drain(
-        s_seq_voices ? &s_seq_voices->mailbox.ConsumerValue() : nullptr, s_voice_manager);
+        s_seq_voices ? &s_seq_voices->mailbox.ConsumerValue() : nullptr,
+        s_voice_manager,
+        [](const LiveNoteEvent& event) {
+            s_seq_transport.RecordInput(
+                event.id.source, event.id.note, event.id.serial, event.velocity, event.tracks);
+        });
+    if (s_seq_transport.InputMode())
+        s_seq_transport.PruneRecording([](uint8_t source, uint8_t note, uint32_t serial) {
+            return s_live_notes.OverflowReleased({serial, source, note});
+        });
     s_voice_stop_fence.ConsumeAndStop(
         [](uint16_t tracks) { s_live_notes.StopTracks(tracks, s_voice_manager); });
     return triggered;
@@ -355,9 +366,11 @@ static bool drain_note_queue() {
 // Callback-only. drain_note_queue has already acquired the latest voice map.
 // The main loop publishes that map before enqueuing PLAY, so step 0 sees the
 // complete matching binding.
-static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size) {
+template <typename Render>
+static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size, Render render) {
     SeqPatternRequestMessage read_request;
-    bool read_requested = false, scoped_read = false;
+    bool read_requested = false, scoped_read = false, notes_requested = false;
+    SeqPatternRequestMessage notes_request;
     WaveX::Sequencer::SequencerCommand command;
     {
         CALLBACK_DETAIL_SCOPE(SeqCommands);
@@ -374,6 +387,10 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                     break;
                 case WaveX::Sequencer::SequencerCommandType::SlotEdit:
                     s_seq_transport.ApplySlotEdit(command.slot_edit);
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::NotesRequest:
+                    notes_request = command.pattern_request;
+                    notes_requested = true;
                     break;
                 case WaveX::Sequencer::SequencerCommandType::SlotPage:
                     read_request = command.pattern_request;
@@ -392,6 +409,11 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                     break;
             }
         }
+        if (notes_requested) {
+            SeqNotesMessage reply;
+            s_seq_transport.BuildNotes(notes_request, reply);
+            s_seq_notes_mailbox.Publish(reply);
+        }
         // At most one bounded page copy per callback, regardless of request bursts.
         if (read_requested) {
             SeqPageSnapshot page;
@@ -401,13 +423,43 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         }
     }
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
+    static uint32_t run_epoch = 0, pattern_epoch = 0;
+    const auto current_run = s_seq_transport.scheduler().RunEpoch();
+    if (run_epoch != current_run || pattern_epoch != s_seq_transport.PatternEpoch() ||
+        !s_seq_transport.IsPlaying()) {
+        s_voice_manager.EndSequence();
+        run_epoch = current_run;
+        pattern_epoch = s_seq_transport.PatternEpoch();
+    }
+    uint16_t muted = 0;
+    for (uint8_t t = 0; t < 16; ++t)
+        if (!s_seq_transport.pattern().tracks[t].enabled ||
+            !s_seq_transport.pattern().tracks[t].melodic)
+            muted |= static_cast<uint16_t>(1u << t);
+    s_voice_manager.EndSequence(muted);
+
     WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
+    const auto boundary_frame = s_seq_transport.scheduler().HasQueuedPattern()
+                                    ? s_seq_transport.scheduler().QueuedBoundaryFrame()
+                                    : block_start_frame;
+    uint16_t cleanup_offset = UINT16_MAX;
     size_t event_count;
     {
         CALLBACK_DETAIL_SCOPE(SeqTick);
         event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
         if (s_pattern_exchange_storage.Get().Process(s_seq_transport, event_count == 0))
             event_count = 0;  // a validated replacement discards this block's old-pattern triggers
+        if (pattern_epoch != s_seq_transport.PatternEpoch() ||
+            run_epoch != s_seq_transport.scheduler().RunEpoch()) {
+            cleanup_offset =
+                static_cast<uint16_t>(boundary_frame > block_start_frame &&
+                                              boundary_frame < block_start_frame + block_size
+                                          ? boundary_frame - block_start_frame
+                                          : 0);
+            s_voice_manager.EndSequence(0xffff, cleanup_offset);
+            pattern_epoch = s_seq_transport.PatternEpoch();
+            run_epoch = s_seq_transport.scheduler().RunEpoch();
+        }
         s_seq_telemetry_frames += block_size;
         if (s_seq_telemetry_frames >= s_seq_telemetry_interval) {
             s_seq_telemetry_frames = 0;
@@ -416,11 +468,14 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         s_voice_manager.SetTempo(s_seq_transport.scheduler().Tempo());
     }
     bool any_trigger = false;
-    if (!s_seq_voices)
+    if (!s_seq_voices) {
+        render(0, block_size, block_start_frame);
         return false;
+    }
     const auto& voice_map = s_seq_voices->mailbox.ConsumerValue();
-    static_assert(WaveX::Sequencer::kMaxEventsPerTick <= 32);
+    static_assert(WaveX::Sequencer::kMaxEventsPerTick <= 64);
     SequencerVoiceMap::Selection selected[WaveX::Sequencer::kMaxEventsPerTick];
+    uint16_t rendered = 0;
     for (size_t begin = 0; begin < event_count;) {
         size_t end = begin + 1;
         while (end < event_count && events[end].frame == events[begin].frame)
@@ -428,6 +483,12 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         const uint64_t frame = events[begin].frame;
         if (frame >= block_start_frame && frame - block_start_frame < block_size) {
             const auto offset = static_cast<uint16_t>(frame - block_start_frame);
+            if (offset > rendered)
+                render(rendered, offset - rendered, block_start_frame + rendered);
+            rendered = offset;
+            for (size_t i = begin; i < end; ++i)
+                if (events[i].lane != 0xff)
+                    s_voice_manager.EndSequenceLane(events[i].track, events[i].lane, 0);
             const auto admitted = s_voice_manager.TriggerBatch(
                 static_cast<uint16_t>(end - begin),
                 [&](uint16_t request) {
@@ -445,13 +506,21 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                     {
                         CALLBACK_DETAIL_SCOPE(SeqLocks);
                         ApplyParamLocks(params, event.param_locks, event.param_lock_count);
-                        params.start_offset_frames = offset;
+                        params.start_offset_frames = 0;
+                        params.sequence_lane = event.lane;
+                        if (cleanup_offset != UINT16_MAX && offset < cleanup_offset)
+                            params.sequence_release_offset =
+                                static_cast<uint16_t>(cleanup_offset - offset);
+                        params.sequence_gate_tick =
+                            event.gate_ticks ? event.tick + event.gate_ticks : 0;
                     }
                 });
             any_trigger = admitted != 0 || any_trigger;
         }
         begin = end;
     }
+    if (rendered < block_size)
+        render(rendered, block_size - rendered, block_start_frame + rendered);
     return any_trigger;
 }
 
@@ -1939,6 +2008,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_seq_command_queue.Init();
     s_seq_page_pending_storage.Reconstruct();
     s_seq_head_pending_storage.Reconstruct();
+    s_seq_notes_mailbox.Init(SeqNotesMessage{});
     s_seq_page_mailbox.Init(s_seq_page_pending_storage.Get());
     s_seq_head_mailbox.Init(s_seq_head_pending_storage.Get());
     s_seq_page_pending = false;
@@ -2146,12 +2216,42 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         s_mixer_controls.ApplyTo(s_track_mixer);
     }
 
-    // Sequencer transport and pattern edits are callback-owned through the
-    // bounded command queue. Its TriggerEvents start voices at their exact
-    // sample offset inside this block, after the latest live voice snapshot is
-    // active for both existing and newly scheduled voices.
-    any_note_on = drain_sequencer(static_cast<uint16_t>(size)) || any_note_on;
     PROFILE_END(voice_events);
+    const bool metering = s_mix_meters_active.load(std::memory_order_relaxed);
+    if (metering != s_callback_metering) {
+        s_mix_meter_window.Reset();
+        s_callback_metering = metering;
+    }
+    ModSources global_sources;
+    global_sources.lfo1 = s_mod_lfo1.Tick();
+    const ModSlotResolver resolver{nullptr, &ResolveModSlots};
+    s_track_mixer.Tick(static_cast<uint32_t>(size));
+    // Render chronologically up to each trigger frame before admitting its
+    // groups. A later steal must never erase the earlier part of this block.
+    const auto render = [&](uint16_t offset, uint16_t frames, uint64_t start) {
+        s_voice_manager.PrepareSequenceGates(start, frames, [&](double tick) {
+            return s_seq_transport.scheduler().FrameAtTick(tick);
+        });
+        {
+            PROFILE_SCOPE(voice_modulation);
+            CALLBACK_DETAIL_SCOPE(Modulation);
+            s_voice_manager.TickModulation(resolver, global_sources, frames);
+        }
+        if (!s_voice_manager.ActiveVoiceCount() || size > Timebase::kBlockSize)
+            return;
+        static float vm_l[Timebase::kBlockSize], vm_r[Timebase::kBlockSize];
+        {
+            PROFILE_SCOPE(voice_render);
+            CALLBACK_DETAIL_SCOPE(Render);
+            s_voice_manager.Render(
+                vm_l, vm_r, frames, metering ? s_mix_meter_window.Peaks() : nullptr);
+        }
+        for (size_t i = 0; i < frames; ++i) {
+            out[0][offset + i] += vm_l[i];
+            out[1][offset + i] += vm_r[i];
+        }
+    };
+    any_note_on = drain_sequencer(static_cast<uint16_t>(size), render) || any_note_on;
     if (s_para_mailbox.ConsumeLatest(s_para_active)) {
         s_para_env.SetParams(s_para_active.attack_s,
                              s_para_active.decay_s,
@@ -2159,53 +2259,9 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
                              s_para_active.release_s);
     }
     s_cv_test_mailbox.ConsumeLatest(s_cv_test_active);
-
-    // Modulation matrix + global LFOs (roadmap Phase 2.5 item 4;
-    // param-locks-and-modulation.md §3/§5). One callback IS one 1kHz control
-    // tick (Timebase's own invariant - see its comment), so this runs once
-    // per block: tick the global LFO, then evaluate every sounding voice's
-    // modulation destinations (against ITS OWN instrument's slots, via
-    // ResolveModSlots) so Render() below picks up this tick's values rather
-    // than the previous one's. Unconditional on WAVEX_ANALOG_CV_ENABLED -
-    // this is the all-digital path, unrelated to the optional analog CV
-    // stage further down.
-    {
-        PROFILE_SCOPE(voice_modulation);
-        CALLBACK_DETAIL_SCOPE(Modulation);
-        WaveX::AudioEngine::ModSources mod_global_sources;
-        mod_global_sources.lfo1 = s_mod_lfo1.Tick();
-        const WaveX::AudioEngine::ModSlotResolver mod_slot_resolver{nullptr, &ResolveModSlots};
-        s_voice_manager.TickModulation(
-            mod_slot_resolver, mod_global_sources, static_cast<uint32_t>(size));
-    }
-
-    const bool metering = s_mix_meters_active.load(std::memory_order_relaxed);
-    if (metering != s_callback_metering) {
-        s_mix_meter_window.Reset();
-        s_callback_metering = metering;
-    }
-    const uint8_t active_voices = s_voice_manager.ActiveVoiceCount();
 #if WAVEX_DEBUG_HARNESS_ENABLED
-    // One relaxed store per block for the console's STATE verb; the main
-    // loop reads it, nothing synchronises on it.
-    __atomic_store_n(&s_dbg_active_voices, active_voices, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_dbg_active_voices, s_voice_manager.ActiveVoiceCount(), __ATOMIC_RELAXED);
 #endif
-    if (active_voices > 0 && size <= static_cast<size_t>(Timebase::kBlockSize)) {
-        static float vm_l[Timebase::kBlockSize];
-        static float vm_r[Timebase::kBlockSize];
-        // Advance the mute ramps once per block, before the voices read them.
-        s_track_mixer.Tick(static_cast<uint32_t>(size));
-        {
-            PROFILE_SCOPE(voice_render);
-            CALLBACK_DETAIL_SCOPE(Render);
-            s_voice_manager.Render(
-                vm_l, vm_r, size, metering ? s_mix_meter_window.Peaks() : nullptr);
-        }
-        for (size_t i = 0; i < size; ++i) {
-            out[0][i] += vm_l[i];
-            out[1][i] += vm_r[i];
-        }
-    }
 
     if (metering && s_mix_meter_window.Advance(static_cast<uint32_t>(size))) {
         MixMeterSnapshot snapshot;
@@ -2631,6 +2687,14 @@ void OnSeqSlotEdit(const SeqSlotEditMessage& message) {
     command.slot_edit = message;
     EnqueueSequencerCommand(command);
 }
+void OnSeqNotesRequest(const SeqPatternRequestMessage& request) {
+    if (!IsValidSeqNotesRequest(request))
+        return;
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::NotesRequest;
+    command.pattern_request = request;
+    EnqueueSequencerCommand(command);
+}
 void OnSeqSlotPageRequest(const SeqPatternRequestMessage& request) {
     WaveX::Sequencer::SequencerCommand command;
     command.type = WaveX::Sequencer::SequencerCommandType::SlotPage;
@@ -2902,6 +2966,11 @@ void PumpSequencerState() {
             break;
         }
     }
+    static SeqNotesMessage notes;
+    static bool notes_pending = false;
+    notes_pending |= s_seq_notes_mailbox.ConsumeLatest(notes);
+    if (notes_pending && WaveX::Comm::LinkSend(MSG_SEQ_NOTES, &notes, sizeof(notes)) >= 0)
+        notes_pending = false;
     WaveX::PatternStore::Pump(s_pattern_exchange_storage.Get());
     auto& page = s_seq_page_pending_storage.Get();
     auto& head = s_seq_head_pending_storage.Get();

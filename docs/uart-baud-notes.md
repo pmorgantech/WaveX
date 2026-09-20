@@ -95,7 +95,7 @@ loops and independent preview playback are off. Quarter-note chord regions
 are 500 ms after accounting for pitch; their ends are sample-region ends,
 not a new note-off scheduler. An overlap calculation includes the sequence
 wrap and bounds the arrangement at eight voices, reached on accented downbeats.
-The melody gate design remains [backlogged](roadmap.md#note-lengths-and-one-shot-playback--decision-pending).
+That historical comparison predates the [implemented melodic gate path](features/melodic-sequencing.md); its fixed region lengths are not gate-validation evidence.
 
 ### Matched musical controls and load
 

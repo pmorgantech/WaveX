@@ -32,6 +32,7 @@ def _pattern(daisy, tracks, length=4):
     # Mute rows outside the fixture; reset all visible steps so previous
     # tests or bench patterns cannot add a trigger behind our assertions.
     for track in range(16):
+        _op(daisy, 15, track, value8=0)
         _op(daisy, 4, track, value8=int(track in tracks))
         for step in range(length):
             _op(daisy, 0, track, step, int(track in tracks and step == 0), 100)

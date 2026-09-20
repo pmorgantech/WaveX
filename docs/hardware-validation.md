@@ -33,6 +33,7 @@ this document owns the runnable checks and their validation status.
 - [HV-021 — USB console and Daisy RTT](#hv-021--usb-console-and-daisy-rtt)
 - [HV-022 — Peer restart and browse delivery](#hv-022--peer-restart-and-browse-delivery)
 - [HV-023 — Stream read recovery cursor](#hv-023--stream-read-recovery-cursor)
+- [HV-024 — Melodic sequencing](#hv-024--melodic-sequencing)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -97,6 +98,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-021 | USB console and Daisy RTT | Partial; RTT integrity failed | ESP32 USB console passes; Daisy USB retained pending a reliable RTT probe/readout and active-audio soak |
 | HV-022 | Peer restart and browse delivery | Passed (listed cases) | Six isolated restarts, full listings, and early-selection/load regression pass; uncorrelated overlapping browse requests remain outside this check |
 | HV-023 | Stream read recovery cursor | Pending | Absolute retry-position fix implemented; injected SD read failure and latency checks unrun |
+| HV-024 | Melodic lanes, gates and recording | Partial pass | Lane/record/Pattern HIL and rendering checks pass; physical MIDI, audio capture and extended capacity remain open |
 
 ## HV-001 — SD card formatting
 
@@ -1656,6 +1658,112 @@ error-free playback run does not satisfy fault-injection or latency acceptance.
 subtracting region-relative bytes remaining from full-file data size. The
 injected-failure bench procedure is unrun; a deterministic injection build is
 still required. The broader CRC-recovery deadline decision remains open.
+
+## HV-024 — Melodic sequencing
+
+**Introduced:** 2026-09-20. **Design / gate:**
+[melodic sequencing](features/melodic-sequencing.md),
+[Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer).
+**Setup:** Both matching images, the current SD fixtures, one looped keyboard
+Instrument and a short drum sample, MIDI keyboard, audio capture and DWT logger.
+Use unique Pattern/Project save-copy names; preserve source assets.
+
+- [ ] **024a — Lane/editor/persistence:** Open Sequencer → Notes; edit all four
+  lanes including MIDI note zero, velocity-zero clearing, finite gates and Hold.
+  Switch drum/melodic, edit hidden steps, save/new/load Pattern and Project.
+  Verify old files default to drum/empty lanes. Exercise reconnect and Pattern
+  replacement while reads/edits are pending. **Pass:** confirmed values and
+  ownership remain correct; no stale editor changes a replacement Pattern.
+- [ ] **024b — Gate/ownership:** Sound a four-note chord with positive gates,
+  then holds. Change tempo, overlap positive gates, mute/unmute, Stop/restart,
+  locate, launch Patterns and advance Song sections. Add an independent held
+  live key and force stealing/rebinding. **Pass:** exact gate timing in capture,
+  bounded release tails, no stale releases and no stuck melodic notes; the
+  independent live key survives sequence Stop.
+- [ ] **024c — Recording:** Record a two-bar four-note progression over drums
+  from physical MIDI. Check quantize on/off, first-note shared microtiming,
+  repeated pitches, a fifth-note replacement, step-record cursor advancement,
+  held-pitch erase and mode/target changes. **Pass:** correct saved pitches,
+  velocities/durations, deterministic replacement and matching source releases.
+- [ ] **024d — Soak and UI:** Loop the recorded progression for ten minutes,
+  inspect/listen to the physical panel/audio and capture DWT maxima. Run the
+  full-load `--melodic` callback bench separately with streaming, edits and file
+  cycles. **Pass:** no underruns/stuck notes, readable responsive panel, and
+  callback acceptance under the documented capacity workload. Short screens
+  and preprogrammed progressions do not pass the physical recording gate.
+
+Automated coverage is `tests/hil/test_melodic.py`; its slow test runs a
+preprogrammed four-note progression plus drums for ten minutes. Physical MIDI,
+listening and the full Phase 2.5 gate remain separate from these checks.
+
+**2026-09-20 initial functional result:** `test_melodic.py -m "not slow"`
+passed in 20.14 s on Daisy
+`cd988297778beb0e411dc8e3af14b6e6e214a1a1c2c5f18f2e798a6227286fdf`
+and ESP32
+`8f76bc763cc9ef2ce3992262ea92e99f519b207c8e7b414594364f53af5468d8`.
+Evidence: `logs/melodic-hil3.log/.xml`. This covers four-note gates/holds,
+sequence Stop preserving a live key, step/live capture, erase and Pattern
+recall via the real UI/UART/SD. The first attempt found an ambiguous Play/mode
+button label (fixed). Its unbalanced test key caused the next attempt to
+consume that older press's FIFO release; the harness now balances owned keys
+even after assertion failures. Neither failed attempt is counted as a pass.
+
+The initial framebuffer inspection caught a clipped gate-unit label; the label
+was shortened before final visual verification. Physical MIDI, listening,
+Project reboot recovery and the full acceptance checkboxes remain open.
+
+**2026-09-20 first normal-image regression:** **11/11 passed in 91.25 s** across
+melodic, saved polyphony, live-note identity, note groups and sequencer Tracks.
+Evidence: `logs/melodic-final-hil.log/.xml`. Normal firmware SHA256 identities:
+Daisy `2ec52b185dfa4bd956ec49212b8e6cfaa2ccf3d40f56236111ff7dff767194b6`,
+ESP32 `7fe03c7e5758375427784250a5dc00353ebe3f4486958e79cb110f80688c6d12`.
+This source also rejects pre-rebind recording events and prevents old
+held-capture releases from overwriting manual lane replacements. Shared 457,
+Daisy 807 and ESP32 367 host tests pass; both Stage A and B firmware build.
+
+The corrected Notes and parent Sequencer framebuffer captures are
+`logs/melodic-notes-final.png` and `logs/melodic-sequencer-final.png`.
+[UI profiling](ui-latency-notes.md#step-notes-follow-up--2026-09-20) measured
+zero idle redraws and no full-screen refreshes for lane edits/selections;
+local edits average 53.40 ms per submitted refresh. Profiling is disabled in
+the final normal firmware. This is not physical touch or audible timing proof.
+
+**2026-09-20 musical soak:** the preprogrammed four-note progression plus drum
+test passed in **606.08 s** (600 s playback), using the same normal images as
+the 91.25 s regression above, before the later half-step/feedback additions.
+There were 304 state replies, a maximum of six voices, zero reported stream
+underruns and console RX drops, and zero voices after Stop. Evidence:
+`logs/melodic-soak.log/.xml`, `logs/hil-20260920-181630.log` and
+`logs/melodic-soak-summary.json`. Parent-grid and Notes navigation were also
+exercised during the loop. No physical MIDI, listening, audio recording or
+DWT deadline proof is inferred from this resident-sample soak. UART TX-pressure
+warnings occurred in the combined session; zero console RX drops does not
+mean lossless inter-MCU telemetry.
+
+**Half-step/feedback completion:** the final-source melodic HIL passed in
+20.64 s (`logs/melodic-halfstep-hil2.log/.xml`) on profile images Daisy
+`a462346519a7783734f854f63e1dbc1b18ccdfa6445bf96a33f128e926a99730` and ESP32
+`74ceed7265be9f51b5b70eae9cb1285a21ada9dc5d03f60106175acb3728432f`.
+It verifies the half-step readback/control cycle and transient confirmed-step
+feedback in addition to the earlier melodic workflow. The first attempt
+incorrectly toggled Shift again after a shifted softkey automatically cleared
+it; the harness was corrected, with no firmware change for that failure.
+The final source passes 457 shared, 808 Daisy and 367 ESP32 host tests, both
+normal builds and the alternate Stage B compile check. Scale-constrained entry
+still depends on the Phase 5 tuning/mask model; current entry is chromatic.
+
+**Final normal images:** all **11 hardware regressions passed in 92.56 s**,
+including half-step controls and feedback (`logs/melodic-final2-hil.log/.xml`).
+Daisy SHA256 `c344a6699144bdfa290e997636281ffd2d0da6862d8ea3ab36f17ecd5ebc21c7`;
+ESP32 `0b71e8aae8037f214ec785c20ebcc65a6b3d5d3e0ea6cc8ab2a45659f636027b`.
+The final-source eight-note DWT screen averaged 44.1541%, peaked at 77.1698%
+and leaves capacity deferred; see the [complete pressure evidence](callback-performance-log.md#melodic-chord-pressure--2026-09-20).
+The boards were left on normal firmware at Main Menu with an empty bench RAM
+session, zero voices/streams/samples, zero reported stream underruns/console
+drops, and profiling disabled. Final readback: `logs/melodic-final-state.json`.
+Source WAVs and existing saved assets were preserved; tests used unique save
+copies. The final-source physical recording/audio and extended capacity gates
+remain open; the earlier musical soak is not silently reassigned to new images.
 
 ## Recording a validation session
 

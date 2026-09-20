@@ -534,3 +534,27 @@ The channel benchmark's `--mono-keys --midi-bursts` option keeps one base key he
 and presses/releases two later pitches each pass to exercise fallback. It resets
 Track inheritance explicitly because loading a new Instrument preserves overrides.
 These console injections do not validate physical DIN/USB MIDI latency.
+
+
+### Melodic editor and pressure checks
+
+Sequencer `PAGE NOTES` opens the same child page as the Notes touch button.
+The note page supports `STEP <0..63>`, `LANE <0..3>`,
+`NOTE <lane> <note> <velocity> <gate_ticks>`, `MELODIC <0|1>` and
+`MODE <0..3>`. These use the normal scoped edit and readback path. `STATE`
+reports confirmed `notesready`, `melodic`, `step`, `lane`, `note`, `velocity`,
+`gate`, `record`, `quantize`, `feedback` and `playing` values.
+`PAGE QUANTIZE <0|1|2>` selects off/step/half-step capture. The brief `feedback=1` marks a
+confirmed displayed-step change while recording or erasing.
+
+`tests/hil/test_melodic.py` checks chord gates/holds, live-key isolation on Stop,
+step/live capture, erase and Pattern recall. `--hil-slow` adds a ten-minute
+preprogrammed progression/drum loop. Tests balance their owned live presses
+after failures; a stopped render voice does not erase FIFO MIDI key identity.
+
+`bench_stereo_channels.py --melodic` adds four lanes and overlapping 96-tick
+gates per enabled step to the existing full-channel workload. The default uses enough
+Tracks to fill eight channels (two four-note Mono chords); `--burst-tracks 8`
+requests 32 same-frame notes as a separate overload screen. It records the
+flag in JSON alongside image identity, file cycles and MIDI pressure. This is
+a capacity stress screen, not physical MIDI or audible gate verification.

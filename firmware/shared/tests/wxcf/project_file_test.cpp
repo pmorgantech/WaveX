@@ -149,7 +149,7 @@ TEST(ProjectFile, RoundTripSparsePatternsSongsAndSessionSettings) {
     EXPECT_EQ(restored->songs[15].tempo_bpm_x100, 14325);
     EXPECT_EQ(restored->songs[15].entries[127].pattern, 127);
     EXPECT_EQ(restored->songs[15].entries[127].repeats, 255);
-    EXPECT_LT(sizeof(Sequencer::Project), 3584u * 1024u);
+    EXPECT_LT(sizeof(Sequencer::Project), 6u * 1024u * 1024u);
 }
 TEST(ProjectFile, FullCapacityRoundTripStaysWithinFileAndPerAdvanceBudgets) {
     auto p = Example();
@@ -325,3 +325,44 @@ TEST(ProjectFile, LegacyProjectHasNoEditsAndNewVersionRequiresSampleCount) {
     EXPECT_EQ(restored->sample_count, 0);
 }
 }  // namespace
+
+TEST(ProjectFile, MelodicLanesRoundTripAndOldProjectPatternsClearThem) {
+    auto p = Example();
+    auto& row = p->patterns[127].pattern.tracks[15];
+    row.melodic = true;
+    row.steps[63].notes[3] = {0, 127, 32767};
+    auto m = Encode(*p);
+    auto restored = std::make_unique<Sequencer::Project>();
+    ASSERT_EQ(Decode(m, *restored), Result::Done);
+    EXPECT_TRUE(restored->patterns[127].pattern.tracks[15].melodic);
+    EXPECT_EQ(restored->patterns[127].pattern.tracks[15].steps[63].notes[3].gate_ticks, 32767);
+    Memory old;
+    old.bytes.insert(old.bytes.end(), m.bytes.begin(), m.bytes.begin() + 12);
+    for (size_t offset = 12; offset < m.bytes.size();) {
+        const auto id = Wxcf::detail::ReadU16LE(m.bytes.data() + offset);
+        const auto len = Wxcf::detail::ReadU32LE(m.bytes.data() + offset + 4);
+        if (id >= 0x200 && id < 0x280) {
+            const auto base = old.bytes.size();
+            old.bytes.insert(old.bytes.end(),
+                             m.bytes.begin() + offset,
+                             m.bytes.begin() + offset + 8 + ProjectFile::kPatternPrefixBytes);
+            Wxcf::detail::WriteU16LE(old.bytes.data() + base + 2, 0x0102);
+            Wxcf::detail::WriteU32LE(old.bytes.data() + base + 4,
+                                     ProjectFile::kPatternPrefixBytes + 16 * 64 * 20);
+            for (unsigned t = 0; t < 16; ++t)
+                old.bytes[base + 8 + 28 + t] &= 1;
+            for (unsigned step = 0; step < 16 * 64; ++step) {
+                const auto begin = m.bytes.begin() + offset + 8 + ProjectFile::kPatternPrefixBytes +
+                                   step * PatternFile::kStepBytes;
+                old.bytes.insert(old.bytes.end(), begin, begin + 20);
+            }
+        } else
+            old.bytes.insert(
+                old.bytes.end(), m.bytes.begin() + offset, m.bytes.begin() + offset + 8 + len);
+        offset += 8 + len;
+    }
+    Wxcf::detail::WriteU32LE(old.bytes.data() + 8, static_cast<uint32_t>(old.bytes.size()));
+    ASSERT_EQ(Decode(old, *restored), Result::Done);
+    EXPECT_FALSE(restored->patterns[127].pattern.tracks[15].melodic);
+    EXPECT_EQ(restored->patterns[127].pattern.tracks[15].steps[63].notes[3].velocity, 0);
+}

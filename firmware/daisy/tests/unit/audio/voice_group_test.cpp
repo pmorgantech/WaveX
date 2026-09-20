@@ -278,3 +278,70 @@ TEST(VoiceGroup, BatchMatchesSequentialAdmissionChokesRandomnessAndAudio) {
     for (auto& sample: pcm)
         sample = 0;
 }
+
+TEST(VoiceGroup, SequenceGateReleasesAtExactFrameIncludingOneShotAndLeavesLiveKeys) {
+    VoiceManager voices;
+    voices.Init(48000);
+    auto p = Layer();
+    p.sequence_lane = 0;
+    p.sequence_gate_tick = 1;
+    p.one_shot = true;
+    p.release_s = 1;
+    const auto seq = voices.TriggerGroup(&p, 1);
+    auto live = Layer();
+    const auto held = voices.TriggerGroup(&live, 1);
+    voices.PrepareSequenceGates(
+        240, 48, [](double tick) { return static_cast<uint64_t>(tick * 250); });
+    float l[48], r[48];
+    voices.Render(l, r, 10);
+    EXPECT_EQ(Members(voices, seq), 1u);
+    // Fresh block preparation expresses the same deadline at its new offset.
+    voices.PrepareSequenceGates(
+        250, 48, [](double tick) { return static_cast<uint64_t>(tick * 250); });
+    voices.Render(l, r, 1);
+    EXPECT_EQ(Members(voices, seq, true), 1u);
+    EXPECT_EQ(Members(voices, held), 1u);
+    voices.EndSequence();
+    voices.Render(l, r, 1);
+    EXPECT_EQ(Members(voices, held), 1u);
+}
+TEST(VoiceGroup, StolenSequenceDeadlineCannotReleaseReusedLiveSlot) {
+    VoiceManager voices;
+    voices.Init(48000);
+    auto p = Layer();
+    p.sequence_lane = 0;
+    p.sequence_gate_tick = 1;
+    const auto old = voices.TriggerGroup(&p, 1);
+    auto live = Layer();
+    uint64_t newest = 0;
+    for (int i = 0; i < 8; ++i)
+        newest = voices.TriggerGroup(&live, 1);
+    EXPECT_EQ(Members(voices, old), 0u);
+    voices.EndSequenceLane(0, 0, 0);
+    voices.PrepareSequenceGates(250, 48, [](double t) { return static_cast<uint64_t>(250 * t); });
+    float l[48], r[48];
+    voices.Render(l, r, 48);
+    EXPECT_EQ(Members(voices, newest), 1u);
+}
+TEST(VoiceGroup, HeldLaneRetriggerEndsOnlyItsOldGroupAndTempoReanchorsGate) {
+    VoiceManager voices;
+    voices.Init(48000);
+    auto hold = Layer();
+    hold.release_s = 1;
+    hold.sequence_lane = 0;
+    const auto old = voices.TriggerGroup(&hold, 1);
+    float warm_l[1], warm_r[1];
+    voices.Render(warm_l, warm_r, 1);
+    voices.EndSequenceLane(0, 0, 0);
+    auto fresh = hold;
+    fresh.sequence_gate_tick = 24;
+    const auto next = voices.TriggerGroup(&fresh, 1);
+    float l[48], r[48];
+    voices.Render(l, r, 48);
+    EXPECT_EQ(Members(voices, old, true), 1u);
+    EXPECT_EQ(Members(voices, next), 1u);
+    voices.PrepareSequenceGates(
+        3590, 48, [](double tick) { return static_cast<uint64_t>(1200 + (tick - 12) * 200); });
+    voices.Render(l, r, 48);
+    EXPECT_EQ(Members(voices, next, true), 1u);
+}

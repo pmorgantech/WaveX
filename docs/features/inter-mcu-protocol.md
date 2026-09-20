@@ -101,6 +101,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SEQ_TRANSPORT | 0x50 | E→D | `SeqTransportMessage{command, clock_source, input_mode, quantize, tempo_bpm_x100, song_position}` | play/stop/continue, tempo, clock source (internal/MIDI), input mode (play/step-rec/live-rec/erase) — `sequencer.md` §4, `midi-sync-tempo-follower.md` §3 |
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
 | MSG_SEQ_PATTERN_SYNC | 0x52 | both | SeqPatternRequestMessage / SeqPatternSyncMessage | sixteen-step readback window from the callback-owned pending pattern; see Sequencer page readback below |
+| MSG_SEQ_NOTES | 0x88 | E→D / D→E | `SeqPatternRequestMessage` / `SeqNotesMessage` | single-step melodic readback: request/Pattern epoch/revision, row type, four note/velocity/gate lanes, record cursor and transport settings; unaligned `first_step` allowed only for this request |
 | MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
 | MSG_SAMPLE_PLAYHEAD | 0x54 | both | SamplePlayheadRequest / SamplePlayheadMessage | identity-scoped, display-only source-frame position; see [Waveform playback head](waveform-playback-head.md) |
 | MSG_SEQ_SONG_OP | 0x58 | E→D | SeqSongOpMessage | inspect/edit a Project Song or start/stop selected-section playback; see [Song sequencing](song-sequencing.md) |
@@ -376,7 +377,7 @@ not a valid substitute for a protocol-6 step's default note.
 Daisy resolves prepared zone keys against the scheduled note and velocity,
 including layer selection and crossfade weights. Retriggers preserve the
 primary hit's note and velocity. This is one note per drum-shaped step,
-not the future melodic chord/gate payload.
+not the separate melodic single-step payload (`MSG_SEQ_NOTES`).
 
 
 ### Pattern file operations
@@ -654,3 +655,23 @@ Busy or unmatched events are not queued/replayed. No Bank, empty slot or failed
 staging preserves Track Instruments and uses existing Bank errors. See
 [Bank persistence](bank-persistence.md#midi-program-change-recall) for routing,
 new-Track defaults, opt-out and timing limitations.
+
+### Melodic lane editing and capture
+
+`SEQ_OP_SET_NOTE_LANE` atomically replaces one lane (note, velocity, gate ticks)
+and enables the step when velocity is nonzero. `SEQ_OP_SET_MELODIC` changes row
+type while retaining both representations. `SEQ_OP_RECORD_TARGET` selects the
+capture Track/step without changing Pattern data. The UI sends these through
+`MSG_SEQ_SLOT_EDIT` with the confirmed Pattern slot and epoch; Song playback
+rejects edits. The existing grid payload is unchanged.
+
+`MSG_SEQ_NOTES` uses a request ID and one unaligned step address. Its fixed
+snapshot carries all four lanes plus Pattern identity, revision, row type,
+read-only status, input mode, quantize (0 off / 1 step / 2 half-step), clock source, tempo, playing state and
+record cursor. Request/reply validators reject invalid addresses, notes,
+velocities and gates before use. The editor reads after a mutation rather than
+automatically replaying a lost edit. Definitions/sizes remain in `protocol.h`.
+
+The existing transport modes now drive callback-owned step/live capture and
+held-pitch erase. See [melodic sequencing](melodic-sequencing.md) for gate and
+capture ownership; audio recording remains a separate subsystem.

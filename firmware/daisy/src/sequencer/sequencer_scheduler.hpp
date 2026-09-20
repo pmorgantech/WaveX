@@ -71,7 +71,7 @@ namespace Sequencer {
 // reachable configuration. Events beyond this bound in one call are
 // dropped (documented, not UB); callers needing more headroom can raise
 // this constant.
-static constexpr size_t kMaxEventsPerTick = 32;
+static constexpr size_t kMaxEventsPerTick = 64;
 
 class SequencerScheduler {
    public:
@@ -122,6 +122,7 @@ class SequencerScheduler {
     // instant playback starts, it does not wait one full step interval.
     WAVEX_ITCM_CODE_NAMED("scheduler.Start")
     void Start() {
+        ++run_epoch_;
         frame_counter_ = frame_anchor_ = 0;
         tick_anchor_ = pattern_origin_tick_ = 0;
         queued_pattern_ = nullptr;
@@ -171,6 +172,7 @@ class SequencerScheduler {
     double BlockEndTick() const { return CurrentTick() + block_size_ / frames_per_tick_; }
 
     void Stop() {
+        ++run_epoch_;
         playing_ = false;
         queued_pattern_ = nullptr;
         queued_stop_ = false;
@@ -210,6 +212,9 @@ class SequencerScheduler {
     uint8_t PlayheadStep() const { return playhead_step_; }
     uint32_t PlayheadLoop() const { return playhead_loop_; }
 
+    double PatternPositionTicks() const { return CurrentTick() - pattern_origin_tick_; }
+    uint64_t FrameAtTick(double tick) const { return TickToFrame(tick); }
+    uint32_t RunEpoch() const { return run_epoch_; }
     uint64_t CurrentFrame() const { return frame_counter_; }
 
     // True only after the most recent Process() crossed the shared pattern
@@ -260,7 +265,9 @@ class SequencerScheduler {
         std::sort(local, local + local_count, [](const TriggerEvent& a, const TriggerEvent& b) {
             if (a.frame != b.frame)
                 return a.frame < b.frame;
-            return a.track < b.track;
+            if (a.track != b.track)
+                return a.track < b.track;
+            return a.lane < b.lane;
         });
 
         size_t n = std::min(local_count, max_events);
@@ -356,7 +363,28 @@ class SequencerScheduler {
                 bool scheduled_retrig = false;
                 if (track.enabled && step.on) {
                     if (NextRandomPercent() < step.probability) {
-                        if (local_count < kMaxEventsPerTick) {
+                        if (track.melodic) {
+                            for (uint8_t lane = 0;
+                                 lane < kNoteLanes && local_count < kMaxEventsPerTick;
+                                 ++lane) {
+                                const auto& n = step.notes[lane];
+                                if (!n.velocity)
+                                    continue;
+                                auto& e = local[local_count++];
+                                e = MakeEvent(
+                                    t,
+                                    ts.step_index,
+                                    n.velocity,
+                                    n.note,
+                                    false,
+                                    step.param_locks,
+                                    CountLocks(step),
+                                    ClampFrame(tframe, block_start_frame, block_end_frame));
+                                e.tick = ts.next_trigger_tick;
+                                e.gate_ticks = n.gate_ticks;
+                                e.lane = lane;
+                            }
+                        } else if (local_count < kMaxEventsPerTick) {
                             local[local_count] =
                                 MakeEvent(t,
                                           ts.step_index,
@@ -368,7 +396,7 @@ class SequencerScheduler {
                                           ClampFrame(tframe, block_start_frame, block_end_frame));
                             ++local_count;
                         }
-                        if (step.retrig_count > 0 && step.retrig_rate_ticks > 0) {
+                        if (!track.melodic && step.retrig_count > 0 && step.retrig_rate_ticks > 0) {
                             const double rate = static_cast<double>(step.retrig_rate_ticks);
                             const double first_retrig = ts.next_trigger_tick + rate;
                             // Only schedule if at least the first retrig
@@ -543,6 +571,7 @@ class SequencerScheduler {
         return static_cast<uint8_t>((result >> 56) % 100);
     }
 
+    uint32_t run_epoch_ = 0;
     const Pattern* pattern_ = nullptr;
     const Pattern* queued_pattern_ = nullptr;
     bool queued_stop_ = false;

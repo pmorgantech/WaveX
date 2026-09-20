@@ -719,3 +719,54 @@ TEST(SequencerSchedulerQueueTest, TempoChangesPreservePhaseAndMoveQueuedBoundary
     }
     EXPECT_TRUE(scheduler.SwitchedPattern());
 }
+
+TEST(SequencerSchedulerTest, MelodicChordKeepsAllLanesTimingLocksAndProbabilityTogether) {
+    Pattern p;
+    p.length = 1;
+    auto& row = p.tracks[15];
+    row.melodic = true;
+    auto& step = row.steps[0];
+    step.on = true;
+    step.micro_offset = 1;
+    step.retrig_count = 8;
+    step.retrig_rate_ticks = 1;
+    step.param_locks[0] = {1, 42};
+    for (uint8_t i = 0; i < 4; ++i)
+        step.notes[i] = {static_cast<uint8_t>(i * 40),
+                         static_cast<uint8_t>(90 + i),
+                         static_cast<uint16_t>(i * 24)};
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetPattern(&p);
+    sched.Start();
+    auto events = RunAll(sched, 120);
+    ASSERT_EQ(events.size(), 4u);  // melodic lanes do not inherit drum retrigs
+    for (uint8_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(events[i].frame, 250u);
+        EXPECT_DOUBLE_EQ(events[i].tick, 1);
+        EXPECT_EQ(events[i].lane, i);
+        EXPECT_EQ(events[i].note, i * 40);
+        EXPECT_EQ(events[i].gate_ticks, i * 24);
+        EXPECT_EQ(events[i].param_locks[0].value, 42);
+    }
+    step.probability = 0;
+    sched.Start();
+    EXPECT_TRUE(RunAll(sched, 120).empty());
+}
+TEST(SequencerSchedulerTest, SixteenFullChordsFitOneBoundedEventBatch) {
+    Pattern p;
+    for (auto& row: p.tracks) {
+        row.melodic = true;
+        row.steps[0].on = true;
+        for (auto& n: row.steps[0].notes)
+            n.velocity = 100;
+    }
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetPattern(&p);
+    sched.Start();
+    TriggerEvent events[64];
+    EXPECT_EQ(sched.Process(events, 64), 64u);
+    EXPECT_EQ(events[63].track, 15);
+    EXPECT_EQ(events[63].lane, 3);
+}

@@ -31,7 +31,9 @@
 #include "memory_sections.h"
 #include "spi_protocol/protocol.h"
 
+#include "bss_static.hpp"
 #include "midi/event_ring.hpp"
+#include "note_recorder.hpp"
 #include "pattern.hpp"
 #include "sequencer/project_data.hpp"
 #include "sequencer_scheduler.hpp"
@@ -48,6 +50,7 @@ class SequencerTransport {
     SequencerTransport(const SequencerTransport&) = delete;
     SequencerTransport& operator=(const SequencerTransport&) = delete;
     void Init(uint32_t sample_rate, uint16_t block_size) {
+        recorder_.Target(0, 0);
         clock_out_.Init();
         output_control_.store(0);
         output_control_seen_ = 0;
@@ -63,7 +66,7 @@ class SequencerTransport {
         pending_output_ = 0;
         song_project_ = nullptr;
         pending_pattern_ = &pending_storage_;
-        *pending_pattern_ = Pattern{};
+        WaveX::ReconstructInPlace(*pending_pattern_);
         launch_buffer_ = nullptr;
         launch_cancelled_ = false;
         active_slot_ = 0;
@@ -86,6 +89,7 @@ class SequencerTransport {
         return song_project_ ? song_project_->patterns[active_slot_].pattern : *pending_pattern_;
     }
 
+    uint32_t PatternEpoch() const { return active_epoch_; }
     uint32_t PatternRevision() const { return pattern_revision_; }
     // Callback only. Persistence validates before handing this private buffer
     // over. Stop without changing tempo, sync configuration or Track bindings.
@@ -102,6 +106,7 @@ class SequencerTransport {
 
     // Callback-only Project boundary: stop without replacing session settings.
     void StopForProject() {
+        recorder_.Reset();
         StopSong();
         scheduler_.Stop();
         follower_.OnStop();
@@ -192,6 +197,8 @@ class SequencerTransport {
         scheduler_.SetTempo(static_cast<float>(tempo_bpm_));
         follower_.SetNominalBpm(static_cast<float>(tempo_bpm_));
 
+        if (input_mode_ != m.input_mode || m.command != Protocol::SEQ_TRANSPORT_CONFIGURE)
+            recorder_.Reset();
         input_mode_ = m.input_mode;
         quantize_ = m.quantize;
 
@@ -264,6 +271,27 @@ class SequencerTransport {
             return;
         using namespace Protocol;
         switch (m.op) {
+            case SEQ_OP_RECORD_TARGET:
+                if (StepValid(m.track, m.step))
+                    recorder_.Target(m.track, m.step);
+                return;
+            case SEQ_OP_SET_MELODIC:
+                if (m.track >= kMaxTracks || m.arg_u8 > 1)
+                    return;
+                pending_pattern_->tracks[m.track].melodic = m.arg_u8 != 0;
+                break;
+            case SEQ_OP_SET_NOTE_LANE:
+                if (!StepValid(m.track, m.step) || m.arg_u8 >= kNoteLanes ||
+                    (m.arg_u16 & 0xff) > 127 || (m.arg_u16 >> 8) > 127 || m.arg_s16 < 0)
+                    return;
+                recorder_.InvalidateLane(m.track, m.step, m.arg_u8);
+                pending_pattern_->tracks[m.track].steps[m.step].notes[m.arg_u8] = {
+                    static_cast<uint8_t>(m.arg_u16),
+                    static_cast<uint8_t>(m.arg_u16 >> 8),
+                    static_cast<uint16_t>(m.arg_s16)};
+                if (m.arg_u16 >> 8)
+                    pending_pattern_->tracks[m.track].steps[m.step].on = true;
+                break;
             case SEQ_OP_SET_STEP:
                 if (StepValid(m.track, m.step)) {
                     Step& s = pending_pattern_->tracks[m.track].steps[m.step];
@@ -380,6 +408,50 @@ class SequencerTransport {
         BuildPatternPage(request, page.page);
     }
 
+    void RecordInput(
+        uint8_t source, uint8_t note, uint32_t serial, uint8_t velocity, uint16_t tracks) {
+        SyncRecorderEpoch();
+        if (!song_project_ && recorder_.Input(*pending_pattern_,
+                                              input_mode_,
+                                              quantize_,
+                                              IsPlaying(),
+                                              scheduler_.PatternPositionTicks(),
+                                              source,
+                                              note,
+                                              serial,
+                                              velocity,
+                                              tracks)) {
+            pending_pattern_dirty_ = true;
+            ++pattern_revision_;
+        }
+    }
+    template <typename Released>
+    void PruneRecording(Released released) {
+        recorder_.Prune(released);
+    }
+    void BuildNotes(const Protocol::SeqPatternRequestMessage& request,
+                    Protocol::SeqNotesMessage& reply) const {
+        reply.request_id = request.request_id;
+        reply.epoch = active_epoch_;
+        reply.revision = pattern_revision_;
+        reply.pattern = active_slot_;
+        reply.track = request.track;
+        reply.step = request.first_step;
+        reply.read_only = SongActive();
+        reply.input_mode = input_mode_;
+        reply.quantize = quantize_;
+        const auto& row = pattern().tracks[request.track];
+        reply.melodic = row.melodic;
+        reply.clock_source = using_midi_ ? 1 : 0;
+        reply.playing = IsPlaying();
+        reply.tempo_bpm_x100 = SessionSettings().tempo_bpm_x100;
+        reply.record_step = recorder_.StepIndex();
+        for (uint8_t i = 0; i < kNoteLanes; ++i) {
+            const auto& n = row.steps[request.first_step].notes[i];
+            reply.notes[i] = {n.note, n.velocity, n.gate_ticks};
+        }
+    }
+
     // ---- MIDI clock (MSG_MIDI_CLOCK_EVENT) ----
     void OnMidiClock(const Protocol::MidiClockEventMessage& m) {
         using namespace Protocol;
@@ -469,6 +541,7 @@ class SequencerTransport {
     // Returns trigger events for this block (see SequencerScheduler::Process).
     WAVEX_ITCM_CODE_NAMED("transport.Tick")
     size_t Tick(TriggerEvent* out_events, size_t max_events) {
+        SyncRecorderEpoch();
         if (!scheduler_.IsPlaying() && pending_pattern_dirty_) {
             CommitPendingPattern();
         }
@@ -481,6 +554,22 @@ class SequencerTransport {
         ServiceClockOutput();
         if (song_project_ && scheduler_.IsPlaying() && !scheduler_.HasQueuedPattern())
             ArmSongBoundary();
+        if (!song_project_ && input_mode_ == Protocol::SEQ_INPUT_LIVE_ERASE &&
+            scheduler_.IsPlaying()) {
+            // Erase the upcoming nominal grid step before the scheduler reads it.
+            const auto interval = StepIntervalTicks(pending_pattern_->scale);
+            const auto step = static_cast<uint8_t>(
+                static_cast<uint64_t>((scheduler_.PatternPositionTicks() +
+                                       scheduler_.BlockEndTick() - scheduler_.PositionTicks()) /
+                                      interval) %
+                pending_pattern_->length);
+            if (recorder_.Erase(*pending_pattern_, step)) {
+                active_pattern_.tracks[recorder_.Track()].steps[step] =
+                    pending_pattern_->tracks[recorder_.Track()].steps[step];
+                pending_pattern_dirty_ = true;
+                ++pattern_revision_;
+            }
+        }
         const size_t count = scheduler_.Process(out_events, max_events);
         if (song_project_) {
             if (scheduler_.SwitchedPattern()) {
@@ -765,6 +854,7 @@ class SequencerTransport {
         }
     }
     void AdvanceEpoch() {
+        recorder_.Reset();
         if (!++active_epoch_)
             ++active_epoch_;
     }
@@ -785,6 +875,14 @@ class SequencerTransport {
     const Project* song_project_ = nullptr;
     uint8_t song_slot_ = 0, song_entry_ = 0;
     bool song_loop_ = false;
+    void SyncRecorderEpoch() {
+        if (recorder_run_epoch_ != scheduler_.RunEpoch()) {
+            recorder_.Reset();
+            recorder_run_epoch_ = scheduler_.RunEpoch();
+        }
+    }
+    uint32_t recorder_run_epoch_ = 0;
+    NoteRecorder recorder_;
     Pattern pending_storage_;
     Pattern* pending_pattern_ = &pending_storage_;
     Pattern** launch_buffer_ = nullptr;

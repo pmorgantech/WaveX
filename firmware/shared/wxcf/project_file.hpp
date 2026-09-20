@@ -12,8 +12,8 @@ namespace ProjectFile {
 using PatternFile::Result;
 using namespace Sequencer;
 constexpr uint16_t kFileType = 6;
-constexpr uint16_t kVersion = 0x0102;
-constexpr uint32_t kMaxFileBytes = 4 * 1024 * 1024;
+constexpr uint16_t kVersion = 0x0103;
+constexpr uint32_t kMaxFileBytes = 8 * 1024 * 1024;
 constexpr uint32_t kHeadBytes = 36, kTrackBytes = 272, kPatternPrefixBytes = 44;
 constexpr uint32_t kPatternBytes =
     kPatternPrefixBytes + kMaxTracks * kMaxSteps * PatternFile::kStepBytes;
@@ -207,7 +207,7 @@ class Encoder {
                 b[25] = static_cast<uint8_t>(pattern.scale);
                 b[26] = pattern.swing;
                 for (uint8_t t = 0; t < kMaxTracks; ++t)
-                    b[28 + t] = pattern.tracks[t].enabled;
+                    b[28 + t] = pattern.tracks[t].enabled | (pattern.tracks[t].melodic ? 2 : 0);
                 if (writer_.BeginChunk(static_cast<uint16_t>(0x200 + index_),
                                        kVersion,
                                        kPatternBytes) != Wxcf::Result::Ok ||
@@ -354,12 +354,14 @@ class Decoder {
                 if (++record_ > p_.songs[index_].length)
                     record_ = 0;
             } else {
-                if (!Read(b, PatternFile::kStepBytes))
+                if (!Read(
+                        b,
+                        melodic_format_ ? PatternFile::kStepBytes : PatternFile::kLegacyStepBytes))
                     return result_;
                 auto& step = p_.patterns[index_]
                                  .pattern.tracks[(record_ - 1) / kMaxSteps]
                                  .steps[(record_ - 1) % kMaxSteps];
-                if (!PatternFile::DecodeStep(b, step))
+                if (!PatternFile::DecodeStep(b, step, melodic_format_))
                     return Fail(Result::Invalid);
                 if (++record_ > kMaxTracks * kMaxSteps)
                     record_ = 0;
@@ -454,7 +456,12 @@ class Decoder {
             index_ = static_cast<uint8_t>(h.chunk_id - 0x200);
             auto& slot = p_.patterns[index_];
             auto& pattern = slot.pattern;
-            if (slot.used || !major || h.payload_len != kPatternBytes)
+            melodic_format_ = h.chunk_version >= 0x0103;
+            const auto pattern_bytes =
+                kPatternPrefixBytes +
+                kMaxTracks * kMaxSteps *
+                    (melodic_format_ ? PatternFile::kStepBytes : PatternFile::kLegacyStepBytes);
+            if (slot.used || !major || h.payload_len != pattern_bytes)
                 return Fail(Result::Invalid);
             if (!Read(b, kPatternPrefixBytes))
                 return result_;
@@ -466,9 +473,10 @@ class Decoder {
                 pattern.length > kMaxSteps || b[25] > 5 || b[26] < 50 || b[26] > 75 || b[27])
                 return Fail(Result::Invalid);
             for (uint8_t t = 0; t < kMaxTracks; ++t) {
-                if (b[28 + t] > 1)
+                if (b[28 + t] > (melodic_format_ ? 3 : 1))
                     return Fail(Result::Invalid);
-                pattern.tracks[t].enabled = b[28 + t] != 0;
+                pattern.tracks[t].enabled = (b[28 + t] & 1) != 0;
+                pattern.tracks[t].melodic = (b[28 + t] & 2) != 0;
             }
             slot.used = true;
             song_ = false;
@@ -509,6 +517,7 @@ class Decoder {
     uint16_t tracks_ = 0, record_ = 0, samples_read_ = 0;
     bool needs_samples_ = false, samples_head_ = false, sample_pending_ = false;
     uint8_t index_ = 0;
+    bool melodic_format_ = false;
     bool started_ = false, head_ = false, bank_ = false, song_ = false;
     Result result_ = Result::More;
 };

@@ -334,6 +334,14 @@ pitch, SVF/ladder filtering, three envelopes, two LFOs and the modulation matrix
 The callback receives prepared state through bounded handoffs and performs no
 storage or peripheral I/O. Concurrent streamed voices, VA/noise and wavetable
 sources remain unimplemented; the SD audition stream is separate and singleton.
+Melodic Pattern rows add four note lanes per step with musical-tick gates and
+explicit holds. The callback records live input and owns gate lifetime; live
+keys remain independent of sequence Stop. Rendering advances to each event
+before admitting its notes, so later steals preserve earlier samples in the
+block. The fixed Pattern exchange buffer uses CPU-only D2 SRAM. See the
+[melodic contract](features/melodic-sequencing.md) for capture, persistence and
+validation boundaries.
+
 Measured callback limits and remaining hardware checks are recorded in
 [callback-performance-log.md](callback-performance-log.md) and
 [hardware-validation.md](hardware-validation.md).
@@ -521,7 +529,8 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    selected Track and the Sample Pool (one indexed, refcounted registry;
    imports on any number of Tracks share samples by path), pad mapping, WXI
    save/load, Banks, two oscillators, saved polyphony controls and Mono held-key
-   fallback exist. Recording and melodic sequencing remain open Phase 2.5 work.
+   fallback exist. Melodic lanes, gates and note recording are implemented;
+   hardware acceptance remains open. Audio sampling/recording remains Phase 2.5 work.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the
    bounded render-job scheduler and destructive editing/mangling pipeline are
    unimplemented.

@@ -12,6 +12,7 @@ limits for the Phase 2 ESP32 UI responsiveness work.
 - [Regression coverage and provenance](#regression-coverage-and-provenance)
 - [Final hardware state](#final-hardware-state)
 - [Related](#related)
+- [Step Notes follow-up](#step-notes-follow-up--2026-09-20)
 
 ## Scope and outcome
 
@@ -19,7 +20,8 @@ Baseline: `40721eea3e3a2d1861429a78f37ce80aefdf6a22`, the committed UART
 investigation, fast-forwarded to local `develop` and pushed to `origin`.
 UI work is on `fix/esp32-sequencer-latency`. This is Phase 2 UI work;
 Daisy audio scheduling, wire formats, transport configuration and sequenced
-note-length semantics are unchanged. Note-length gates remain backlogged.
+note-length semantics are unchanged in that September 13 comparison. Gates
+were subsequently implemented; see the September 20 Step Notes results below.
 
 The sequencer comparison candidate (`responsive2`) reduced average playback
 press-to-confirmed-refresh time from **561.30 ms to 43.68 ms** (92.2%).
@@ -408,3 +410,50 @@ their existing hardware gates. This UI/planning work is included in the
 - [UI architecture](ui-architecture.md)
 - [Performance monitoring](performance_monitoring.md)
 - [LVGL project skill](../skills/lvgl9/SKILL.md)
+
+## Step Notes follow-up — 2026-09-20
+
+The melodic editor preserves confirmed values while an edit is pending and
+deduplicates repeated labels/focus styles. A corrected framebuffer capture,
+`logs/melodic-notes-final.png`, verifies readable gate units and distinct
+transport Play versus Mode: Play controls. It does not verify touch sensing
+or physical scanout.
+
+`logs/melodic-ui-sysmon2.json` and its per-phase logs record five seconds idle,
+ten lane edits, ten selections and re-entry on the same profile image. SHA256:
+`fd13850749735f798377cc7e33f3628b824981318030aa57964dd94c03c7bf15`.
+Daisy used normal image
+`2ec52b185dfa4bd956ec49212b8e6cfaa2ccf3d40f56236111ff7dff767194b6`.
+
+| Phase | Submitted refreshes | Full-screen | Mean pixels | Mean / peak refresh |
+|---|---:|---:|---:|---:|
+| Idle | 0 | 0 | 0 | — |
+| Lane edits | 19 | 0 | 271,489 | 53.40 / 54.51 ms |
+| Lane selection | 9 | 0 | 18,825 | 3.26 / 3.45 ms |
+| Re-entry | 3 | 1 | 492,049 | 94.51 / 186.61 ms |
+
+Log-mode sysmon after the parser's default warm-up exclusion reports idle
+0% LVGL busy time (15 samples); edits average 32.9%, peak 42% (8 samples).
+These short screens characterize this page, not an A/B speedup or physical
+touch latency. Local edits stay partial but exceed the 33 ms frame target;
+pending/confirmed control restyling remains a possible refinement.
+
+The first sysmon attempt stopped because Daisy already reported seven console
+RX dropped bytes following flashing. The repeat explicitly recorded the
+baseline and finish: seven in both, with zero stream underruns. It establishes
+no additional drops during the UI measurement, not a zero-drop boot session.
+An earlier counter-only image lacked sysmon; its results are retained separately
+in `logs/melodic-ui-profile.json`. The final normal image disables profiling.
+
+**Final half-step/feedback source:** `logs/melodic-ui-final.json` repeats idle
+and ten edits, then replaces a lane through step recording and observes the
+500 ms **Step updated** notice expire. ESP32 profile SHA256
+`74ceed7265be9f51b5b70eae9cb1285a21ada9dc5d03f60106175acb3728432f`;
+Daisy profile `a462346519a7783734f854f63e1dbc1b18ccdfa6445bf96a33f128e926a99730`.
+Idle submits zero pixels. Edits submit 18 partial refreshes, mean 270,822 pixels
+and 53.87 ms, peak 55.29 ms; feedback submits four partial refreshes, mean
+111,483 pixels and 29.65 ms, peak 41.21 ms. Neither interaction submits a full
+screen. Edit sysmon busy time averages 31%, peaks 43% (8 retained samples).
+Both Daisy counters start and finish at zero. The short feedback trace checks
+its rendering behavior, not a statistically stable performance distribution.
+`logs/melodic-notes-halfstep.png` verifies the final half-step label/layout.
