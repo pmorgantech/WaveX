@@ -26,6 +26,33 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Compact live-note admission — 2026-09-20
+
+The foreground now queues one input press with a captured Track mask, rather
+than four full layer records for each of sixteen destinations. The callback
+selects from its immutable prepared map and uses survivor-only batch admission.
+Live source/pitch FIFO serials separate key release from render-slot lifetime.
+The work limit is 32 routed admissions / 32 input events per callback; overflow
+release watermarks cover requests still queued behind that bound.
+
+Matched 80.024-second DWT screen, 68 MIDI fan-out injections and one Pattern
+save/load, on QSPI `-O2`, profiling On/detail Off/RTT Off:
+
+| Candidate | Average | Maximum | Queue refusals | Stream underruns |
+|---|---:|---:|---:|---:|
+| Prior layered queue | 35.4688% | 65.0469% | 540 | 0 |
+| Compact live queue | 34.8683% | 62.1127% | 0 | 0 |
+
+New raw maximum: 298,141 / 480,000 cycles; average 167,368 cycles. Image built
+from `1f096b7+`, Daisy SHA256
+`8b086712b17e5ccb7c6d8cc0ebee400e7ec88272780057922de4855e20bd103c`;
+frontend remains `82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`.
+Evidence: `logs/stereo-0-ladder-20260920-162813.log` / `.json`. Both runs use
+16 four-layer Mono Tracks, eight rendered channels, dual oscillators, ladder,
+modulation, locks, sequencer, streaming and live edits. This fixes the reproduced
+queue-pressure case; it is a short screen, not physical MIDI or the final
+ten-minute/one-hour acceptance. The earlier captures and failures remain below.
+
 ## Same-frame admission batching — 2026-09-20
 
 The 16-Track/four-layer deadline failure below exposed work for notes stolen

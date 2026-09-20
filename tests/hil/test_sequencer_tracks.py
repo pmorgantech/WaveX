@@ -63,7 +63,7 @@ def sequence_samples(daisy, sample_path, sample_path2):
 
 @pytest.mark.daisy
 @pytest.mark.sdcard
-def test_four_sequence_rows_play_and_release_their_own_tracks(
+def test_four_sequence_rows_play_and_retire_their_own_tracks(
     daisy, sequence_samples
 ):  # noqa: E501
     tracks = (0, 1, 2, 15)
@@ -74,10 +74,14 @@ def test_four_sequence_rows_play_and_release_their_own_tracks(
     _transport(daisy, True)
     daisy.wait_state(voices=4)
     _transport(daisy, False)
-    for remaining, track in zip((3, 2, 1, 0), reversed(tracks)):
+    for track in tracks:
         daisy.note(track, 60, on=False)
-        daisy.wait_state(voices=remaining)
+    # Live offs cannot release sequencer groups.
+    assert daisy.state()["voices"] == "4"
     assert daisy.tracks() == bindings
+    for remaining, track in zip((3, 2, 1, 0), reversed(tracks)):
+        daisy.unbind_track(track)
+        daisy.wait_state(voices=remaining)
 
 
 @pytest.mark.daisy
@@ -118,14 +122,15 @@ def test_sample_edit_refreshes_future_sequence_triggers(
     _pattern(daisy, (15,))
     daisy.note(1, 60)
     _transport(daisy, True)
-    daisy.wait_state(voices=lambda n: int(n) >= 2)
+    held = daisy.wait_state(voices=lambda n: int(n) >= 2)["voices"]
 
     # Existing looped voices keep their snapshots until released. Future hits
     # must use the edited short one-shot without restarting the transport.
     _loop(daisy, sample_b, enabled=False, end=256)
-    daisy.note(15, 60, on=False)
     time.sleep(1.1)
-    daisy.wait_state(voices=1, timeout=2)
+    # Existing sequencer groups belong to the scheduler; a live key-off no
+    # longer releases them. New hits must finish instead of adding held loops.
+    daisy.wait_state(voices=held, timeout=2)
 
 
 @pytest.mark.daisy

@@ -69,6 +69,14 @@ class NoteEventQueue {
     }
 
     // Audio-callback consumer.
+    bool Peek(Event& event) const {
+        const uint32_t read = __atomic_load_n(&read_, __ATOMIC_RELAXED);
+        if (read == __atomic_load_n(&write_, __ATOMIC_ACQUIRE))
+            return false;
+        event = events_[read % Capacity];
+        return true;
+    }
+
     bool Pop(Event& event) {
         const uint32_t read = __atomic_load_n(&read_, __ATOMIC_RELAXED);
         const uint32_t write = __atomic_load_n(&write_, __ATOMIC_ACQUIRE);

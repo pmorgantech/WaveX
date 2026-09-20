@@ -532,6 +532,12 @@ versioning and release process.
 
 ### Fixed
 
+- Queue live MIDI/Track presses once per input instead of once per resolved
+  layer, and batch routed admission through the prepared voice map. FIFO key
+  identities preserve repeated-key, stolen-note and routing-change releases;
+  live note-offs cannot release unrelated sources or sequencer notes. Overflow
+  releases remain effective for triggers waiting behind the callback work limit.
+
 - Simultaneous layered sequencer events now plan admission before materializing
   surviving voices. The 16-Track/four-layer pressure workload fell from a
   114.51% callback peak to 66.00% over ten minutes, preserving whole-note steals,

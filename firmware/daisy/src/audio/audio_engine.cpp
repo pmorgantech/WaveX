@@ -44,9 +44,9 @@ using q15_t = int16_t;
 #include "instrument.hpp"
 #include "lfo.hpp"
 #include "linear_resampler.hpp"
+#include "live_note_runtime.hpp"
 #include "mixer_control_handoff.hpp"
 #include "mod_matrix.hpp"
-#include "note_event_queue.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "playback_cursor.hpp"
@@ -317,38 +317,8 @@ static SnapshotMailbox<CvTestParams> s_cv_test_mailbox;
 // Dedicated FIL for the calibration table (main-loop file I/O only).
 static FIL s_cvcal_file;
 
-// --- MIDI note-event handoff (roadmap Phase 1 item 8) ---
-// Voice state must only be touched from one context: Trigger()/Release()
-// write fields Render() reads, so calling them from the main loop while
-// the audio IRQ renders would race. Events are therefore fully resolved
-// (sample pointer, frames, rate) in the main loop and passed through a
-// single-producer/single-consumer ring - release/acquire index pair, same
-// discipline as the ESP32-side ui_update_pending fix (dma-timing-review
-// Finding 11). Producer: OnNoteOn/OnNoteOff (main loop). Consumer:
-// Callback() at block start (1 ms cadence, so worst-case added latency is
-// one block - well inside item 8's < 5 ms in-to-sound budget).
-struct NoteEvent {
-    bool is_trigger = false;  // true = Trigger(params), false = Release(note)
-    bool scoped_release = false;
-    uint8_t note = 0;
-    uint8_t track = 0;
-    uint8_t layer_count = 0;  // batch head only; remaining cells are its layers
-    WaveX::AudioEngine::VoiceTriggerParams params;
-};
-static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
-using NoteQueue = NoteEventQueue<NoteEvent, kNoteQueueSize>;
-static WaveX::BssStatic<NoteQueue> s_note_queue_storage;
-static NoteQueue& s_note_queue = s_note_queue_storage.Get();
-
-// NoteEventQueue's legacy overflow bitmap is keyed only by note. Instrument
-// note-offs also need the slot, or a full queue could release a same-pitch
-// voice belonging to another MIDI channel. One bounded bitmap per slot keeps
-// that information without allocation or locks. Producer: main loop; consumer:
-// callback, same release/acquire discipline as NoteEventQueue.
-static uint32_t
-    s_scoped_release_overflow[kNumTracks]
-                             [NoteEventQueue<NoteEvent, kNoteQueueSize>::kReleaseWordCount];
-static uint32_t s_scoped_release_pending_slots = 0;
+// Explicit initialization before audio starts; CPU-only, no DMA access.
+static LiveNoteRuntime s_live_notes WAVEX_DTCM_DATA;
 
 // One main-loop producer and one callback consumer. Select/unload and the
 // cooperative Instrument loader await their own generation before releasing
@@ -373,72 +343,13 @@ static bool StopTracksAndWait(uint16_t tracks) {
 // Returns true if any trigger was applied - the paraphonic envelope's
 // note-on edge (item 5).
 static bool drain_note_queue() {
-    bool any_trigger = false;
-    NoteEvent ev;
-    while (s_note_queue.Pop(ev)) {
-        if (ev.is_trigger) {
-            VoiceTriggerParams layers[kMaxLayerTriggers];
-            const uint8_t count = ev.layer_count;
-            if (!count || count > kMaxLayerTriggers)
-                continue;
-            layers[0] = ev.params;
-            bool complete = true;
-            for (uint8_t i = 1; i < count; ++i) {
-                // PushBatch publishes all siblings with the head. No producer
-                // can expose an incomplete group to this callback.
-                if (!s_note_queue.Pop(ev) || !ev.is_trigger || ev.layer_count) {
-                    complete = false;
-                    break;
-                }
-                layers[i] = ev.params;
-            }
-            if (complete)
-                any_trigger = (s_voice_manager.TriggerGroup(layers, count) != 0) || any_trigger;
-        } else if (ev.scoped_release) {
-            s_voice_manager.ReleaseTrack(ev.note, ev.track);
-        } else {
-            s_voice_manager.Release(ev.note);
-        }
-    }
-    // A full queue may drop note-ons, but never note-offs: releases that could
-    // not enter the ring are coalesced by MIDI note and applied after all
-    // older queued events, preserving their arrival order relative to them.
-    for (uint32_t word = 0; word < NoteQueue::kReleaseWordCount; ++word) {
-        uint32_t releases = s_note_queue.TakeOverflowReleaseWord(word);
-        while (releases != 0) {
-            const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
-            s_voice_manager.Release(static_cast<uint8_t>(word * 32u + bit));
-            releases &= releases - 1u;
-        }
-    }
-    uint32_t pending_slots =
-        __atomic_exchange_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_ACQUIRE);
-    while (pending_slots != 0) {
-        const uint8_t slot = static_cast<uint8_t>(__builtin_ctz(pending_slots));
-        for (uint32_t word = 0; word < NoteQueue::kReleaseWordCount; ++word) {
-            uint32_t releases =
-                __atomic_exchange_n(&s_scoped_release_overflow[slot][word], 0u, __ATOMIC_ACQUIRE);
-            while (releases != 0) {
-                const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
-                s_voice_manager.ReleaseTrack(static_cast<uint8_t>(word * 32u + bit), slot);
-                releases &= releases - 1u;
-            }
-        }
-        pending_slots &= pending_slots - 1u;
-    }
-    // A stop can retire samples referenced by the old sequencer map too.
-    // Acquire the replacement map before acknowledging that no callback-owned
-    // references can trigger them again on a later block.
     if (s_seq_voices)
         s_seq_voices->mailbox.AcquireLatest();
-    s_voice_stop_fence.ConsumeAndStop([](uint16_t tracks) {
-        while (tracks != 0) {
-            const uint8_t track = static_cast<uint8_t>(__builtin_ctz(tracks));
-            s_voice_manager.StopTrack(track);
-            tracks &= static_cast<uint16_t>(tracks - 1u);
-        }
-    });
-    return any_trigger;
+    const bool triggered = s_live_notes.Drain(
+        s_seq_voices ? &s_seq_voices->mailbox.ConsumerValue() : nullptr, s_voice_manager);
+    s_voice_stop_fence.ConsumeAndStop(
+        [](uint16_t tracks) { s_live_notes.StopTracks(tracks, s_voice_manager); });
+    return triggered;
 }
 
 // Callback-only. drain_note_queue has already acquired the latest voice map.
@@ -2023,7 +1934,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_cv_test_pending = CvTestParams{};
     s_cv_test_active = s_cv_test_pending;
     s_cv_test_mailbox.Init(s_cv_test_pending);
-    s_note_queue.Init();
+    s_live_notes.Init();
     s_voice_stop_fence.Init();
     s_seq_command_queue.Init();
     s_seq_page_pending_storage.Reconstruct();
@@ -2039,8 +1950,6 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 
     s_seq_voices = nullptr;
     s_seq_voice_storage = {};
-    std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
-    __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);
     s_rb_low_water = 0xFFFFFFFFu;
 
     SfzLoader::Reset();
@@ -3042,73 +2951,6 @@ void OnMidiCc(const MidiCcMessage& m) {
     EnqueueSequencerCommand(command);
 }
 
-// One Track's share of a note-on. Split out of OnNoteOn() because a MIDI
-// note reaches every Track listening on its channel (track-and-patch-model.md
-// §2.2) - the per-Track work is the same however the note was addressed.
-static void TriggerTrackNoteOn(uint8_t slot, const NoteMessage& note_msg) {
-    // A replacement has stopped the old voices and is about to release their
-    // sample pointers. Do not queue a trigger resolved against that old table.
-    if (SfzLoader::TrackLoading(slot)) {
-        return;
-    }
-
-    // One resolution path for every kind of instrument (roadmap Phase 2.5
-    // item 1): an .sfz import and a bare sample bound with MSG_SAMPLE_SELECT
-    // are both Instruments in SfzLoader's bank, differing only in which
-    // sample registry their zones' ids index. The bare case is a one-zone
-    // Keyboard instrument whose zone inherits the sample's own markers/gain
-    // (ResolveLoadedSample) and takes filter/ADSR from the live params - so
-    // a note after a knob move still sounds like the sweep the user just
-    // heard, and the editor's auditioned region is what a pad plays.
-    VoiceTriggerParams params[kMaxLayerTriggers];
-    const uint8_t count =
-        SfzLoader::ResolveNote(slot, note_msg.note, note_msg.velocity, params, kMaxLayerTriggers);
-    if (count == 0) {
-        // No s_hw guard: this is the one line that explains why the
-        // instrument is silent, and gating it behind a pointer that may be
-        // null is how a whole bench session went to working out whether
-        // notes were even arriving. It runs on the main loop, well after
-        // init. Two distinct reasons, named apart because they need
-        // different fixes.
-        if (!SfzLoader::TrackLoaded(slot)) {
-            WaveX::Log::PrintLine(
-                "  -> dropped: Track %u has no instrument loaded and no sample bound "
-                "(MSG_SAMPLE_SELECT; %u loaded)",
-                (unsigned)slot,
-                (unsigned)loaded_sample_count());
-        } else {
-            WaveX::Log::PrintLine(
-                "  -> dropped: Track %u has no zone for note=%u vel=%u with a resident sample",
-                (unsigned)slot,
-                (unsigned)note_msg.note,
-                (unsigned)note_msg.velocity);
-        }
-        return;
-    }
-
-    if (!s_note_queue.PushBatch(count, [&](NoteEvent& event, uint32_t i) {
-            event = NoteEvent{};
-            event.is_trigger = true;
-            event.note = note_msg.note;
-            event.track = slot;
-            event.layer_count = i == 0 ? count : 0;
-            event.params = params[i];
-        })) {
-        WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u layers=%u DROPPED - note queue full",
-                              (unsigned)slot,
-                              (unsigned)note_msg.note,
-                              (unsigned)count);
-    }
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-    WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u vel=%u -> %u layers (%lu frames)",
-                          (unsigned)slot,
-                          (unsigned)note_msg.note,
-                          (unsigned)note_msg.velocity,
-                          (unsigned)count,
-                          (unsigned long)params[0].sample_frames);
-#endif
-}
-
 /**
  * Route an incoming note to the Tracks that should hear it (§2.2).
  *
@@ -3130,62 +2972,37 @@ static uint8_t RouteNote(const NoteMessage& note_msg, uint8_t* tracks, uint8_t m
     return SfzLoader::TracksForMidiChannel(NoteAddressIndex(note_msg.channel), tracks, max);
 }
 
+static uint8_t LiveSource(uint8_t address) {
+    return static_cast<uint8_t>(NoteAddressIndex(address) + (NoteAddressesTrack(address) ? 16 : 0));
+}
+
 void OnNoteOn(const NoteMessage& note_msg) {
-    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0) {
+    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0)
+        return;
+    if (!note_msg.velocity) {
+        OnNoteOff(note_msg);
         return;
     }
     uint8_t tracks[kNumTracks];
     const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
-    for (uint8_t i = 0; i < n; ++i) {
-        TriggerTrackNoteOn(tracks[i], note_msg);
-    }
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-    if (n == 0 && s_hw) {
-        WaveX::Log::PrintLine(
-            "RX NOTE_ON: ch=%u reached no Track (all midi_in Off or set elsewhere)",
-            (unsigned)NoteAddressIndex(note_msg.channel));
-    }
-#endif
-}
-
-// One Track's share of a note-off. Routed identically to note-on, so the
-// three Tracks a layered note-on reached are the three it releases.
-static void ReleaseTrackNoteOff(uint8_t slot, const NoteMessage& note_msg) {
-    NoteEvent ev;
-    ev.is_trigger = false;
-    ev.note = note_msg.note;
-    ev.track = slot;
-    ev.scoped_release = SfzLoader::TrackLoaded(slot);
-    const bool queued =
-        ev.scoped_release ? s_note_queue.Push(ev) : s_note_queue.PushReleaseOrRemember(ev);
-    if (!queued && ev.scoped_release) {
-        const uint32_t word = static_cast<uint32_t>(note_msg.note) / 32u;
-        const uint32_t bit = 1u << (static_cast<uint32_t>(note_msg.note) % 32u);
-        __atomic_fetch_or(&s_scoped_release_overflow[slot][word], bit, __ATOMIC_RELEASE);
-        __atomic_fetch_or(
-            &s_scoped_release_pending_slots, 1u << static_cast<uint32_t>(slot), __ATOMIC_RELEASE);
-    }
-    if (!queued && s_hw) {
-        WaveX::Log::PrintLine("RX NOTE_OFF: note=%u queue full - release preserved",
-                              (unsigned)note_msg.note);
-    }
-
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-    if (s_hw)
-        WaveX::Log::PrintLine(
-            "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
-#endif
+    uint16_t destinations = 0;
+    for (uint8_t i = 0; i < n; ++i)
+        if (!SfzLoader::TrackLoading(tracks[i]) && SfzLoader::TrackLoaded(tracks[i]))
+            destinations |= static_cast<uint16_t>(1u << tracks[i]);
+    if (!s_live_notes.Press(
+            LiveSource(note_msg.channel), note_msg.note, note_msg.velocity, destinations))
+        WaveX::Log::PrintLine("RX NOTE_ON: source=%u note=%u DROPPED - note queue full (%lu)",
+                              unsigned(note_msg.channel),
+                              unsigned(note_msg.note),
+                              static_cast<unsigned long>(s_live_notes.Refused()));
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
-    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0) {
+    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0)
         return;
-    }
-    uint8_t tracks[kNumTracks];
-    const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
-    for (uint8_t i = 0; i < n; ++i) {
-        ReleaseTrackNoteOff(tracks[i], note_msg);
-    }
+    // Original source and FIFO press identity survive routing/binding changes.
+    // Never resolve destinations again and never release by pitch alone.
+    s_live_notes.Release(LiveSource(note_msg.channel), note_msg.note);
 }
 
 // Wire hook for MSG_SAMPLE_CTRL (record/play transport from the UI's

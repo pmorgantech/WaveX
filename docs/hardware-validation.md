@@ -1153,6 +1153,29 @@ mixed-channel transition evidence below; final-image one-hour soak, physical
 MIDI/listening and saved-policy acceptance remain open. The user permits
 continuation with these residual checks recorded in the roadmap.
 
+**2026-09-20 compact live-input result:** The matched 80.024-second screen
+with 68 MIDI fan-out bursts and one Pattern cycle has zero queue refusals,
+zero stream underruns, 34.8683% average and 62.1127% peak. The preceding version
+refused 540 notes in this same scenario. See
+[the image identities and capture](callback-performance-log.md#compact-live-note-admission--2026-09-20).
+Eight new host cases exercise FIFO repeats, source isolation, old/stolen/refused
+presses, routing changes, overflow offs and pending-event invalidation on Track
+replacement. The focused 35-case host selection and normal firmware build pass;
+DTCM statics use 59,712 bytes, below the 64-KiB stack-preserving link cap.
+Long-duration capacity, physical MIDI, Mono fallback and saved-policy gates
+remain open.
+Normal image SHA256 `14f03ea100319f9cf065258366ee63f6bcf412014b686938b1ea086da2266552`
+passes the three new two-board key-identity checks (repeated/source-separated
+keys, MIDI routing change, and old release after binding replacement), both
+layer-group checks and the selected sequencer retirement checks. The initial
+ready-board selection had eight passes and one old test assumption: a live
+off used to release a sequencer voice. The corrected sample-edit test preserves
+existing scheduler-owned snapshots and verifies subsequent hits finish at the
+edited bounds; it passes separately in 4.01 s. Evidence:
+`logs/live-notes-hil-ready.xml` / `.log` and
+`logs/live-notes-edit-retest.xml` / `.log`. An immediate post-flash attempt
+skipped all nine tests before USB re-enumeration and supplies no validation.
+
 The same candidate also passed a 605.2-second rapid rotation through all five
 channel mixes, switching every ten seconds with ten Pattern cycles. Average
 30.3113%, maximum 59.9650%, zero stream underruns and sampled console RX drops;

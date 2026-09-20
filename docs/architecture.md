@@ -321,7 +321,9 @@ explicit Mono consumes one. Stable group identities scope stealing and release.
 Same-frame sequencer events plan from immutable zone metadata first, then copy
 parameters/apply locks/initialize only layers that survive admission. Different
 sample offsets remain separate batches. The foreground note queue publishes
-all layers together or refuses the note. Saved allocation policy and held-key
+compact routed presses with FIFO source/pitch identities, so layer fan-out does
+not consume queue entries. Live releases preserve original ownership across
+stealing and routing changes and cannot release sequencer groups. Saved allocation policy and held-key
 fallback remain open in the roadmap.
 
 Each renderer supports region/loop markers, fades, native-rate compensation,

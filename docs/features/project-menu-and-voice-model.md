@@ -238,12 +238,30 @@ oscillators already submix inside one voice; stereo L/R remain inseparable.
 Count the musical group once for the user-facing polyphony limit, while
 accounting for every layer slot and render channel against global capacity.
 The live sampler and sequencer now submit each resolved note as one group.
-Foreground queue admission publishes every layer together or refuses the whole
-note; callback admission likewise commits all reservations together. Same-frame
+Foreground queue admission publishes one compact press with its original Track
+mask, regardless of the number of layers. The callback borrows its acquired
+immutable prepared map and commits complete layer reservations. Same-frame
 sequencer admission uses compact prepared metadata and initializes only surviving
 layers, preserving admission order, chokes, identities and random sequences.
 Different sample offsets remain separate batches; the measured result and open
 capacity checks are in [the callback log](../callback-performance-log.md).
+
+Live presses have FIFO identity per input source and pitch. MIDI channels and
+explicitly addressed Tracks are separate sources. A note-off consumes the oldest
+unreleased press, including a refused or stolen press, and releases only its
+surviving groups. It does not re-route through current MIDI settings or release
+sequencer groups. Track replacement revokes queued old-binding triggers without
+allowing an old key release to touch a replacement. Velocity-zero Note On is a
+release; unmatched offs do not consume future presses. One-shot layers still
+ignore normal key releases.
+
+The fixed 64-event queue admits at most 32 routed requests and 32 input events
+per callback. Overflow offs retain per-source/pitch serial watermarks, including
+older triggers still waiting behind that work limit. Input counters and this
+CPU-only handoff live in explicitly initialized DTCM. A source/pitch serial never
+wraps into an old identity: after UINT32_MAX presses, new presses on that key
+are refused until engine reinitialization. Burst queuing can add multiple blocks
+of latency; this bound is not a claim that every burst meets physical MIDI latency.
 
 Mono implies a cap of one group. The proposed first keyboard behavior is
 last-note priority with envelope retrigger, including a defined fallback to

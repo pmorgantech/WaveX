@@ -8,7 +8,7 @@ Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-**Next software work:** Complete held-key ownership, saved polyphony policies
+**Next software work:** Complete Mono held-key fallback, saved polyphony policies
 and controls, then the remaining Phase 2.5 tasks in order while panel wiring
 is pending. Same-frame layered admission is implemented and its reproduced
 16-Track deadline failure passes the extended pressure check. Residual capacity
@@ -103,12 +103,12 @@ panel; remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 Continue from the [Track/Instrument/Bank model](features/track-and-patch-model.md),
 subject to the callback checkpoint:
 
-1. **Polyphony policy.** Complete held-key/repeated-key
-   ownership, Mono fallback and note-off/retrigger behavior on the whole-note
-   runtime. Keep routed-MIDI admission/refusal observable: the combined
-   16-Track/four-layer screen stayed below 70% but refused 540 complete notes
-   at the bounded foreground queue. Do not equate console RX drops with musical
-   admission failures. Add saved Mono/Auto/1–8-note
+1. **Polyphony policy.** Complete Mono fallback and its held-key behavior on the
+   source-scoped FIFO release runtime. Repeat the combined MIDI pressure test
+   over the full acceptance duration: compact input admission removed the
+   reproduced 540 queue refusals in the matched short screen (62.1127% peak),
+   but arbitrary overload and physical MIDI latency remain separate checks.
+   Do not equate console RX drops with musical admission failures. Add saved Mono/Auto/1–8-note
    caps and Own only / Own first / Any stealing with Track inheritance/overrides;
    define old-file defaults. Include wire/storage support, Apply/Revert, UI and
    audible-steal/DWT checks (HV-019). Kit-wide and per-pad refinements remain

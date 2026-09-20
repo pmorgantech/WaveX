@@ -21,6 +21,7 @@
 #include "audio/track_mix.hpp"
 #include "envelope.hpp"
 #include "fade.hpp"
+#include "live_note_id.hpp"
 #include "note_group_admission.hpp"
 #include "note_pitch_table.hpp"
 #include "note_trigger_batch.hpp"
@@ -163,6 +164,7 @@ struct Voice : VoiceSampleState {
     bool one_shot = false;  // ignore note-off; stop at the sample/region end
     uint32_t age = 0;       // trigger order, for stealing/release-newest-first
     uint64_t group_id = 0;  // one admission identity shared by every layer
+    LiveNoteId live_note;   // empty for sequencer/audition triggers
 
     uint8_t render_channels = 1;  // reservation lasts through the release tail
     VoiceFilter filter, right_filter;
@@ -251,6 +253,7 @@ struct VoiceSampleParams {
     uint16_t fade_in_ms = 0, fade_out_ms = 0;
 };
 struct VoiceTriggerParams : VoiceSampleParams {
+    LiveNoteId live_note;
     VoiceSampleParams secondary;
     uint8_t trigger_note = 0xFF, velocity = 127;
     uint16_t start_offset_frames = 0;
@@ -656,6 +659,7 @@ class VoiceManager {
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.start_offset_frames = params.start_offset_frames;
         v.track = params.track;
+        v.live_note = params.live_note;
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
         v.own_filter_env = params.own_filter_env;
@@ -768,6 +772,24 @@ class VoiceManager {
     }
 
    public:
+    void ReleaseLive(LiveNoteId id, bool through = false) {
+        for (auto& v: voices_)
+            if (v.state == VoiceState::Playing && !v.one_shot && v.live_note.Matches(id, through)) {
+                v.envelope.Release();
+                v.env2.Release();
+                v.env3.Release();
+            }
+    }
+    template <typename Released>
+    void ReleaseOverflow(Released released) {
+        for (auto& v: voices_)
+            if (v.state == VoiceState::Playing && !v.one_shot && released(v.live_note)) {
+                v.envelope.Release();
+                v.env2.Release();
+                v.env3.Release();
+            }
+    }
+
     // Starts the release phase of the most recently triggered still-active
     // voice for `note` (envelope decays over its release time - the voice
     // stays allocated/rendering until the envelope reaches silence, it does
