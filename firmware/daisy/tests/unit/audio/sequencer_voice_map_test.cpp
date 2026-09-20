@@ -359,12 +359,21 @@ TEST(SequencerVoiceAlignment, EightTracksKeepIdenticalSamplePhaseAcrossRepeatedS
                 for (uint8_t track = 0; track < 8; ++track) {
                     ASSERT_EQ(events[track].track, track);
                     ASSERT_EQ(events[track].frame, expected_frame);
-                    VoiceTriggerParams trigger[4];
-                    ASSERT_EQ(map.Resolve(track, 60, 100, trigger), 1);
-                    trigger[0].start_offset_frames =
-                        static_cast<uint16_t>(events[track].frame - start);
-                    voices.Trigger(trigger[0]);
                 }
+                SequencerVoiceMap::Selection selections[8];
+                voices.TriggerBatch(
+                    8,
+                    [&](uint16_t request) {
+                        const auto& event = events[request];
+                        selections[request] = map.Select(event.track, 60, 100);
+                        EXPECT_EQ(selections[request].count, 1);
+                        return map.Describe(selections[request]);
+                    },
+                    [&](uint16_t request, uint8_t layer, VoiceTriggerParams& trigger) {
+                        map.Materialize(selections[request], layer, trigger);
+                        trigger.start_offset_frames =
+                            static_cast<uint16_t>(events[request].frame - start);
+                    });
                 nonzero_offsets += expected_frame != start;
                 ++groups;
             }
@@ -383,6 +392,36 @@ TEST(SequencerVoiceAlignment, EightTracksKeepIdenticalSamplePhaseAcrossRepeatedS
         EXPECT_GE(groups, 32u);
         if (bpm != 120.f) {
             EXPECT_GT(nonzero_offsets, 0u);
+        }
+    }
+}
+
+TEST_F(SequencerVoiceMapTest, AdmissionMetadataMatchesDualSourceChannelCostAndPrimaryChoke) {
+    SampleResolver stereo{&resolver, [](const void* context, uint16_t id) {
+                              auto sample = static_cast<const SampleResolver*>(context)->Get(id);
+                              sample.channels = id % 2 ? 1 : 2;
+                              return sample;
+                          }};
+    instrument.osc[1] = instrument.osc[0];
+    for (auto& zone: instrument.osc[1].zones)
+        zone.sample_id = zone.sample_id == 32 ? 1 : zone.sample_id + 1;
+    for (auto& zone: instrument.osc[0].zones)
+        zone.choke_group = 3;
+    for (auto& zone: instrument.osc[1].zones)
+        zone.choke_group = 7;
+    map.PrepareTrack(2, instrument, stereo);
+    for (uint8_t note = 0; note < 128; ++note) {
+        const auto selected = map.Select(2, note, 70);
+        const auto description = map.Describe(selected);
+        VoiceTriggerParams expected[4];
+        ASSERT_EQ(description.count, ResolveNoteOn(instrument, 2, note, 70, stereo, expected, 4));
+        for (uint8_t i = 0; i < description.count; ++i) {
+            const auto& p = expected[i];
+            const bool primary_stereo = p.channels == 2 && !p.mono;
+            const bool secondary_stereo =
+                p.secondary.sample && p.secondary.channels == 2 && !p.secondary.mono;
+            EXPECT_EQ(description.layers[i].channels, primary_stereo || secondary_stereo ? 2 : 1);
+            EXPECT_EQ(description.layers[i].choke, p.choke_group);
         }
     }
 }

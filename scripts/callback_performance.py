@@ -206,6 +206,12 @@ def parse_capture(path) -> Capture:
     underruns = 0
     with path.open(errors="replace") as capture:
         for line in capture:
+            if "callback_detail=1" in line or "callback_peak:" in line:
+                sys.exit(
+                    f"{path}: detailed callback instrumentation is "
+                    "diagnostic only; re-measure with "
+                    "WAVEX_PROFILE_CALLBACK_DETAIL=OFF for the gate"
+                )
             if windows and SESSION_RE.search(line):
                 sys.exit(
                     f"{path}: a second serial session/boot follows the "

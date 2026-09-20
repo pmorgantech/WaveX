@@ -85,6 +85,15 @@ Everything libDaisy currently gives us for free has to be written, scoped tightl
 - **LPI2C driver** — replaces the I2C1-based MCP4728 CV DAC path (`cv_bus.hpp`/`Mcp4728Backend`).
 - **Non-cacheable DMA region / cache maintenance** — RT1170 equivalent of libDaisy's `DMA_BUFFER_MEM_SECTION`. Same rule as §7.1 today (32-byte alignment, non-cacheable placement or explicit clean/invalidate), enforced via MPU region config instead of STM32's D2-SRAM-is-noncacheable trick.
 
+The H750 and RT1170 M7 share the relevant Cortex-M7/FPv5 instruction target,
+including hardware single- and double-precision floating point. The existing
+`-mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16` flags apply to both
+M7 builds ([NXP RT1170 datasheet](https://www.nxp.com/docs/en/data-sheet/IMXRT1170IEC.pdf),
+[ST H750 specification](https://www.st.com/en/microcontrollers-microprocessors/stm32h750-value-line.html)).
+This supports DSP source reuse; it does not make startup, peripheral drivers,
+linker placement or binaries interchangeable. Measure the real memory/interrupt
+workload rather than assuming callback time scales exactly with clock speed.
+
 ### 7.2 Code expected to port with minimal change
 
 Because the codebase already separates HAL-touching code from DSP/logic (a discipline `AGENTS.md` already enforces), most of the *interesting* code shouldn't need a rewrite, only a recompile against new peripheral handles:

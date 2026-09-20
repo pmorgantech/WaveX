@@ -7,7 +7,7 @@ layers and crossfades use the step's velocity. Chords and melodic gate lanes
 remain future Phase 2.5 work.
 Voice-scoped parameter locks and their touch editor are implemented.
 Physical panel integration, MIDI clock hardware validation and
-song/project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
+song/project recovery checks remain open Phase 2 work in [roadmap.md](../roadmap.md).
 Host tests and device compilation do not establish audible timing or the
 hardware phase gate.
 
@@ -84,6 +84,13 @@ The callback then inspects only that pad's zone, retaining its velocity
 bounds and fades. Wider ranges and overlapping layers keep the bounded,
 ordered zone scan; empty and retired pads remain silent.
 
+All resolved layers of one sequencer hit enter one callback-owned note group.
+Locks and the sample offset are prepared for every layer before admission.
+Stealing retires whole groups, including all surviving layer/channel reservations;
+a refused hit neither steals partially nor applies a choke. Group IDs provide a
+release target independent of pitch or render-slot reuse. Gate scheduling and
+held-key capture remain unimplemented.
+
 These are one-note drum-shaped triggers. Changing note does not implement
 melodic gate lengths, automatic note-offs, chords or live recording.
 
@@ -91,8 +98,8 @@ The target hierarchy is defined once in
 [track-and-patch-model.md](track-and-patch-model.md): Patterns address Tracks;
 Tracks hold Instruments; a Kit is a drum-mode Instrument; Songs own their
 arrangement and tempo. The target default is 32 steps. Bank/Project/Song
-storage and melodic step-note lanes are not implemented merely because the
-scheduler can play a pattern.
+storage have their own implementations and recovery gates; melodic chord and
+gate lanes remain separate from the current one-note step model.
 
 Digital voice playback is already implemented in `voice_manager.hpp`:
 resident PCM16 mono/stereo, root-note-aware tuning, layering, choke/one-shot
@@ -117,11 +124,12 @@ Use the existing transport, pattern-op, playhead and MIDI messages in
 MSG_SEQ_PATTERN_SYNC provides the pending-pattern page readback below.
 KIT_OP is not a live competing Instrument format.
 
-Locks are stored by the pattern model and carried in `TriggerEvent`, but
-`drain_sequencer()` does not yet apply them to voice parameters. The
+Locks are stored by the pattern model and carried in `TriggerEvent`.
+`drain_sequencer()` applies voice-scoped overrides to prepared layers before
+whole-note admission. The
 trigger-override and one-step lifetime rules are in
 [param-locks-and-modulation.md](param-locks-and-modulation.md#2-parameter-locks).
-Add pure mapping/clamping tests when implementing that path.
+Pure mapping/clamping tests cover that path.
 
 ## 5. UI surfaces
 
@@ -129,9 +137,9 @@ The existing Play page provides Pads and Keys with shared note lifecycle,
 Track selection, binding status and live sound controls. Navigation and
 threading are described in [ui-architecture.md](../ui-architecture.md).
 
-Remaining surfaces include live lock recording, pattern/song selection
-and melodic gate/chord lanes. Panel keys already have a logical model;
-LEDs and endless-pot drivers are separate remaining prerequisites in
+Remaining surfaces include live lock recording and melodic gate/chord lanes.
+Pattern selection and Song arrangement exist; panel keys, LEDs and endless-pot
+drivers still need physical integration and acceptance in
 [panel-controls.md](panel-controls.md). Do not describe a debug-console
 transport command as a completed panel workflow.
 
@@ -210,7 +218,7 @@ capacity run passed with file operations excluded; see
 Host coverage includes scheduler event ordering and timing, transport edits
 between steps, probability/retrigger boundaries, tempo-follower state,
 command-queue handoff, Track mapping, scoped snapshot revocation and voice
-rendering. Lock application remains separate work. The hardware regressions in
+rendering and voice-scoped lock application. The hardware regressions in
 `tests/hil/test_sequencer_tracks.py` exercise four independently released
 Tracks (including Track 16), rebinding and SFZ import during sequencing, and sample-edit
 refresh for subsequent hits.
@@ -243,8 +251,8 @@ responses after a page/Track change. The UI disables unread cells and retries
 lost readback; link loss invalidates its editable cache. Main-loop UART
 publication retains unsent state, including a coalesced 25 Hz playhead.
 Tempo configuration preserves transport position. The Note tile selects MIDI
-0-127; notes 60-75 also display their default pad number. Parameter-lock
-application and melodic gate/chord lanes remain separate work.
+0-127; notes 60-75 also display their default pad number. Melodic gate/chord
+lanes remain separate work.
 
 The connected-board regression test covers edits at Track 16/step 64, tempo
 and swing changes, navigation while playing, and confirmed row clearing
@@ -269,3 +277,15 @@ Pattern and installs the selected slot without changing session settings.
 Queued launch switches on the Daisy full-loop boundary with intra-block frame
 offsets. [Song execution](song-sequencing.md) counts repeats and advances sections
 on the same clock, with immutable Pattern references and explicit stop/loop rules. No UI timer schedules musical events.
+
+### Same-frame admission cost
+
+The callback groups contiguous scheduler events at the same sample frame. It
+selects compact immutable zone indices and plans whole-note channel/layer costs
+first; only surviving layers receive full parameter copies, locks and DSP
+initialization. Earlier accepted notes still consume their group IDs and random
+sequence positions and apply admitted choke effects. Different sample offsets
+are separate batches. The bounded planner uses at most the configured render
+slots, and selection storage is capped by the scheduler event limit. See the
+[measured pressure result](../callback-performance-log.md#same-frame-admission-batching--2026-09-20);
+this optimization does not implement melodic gates or saved allocation controls.

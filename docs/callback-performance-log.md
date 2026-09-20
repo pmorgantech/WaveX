@@ -26,6 +26,382 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Same-frame admission batching — 2026-09-20
+
+The 16-Track/four-layer deadline failure below exposed work for notes stolen
+before rendering: 64 full parameter resolutions, lock applications and DSP
+starts for eight surviving channels. The callback now selects compact prepared
+zone indices, replays whole-note admission/choke decisions in order, and
+materializes only surviving layers. Batches stop at each sample-offset boundary.
+Rejected notes remain side-effect-free; superseded admissions still advance
+note identities, ages and random seeds exactly as the sequential path does.
+
+Persistent QSPI `-O2`, profiling On/detail Off/RTT Off candidate SHA256:
+`ac4f254f5d2b1b3570ab37da041701a36cac47a9d79b11fde7ece401002cb736`.
+Built from `dbd1ebf+` before the storage commit; frontend remains
+`82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`.
+The same 16-Track/four-layer Mono preset, both oscillators, full ladder,
+modulation, four locks, live edits and stereo audition produced:
+
+| Capture | DWT duration | Average | Maximum | Pattern cycles | Stream underruns |
+|---|---:|---:|---:|---:|---:|
+| Initial screen | 40.01 s | 35.57% | 58.0788% | 0 | 0 |
+| Extended pressure | 605.86 s | 35.35% | 66.0025% | 10 | 0 |
+
+The extended maximum is 316,812 / 480,000 cycles. The boot/setup-inclusive
+capture peaks at 320,827 cycles (66.8390%). The previous image exceeded
+100% in the same pressure preset (114.5108% playback / 118.0392% with setup).
+This closes that reproduced deadline failure for the tested preset; it does
+not clear the earlier 74.5896% mixed-channel transition or the complete phase
+gate. Preserve the original failure and repeat the full mixed-channel soak
+on the final image. Broader live-MIDI coincidence, physical MIDI latency,
+listening and saved polyphony controls remain separate checks.
+
+Evidence: `logs/stereo-0-ladder-20260920-144239.log` / `.json`,
+`logs/stereo-0-ladder-20260920-144554.log` / `.json`, and
+`logs/capacity-batch-pressure-full.log`. All sampled console RX-drop counts
+were zero. Host validation: 779 Daisy tests, including sequential-versus-batch
+state/audio comparisons across 1,600 notes and scheduler offset checks;
+22 targeted address/undefined-behavior sanitizer cases pass. These checks do
+not substitute for listening or a one-hour final-image soak.
+
+**Combined MIDI screen:** an 80.024-second run on the same image added 68
+foreground MIDI-channel injections fanning out to all 16 four-layer Tracks,
+plus one Pattern save/load. Average was 35.4688%, peak 312,225 cycles
+(65.0469%), and stream underruns/console RX drops remained zero. However,
+`logs/stereo-0-ladder-20260920-145821.log` / `.json` contains **540 whole-note
+queue refusals**. The bounded queue protects callback time by refusing complete
+notes; this is not evidence that all routed MIDI notes sound. Keep admission
+pressure in the held-key/routing work and distinguish it from console RX drops.
+This short screen is not a ten-minute gate row or a physical MIDI test.
+
+**Rapid mixed-channel transitions:** the same batching image then rotated
+through all five full-budget stereo/Mono mixes every ten seconds, with both
+oscillators, ladder, modulation, locks, streaming, live edits and ten Pattern
+save/load cycles. The 121 DWT windows span 605.2 seconds: average 145,494 cycles
+(30.3113%), maximum 287,832 (59.9650%), zero stream underruns and sampled console
+RX drops. Evidence: `logs/stereo-0-ladder-20260920-150155.log` / `.json`.
+This targeted repeat did not reproduce the earlier 74.5896% transition peak;
+it does not replace the one-hour soak on the final image.
+
+## Full-channel soak and transition peak — 2026-09-20
+
+The recovery image completed 3,667.23 seconds of the mixed workload and 61
+Pattern save/load cycles, with zero stream underruns and sampled console RX
+drops. Both oscillators, full-drive ladder, three envelopes, two sine LFOs,
+eight modulation routes, four locks per hit, sequencing, stereo SD audition
+and live filter edits were active. All five channel mixes ran for more than
+ten minutes, followed by a return to eight Mono voices. Source: `dbd1ebf+`;
+Daisy profiling/detail-Off/RTT-Off SHA256
+`bbb29c9e2ef70a4708829871344ce5076c777f6c7a568b0670cd0d58146495ac`;
+ESP32 SHA256
+`82fbc61818891bfaf1885f52213e6a67d09c277f3c7a8a21761a0bcb16b38a1a`.
+
+| Segment | DWT duration | Average callback | Maximum callback |
+|---|---:|---:|---:|
+| Eight Mono | 610.19 s | 35.31% | 65.56% |
+| One stereo + six Mono | 610.19 s | 32.84% | 59.50% |
+| Two stereo + four Mono | 610.20 s | 30.37% | 56.38% |
+| Three stereo + two Mono | 610.19 s | 27.86% | 51.18% |
+| Four stereo | 610.18 s | 25.36% | 49.18% |
+| Return to eight Mono | 610.19 s | 35.27% | 64.85% |
+| Final switch to one stereo, with Pattern reload | 5.00 s | 33.30% | **74.59%** |
+
+The final requested seconds crossed another mix boundary at 3,660 seconds,
+coinciding with the 61st file cycle. This last window contains the overall
+maximum of **358,030 cycles / 480,000 (74.5896%, REVIEW)**. Across all 733
+windows / 3,666.13 seconds, weighted average was 149,634 cycles (31.1738%).
+The workflow passed; the callback capacity gate did not. Keep the final window
+in the result rather than trimming the run to its lower steady peaks. The
+ordinary event/render window maxima do not identify coincident stage costs.
+
+Evidence: `logs/stereo-0-ladder-20260920-043125.log` / `.json`, per-segment
+`-mix0.log` through `-mix6.log`, `logs/capacity-all-mixes-full.log` and
+`logs/capacity-all-mixes-esp32.log`. Segment boundaries include transition
+windows and are not isolated optimization comparisons. The boot/setup-inclusive
+maximum is also 74.5896%. The last periodic Daisy UART health record has zero
+CRC, sync, sequence drop and RX-overflow counts; 7,558 TX-full rejections are
+reported separately.
+The captured frontend log has no hardware FIFO-overflow report. This run does
+not establish physical MIDI timing, interrupt-entry latency, panel behavior or
+listening acceptance, and it is not a clean-commit repeat.
+
+**Detailed follow-up:** A separate instrumented image
+`b07430d430c4cb72a5f06ea664af077c4ec7ee6737bf69e19c7e60fbd9eb0880`
+repeated mix changes every ten seconds for 187.83 seconds: 18 transitions,
+three Pattern cycles and zero stream underruns/console RX drops. It did not
+reproduce the original high window. Its boot/setup-inclusive maximum was
+316,431 cycles (65.9231%), comprising 141,714 render, 49,151 sequencer-trigger,
+24,634 sequencer-command, 23,268 modulation, 22,569 resolve, 15,420 tick,
+10,474 lock, 5,923 control and 331 queue cycles, plus unclassified callback
+work. Voice initialization is nested inside trigger cost (35,213 cycles for
+eight starts), not another additive stage. These measurements identify costs
+in that diagnostic peak, not the cause of the original 74.5896% event.
+No speculative audio change or raised threshold was accepted. Detailed
+instrumentation is excluded from gate rows; the original REVIEW still applies.
+Evidence: `logs/stereo-0-ladder-20260920-053920.log` / `.json` and
+`logs/capacity-transition-detail-full.log`.
+
+### Layered and repeated-note runs
+
+The ordinary recovery image then completed both full ten-minute layer runs.
+Each used the same DSP/streaming/live-edit workload and ten Pattern save/load
+cycles, with four overlapping zones per note and both oscillators. Repeated
+MIDI-channel notes were injected through the Daisy console's real foreground
+routing/queue path alongside the sequencer. These are not physical DIN/USB
+input or latency tests.
+
+| Scenario | DWT duration | MIDI injections | Average | Workload peak | Setup-inclusive peak |
+|---|---:|---:|---:|---:|---:|
+| Two four-layer Mono notes, eight channels | 605.2 s | 504 | 35.22% | 57.1544% | 59.9229% |
+| One four-layer stereo note, eight channels | 605.5 s | 505 | 25.24% | 43.4917% | 50.3442% |
+
+Both runs maintained the expected voice counts, active streaming, zero stream
+underruns and zero sampled console RX drops. They pass their workload timing
+checks, but do not supersede the higher transition result above. Captures:
+`logs/stereo-0-ladder-20260920-054503.log` / `.json`,
+`logs/stereo-4-ladder-20260920-055612.log` / `.json`, and
+`logs/capacity-layer-{mono,stereo}-full.log` for setup/cleanup boundaries.
+A preceding 40-second Mono screen (`20260920-053626`) passed; the first
+attempt (`20260920-053442`) stopped on a harness-only zero-based MIDI-channel
+argument before any injected burst, and is excluded from acceptance.
+
+### Simultaneous Track pressure — deadline failure
+
+The supported 16-Track/four-layer sequencer case keeps only eight Mono render
+channels active, but resolves and starts **64 layers at each simultaneous hit**.
+With the same DSP/streaming/live-edit load, its 30.078 seconds of ordinary DWT
+windows averaged 35.7736% and peaked at **549,652 cycles (114.5108%)**. The
+setup-inclusive maximum was **566,588 cycles (118.0392%)**. The workflow retained
+eight voices, active streaming and zero stream underruns/console RX drops.
+Those counters therefore do not detect this callback deadline violation.
+The screen was short and had no Pattern file cycle; it is failure evidence,
+not a ten-minute acceptance row. Source/image identities are unchanged from
+the ordinary recovery image above. Capture:
+`logs/stereo-0-ladder-20260920-060830.log` / `.json` and
+`logs/capacity-track-pressure-full.log`.
+
+The separate detailed image repeated this case for 15 seconds. Its largest
+setup/workload callback was 603,154 cycles, with **16 resolves and triggers,
+64 voice starts**, and these disjoint costs: trigger 170,702; render 141,753;
+resolve 124,266; locks 53,193; modulation 23,369; sequencer commands 22,168;
+tick 17,979; controls 6,105; queue 290. Voice-start cost (135,477 cycles) is
+nested in trigger cost. This shows substantial work initializing layers that
+are stolen before the block renders. Avoiding initialization alone does not
+remove the resolution and lock costs; a bounded admission/resolution design
+must preserve whole-note, choke and sample-offset semantics. No such behavior
+change was made in this validation pass. The callback gate is **blocked**, and
+the guide's backend-upgrade planning condition is active while callback
+features remain. Evidence:
+`logs/stereo-0-ladder-20260920-061211.log` / `.json` and
+`logs/capacity-pressure-detail-full.log`. Detailed percentages are diagnostic
+only and are not substituted for the ordinary-image failure above.
+
+Normal profiling-Off/detail-Off/RTT-Off firmware was restored afterward
+(Daisy SHA256 `45fed7701b849639d4d911a5f13fef7ef997b2d8b6e83b3fe600087ae39d0660`).
+The normal-image functional regressions and idle-state smoke check pass as
+recorded at [HV-022](hardware-validation.md#hv-022--peer-restart-and-browse-delivery).
+Those functional passes do not close the callback capacity failure.
+
+## Mixed-channel sequencer/sampler validation — 2026-09-20
+
+The unchanged scheduler-placement Daisy image (`f6c8a1957f89e08a590d989462aac553dd8cfd3a559914ba532068b8bb3c04fa`)
+completed the full two-stereo/four-Mono workload at the eight-channel budget:
+two oscillators, full-drive ladder, modulation, four locks per hit, sequencing,
+streaming, live filter edits and ten Pattern save/load cycles. Frontend image
+`78c63611b1f5425d41639b0211d5969b83eb25925655e1fc54ffe4ebd6dfbffe`
+includes complete-line console replies. No audio code changed in this pass.
+
+Capture `logs/stereo-2-ladder-20260920-031805.log` / `.json` contains 121 DWT
+windows spanning 605.3 s; the workload completed in 606.44 s. Weighted callback
+average is 144,912 cycles (30.2%), maximum 268,865 (56.0135%, COMFORTABLE),
+with zero stream underruns and sampled console RX drops. The complete boot/setup
+and workload capture (`logs/seq-sampler-mixed-full.log`) peaks at 272,900 cycles
+(56.85%). This is another workload, not an optimization comparison against the
+eight-Mono trial. The normal profiling-off image was restored afterward.
+
+An earlier setup failed before playback: following a Daisy-only reflash,
+the frontend browser stayed empty although the card mounted successfully.
+The combined UART overflow counter increased; restarting the frontend restored
+browsing. Follow-up inspection found rejected TX enqueues and an explicitly
+dropped root browse response, not evidence of Daisy RX overflow. Preserve
+`logs/seq-sampler-mixed-run.log`, `logs/seq-sampler-mixed-boot.log` and the failed
+`logs/stereo-2-ladder-20260920-031623.json`; this is a separate peer-restart gate.
+The successful retry is `logs/seq-sampler-mixed-retry.log`. Clean-commit repeat,
+other channel mixes, layered/repeated-note burst timing, interrupt latency,
+listening and the one-hour soak remain open.
+
+## Sequencer placement trial — 2026-09-19
+
+The Phase 2 callback checkpoint now has a placement-only candidate: named ITCM
+sections on scheduler Start/Process/AppendRange/ComputeTriggerTick and transport
+ApplyTransport/Tick. Pattern/event data, ordering and arithmetic are unchanged.
+The linker places the emitted hot entry points in ITCM; some small annotated
+helpers inline into their callers. Standard-library sorting helpers remain in
+QSPI. ITCM use grows from 28,792 to 35,680 of 65,536 bytes; the QSPI image grows
+by 40 bytes. Both images keep `-O2`, profiling On, detail Off and RTT Off.
+The profiler object is byte-identical (SHA256
+`9fb4c0a44933f739f13ff9a478f8d92fcb7cee32b17e793a15b3a895130d282b`).
+
+Fresh control: source `dbd1ebf+`, Daisy SHA256
+`d92696779f82dd17d855f6e2ef7e84ff6803e1b609a7b249789b376e77578609`;
+frontend SHA256
+`2c1f693d3a0dfdbd369b36e74cedc06ee22c4b55c0d1e9d3e574a742ba5a5403`,
+using its committed native-USB console. Capture
+`logs/stereo-0-ladder-20260919-044706.log` / `.json`: 605.2 seconds / 121 DWT
+windows, ten Pattern file cycles, average 176,232 (36.7%) and peak 341,506
+(71.1471%, REVIEW), zero stream underruns and console RX drops. Setup peaked
+at 350,309 cycles (72.9810%); retained in `logs/seq-control-boot.log`.
+
+Candidate SHA256:
+`f6c8a1957f89e08a590d989462aac553dd8cfd3a559914ba532068b8bb3c04fa`.
+The candidate captured 605.2 seconds / 121 DWT windows: average 168,675 cycles
+(35.1406%), maximum 310,836 (64.7575%), with zero observed stream underruns or
+console RX drops. Setup peaked at 316,762 (65.9921%). Nine Pattern cycles were
+fully confirmed; in cycle ten the saved/loaded Pattern restarted and Back
+navigation executed, but console ACK 940623 never arrived. The harness
+therefore records **failed**, with its exception preserved; this is valid
+callback timing evidence, not a passing complete workflow. Evidence:
+`logs/stereo-0-ladder-20260919-045956.log` / `.json`, `logs/seq-itcm-run.log`,
+`logs/seq-itcm-boot.log`, and the corresponding section of `logs/esp32.log`.
+
+An unchanged-control return check flashed the original binary directly, after
+verifying its SHA256 (no rebuild against the annotated headers). Its 185.1
+seconds / 37 windows and three Pattern cycles passed with zero underruns or
+console RX drops: mean 176,289 (36.7269%), maximum 339,485 (70.7260%), setup
+353,279 (73.5998%). Evidence:
+`logs/stereo-0-ladder-20260919-051348.log` / `.json` and
+`logs/seq-control-repeat-boot.log`. This shorter repeat characterizes variance;
+it is not another ten-minute gate row. The first 37 windows of control /
+candidate / returned control averaged 176,322 / 168,604 / 176,289 cycles,
+with maxima 341,506 / 305,276 / 339,485 respectively. Average cost returned to the control
+level, and the control peak spread is much smaller than the candidate's gain.
+
+Retain the placement: against the full control, average work fell 4.29% and
+observed workload peak fell 30,670 cycles (63.90 µs, 6.39 percentage points).
+This is a measured result for this fixture, not a worst-case execution proof.
+This dirty-tree trial does not close a phase gate; clean-commit repeat, a fully
+acknowledged workflow, other channel mixes, burst/latency checks and the
+one-hour soak remain required.
+
+## Callback and note-group iteration — 2026-09-18
+
+The replacement-card eight-Mono workload first measured 336,019 cycles
+(70.0040%, REVIEW). Reusing LFO configuration alone did not clear the gate:
+`logs/stereo-0-ladder-20260919-030633.log` spans 610.4 s / 122 windows,
+ten Pattern save/load cycles, zero underruns, average 178,111 and maximum
+339,743 cycles (70.7798%, REVIEW). The image is SHA256
+`ff8d8c2e5d597c2a4406027fa6d24ff88fac55d1b77b9dc8820203ba95b7024d`.
+Do not claim a standalone LFO-cache performance win from this result.
+
+Two subsequent short screens exercised whole-note admission plus an immutable
+startup pitch-ratio table. They were deliberately interrupted after exceeding
+the threshold; neither is a ten-minute gate result:
+
+| Candidate | Windows | Pattern file cycles | Peak cycles | Load | Capture |
+|---|---:|---:|---:|---:|---|
+| Group planner in QSPI | 38 | 3 | 354709 | 73.8977% | `logs/stereo-0-ladder-20260919-031905.log` |
+| Group planner in ITCM | 38 | 3 | 339174 | 70.6613% | `logs/stereo-0-ladder-20260919-032606.log` |
+
+Both sampled zero stream underruns and dropped console bytes. QSPI candidate
+SHA256: `d86a89be2a289118e72561879b9753c9bd64575ae12329909726128e04b97f27`;
+ITCM candidate: `8fc82d30d72cd9d6881b01573cf21901e0f0b49a7e8c42359447a76ad115c769`.
+Only planner placement changed between those two images. The earlier LFO-only
+and group images differ in both admission and pitch preparation; that comparison
+does not isolate either change's cost. JSON metadata retains exact image hashes,
+workload state and the interrupted-run status.
+
+Setup windows before the benchmark's steady-workload capture also exposed
+higher startup peaks (359,985 / 367,132 / 352,043 cycles respectively). They are
+not silently discarded as evidence: the full serial log is
+`logs/callback-cache-daisy.log`, with separate boots for these images. The
+follow-up placement run must inspect setup as well as the recorded workload.
+
+The completed candidate (pitch table, whole-note admission with prospective
+choke priority, planner and filter preparation in ITCM) measured **174,512
+average cycles (36.4%) and 338,778 maximum (70.5787%)**, across 610.5 seconds /
+122 windows and ten Pattern save/load cycles. No stream underruns or console
+RX drops were observed. Setup peaked separately at 348,202 cycles (72.5421%).
+The unchanged policy classifies this **REVIEW**; there is no demonstrated net
+peak improvement against the pre-group baseline. Evidence:
+`logs/stereo-0-ladder-20260919-033711.log` / `.json`;
+Daisy SHA256 `386259b62c24a2dd338e441026be99b939b739fd3729fe1655fb830a29eb0e5c`.
+
+### Correlated peak attribution (diagnostic image)
+
+The separate `WAVEX_PROFILE_CALLBACK_DETAIL=ON` image, SHA256
+`c65fe60a19cbb3d36d8a88b6d46bfe22d47502ddbdc01504fe0187d0a454a716`,
+completed 189.1 seconds and three Pattern save/load cycles with no observed
+stream underruns or console RX drops. This is diagnostic evidence, **not** a
+600-second acceptance row. Capture:
+`logs/stereo-0-ladder-20260919-035249.log` / `.json`; setup-inclusive boot:
+`logs/callback-detail-boot.log`; correlated records:
+`logs/callback-detail-peaks.json`.
+
+Each column below describes one complete callback; unlike independent zone
+maxima, the costs are known to coincide. Both blocks resolved and triggered
+eight notes. The setup peak was block 92,329 / detail window 19; the captured
+workload peak was block 228,235 / window 46, after a Pattern reload/restart.
+
+| Disjoint stage | Setup peak cycles | Workload peak cycles |
+|---|---:|---:|
+| Note queue | 321 | 308 |
+| Live controls | 5,628 | 4,897 |
+| Sequencer commands/readback | 32,464 | 32,260 |
+| Sequencer tick/exchange/telemetry | 42,401 | 41,890 |
+| Zone resolution (8 hits) | 21,217 | 22,648 |
+| Parameter locks (8 hits) | 10,790 | 10,131 |
+| Group admission/voice start (8 hits) | 47,408 | 38,532 |
+| Modulation | 22,475 | 19,921 |
+| Rendering | 141,712 | 138,184 |
+| Unmarked work / instrumentation | 27,602 | 27,599 |
+| **Measured detail total** | **352,018 (733.37 µs)** | **336,370 (700.77 µs)** |
+
+Within group triggering, `voice_start` accounted for 33,945 / 17,517 cycles
+respectively. Its filter initialization cost was 16,177 / 2,592; source setup
+7,583 / 6,629; envelopes 2,984 / 2,984; LFO setup 4,408 / 2,512. These are nested
+costs, not extra time to add to the table. The detail total excludes peak
+selection/publication and the outer profiler epilogue; instrumentation itself
+perturbs timing. It does not measure interrupt-entry latency.
+
+The next measured candidates are sequencer start/step preparation and placement:
+the linked image leaves `SequencerTransport::Tick`, `SequencerScheduler::Process`
+and sorting helpers in QSPI. The command path includes Pattern commit/copy on
+Play; finer timing is needed before attributing all command cost to that copy.
+Rendering remains the largest individual stage, but the peak combines it with
+sequencer work and eight new notes. Keep `-O2`; the earlier global `-O3` trial
+in this log increased average cost. Selective ITCM/inlining and then LTO deserve
+controlled trials; neither an LTO gain nor a new compiler-flag gain is claimed.
+
+### LUT candidates — 2026-09-19
+
+The remaining repeated library powers are `ModScaleCache::Scale` (four
+exponential destination mappings when their inputs change) and cutoff/pitch
+parameter locks. Static note/root ratios, fades and CMSIS sine are already
+lookup-based; the modulation curves themselves are quadratic/smoothstep math.
+A 257-entry one-octave `2^x` table plus integer-octave scaling needs 1,028 bytes.
+A float32 arithmetic simulation over 1,048,577 evenly spaced exponents from
+-32 to +32 observed maximum relative error 1.02217e-6, equivalent to
+0.00177 cents. This is a sampled numerical result, not an exhaustive bound,
+on-device timing, audio-quality evidence or an adopted implementation.
+CMSIS `arm_linear_interp_f32` provides the interpolation kernel already vendored
+with libDaisy. Table initialization/placement and finite/range behavior still
+need an explicit implementation and validation.
+
+Before adding a custom table, benchmark `std::exp2(power)` against the current
+`std::pow(2.f, power)`. Inspection of this ARM toolchain's hard-float libm
+(`libm_a-sf_exp2.o`) shows a 32-entry `__exp2f_data` lookup, polynomial arithmetic
+and hardware double-precision FMA. Its text is 208 bytes versus 840 for `powf`;
+code size is not a cycle measurement. This existing implementation is the
+preferred first trial under the library-first rule, with cache behavior,
+numerical differences and actual DWT cost checked before adoption.
+
+High-cutoff `TanPi` falls back to `tanf` above 12 kHz at 48 kHz; below that it
+already uses a polynomial. The ladder's per-sample saturation is a rational
+approximation with a divide, not a `tanhf` call. Tables for those operations
+need filter response, high-resonance stability and listening tests; neither
+should be bundled into the scheduler placement experiment.
+
 ## Stereo channel verification — 2026-09-16
 
 The Daisy profiling image was built from clean tracked firmware at
@@ -812,3 +1188,14 @@ locally as `logs/perf-itcm-workload.py` under its baseline SHA256 above.
 | 2026-09-16 | 8714ad0+ | 8 Mono voices, two oscillators, Ladder, locks, stream, file cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 176656 (36.8%) | 319229 (66.5060%) | 33.4940% | 0 | yes | STAY | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |
 | 2026-09-16 | 8714ad0+ | 4 stereo voices, two oscillators, Ladder, locks, stream, file cycles | 4 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 126070 (26.3%) | 241636 (50.3408%) | 49.6592% | 0 | yes | COMFORTABLE | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |
 | 2026-09-16 | 8714ad0+ | 2 stereo + 4 Mono voices, two oscillators, Ladder, locks, stream, file cycles | 6 | 48000/48 | 480 MHz | qspi `-O2` | 605.3s (121 windows) | 480000 | 151756 (31.6%) | 276542 (57.6129%) | 42.3871% | 0 | yes | COMFORTABLE | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |
+| 2026-09-18 | 3341de1d03633e4cbe648cc4ebf51eceafc85310+ | HV-019 baseline: 8 Mono voices, dual oscillators, ladder/drive, modulation, locks, sequencer, stereo streaming, Pattern saves/loads | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 175783 (36.6%) | 336019 (70.0040%) | 29.9960% | 0 | yes | REVIEW | Replacement-card pre-group baseline; profile SHA256 778b0c77d07ae328733568199b41b1e69ab9960c49b76723fecacaf32b41242f; HV-019a partial, other mixes and burst tests pending. |
+| 2026-09-18 | 3341de1d03633e4cbe648cc4ebf51eceafc85310+ | 8 Mono; LFO configuration cache; dual oscillators, ladder, modulation, locks, stream and file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.4s (122 windows) | 480000 | 178111 (37.1%) | 339743 (70.7798%) | 29.2202% | 0 | yes | REVIEW | LFO-only candidate; SHA256 ff8d8c2e5d597c2a4406027fa6d24ff88fac55d1b77b9dc8820203ba95b7024d; 10 Pattern save/load cycles; retain REVIEW peak including full-load transition. |
+| 2026-09-19 | 3341de1d03633e4cbe648cc4ebf51eceafc85310+ | 8 Mono dual-osc ladder; live note groups, pitch table, LFO cache and ITCM preparation | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.5s (122 windows) | 480000 | 174512 (36.4%) | 338778 (70.5787%) | 29.4213% | 0 | yes | REVIEW | SHA256 386259b62c24a2dd338e441026be99b939b739fd3729fe1655fb830a29eb0e5c; logs/stereo-0-ladder-20260919-033711.json; ten Pattern save/load cycles; startup separately 348202 cycles |
+| 2026-09-19 | dbd1ebf5afb1dd1cbab8af857e18e97a685e1e39+ | Sequencer placement control; 8 Mono dual-osc ladder, modulation, locks, SD and Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 176232 (36.7%) | 341506 (71.1471%) | 28.8529% | 0 | yes | REVIEW | Daisy SHA256 d92696779f82dd17d855f6e2ef7e84ff6803e1b609a7b249789b376e77578609; seq-control-boot.log retains startup; no scheduler placement annotations |
+| 2026-09-19 | dbd1ebf5afb1dd1cbab8af857e18e97a685e1e39+ | Sequencer ITCM; 8 Mono dual-osc ladder, modulation, locks, SD and Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 168675 (35.1%) | 310836 (64.7575%) | 35.2425% | 0 | yes | STAY | Daisy SHA256 f6c8a1957f89e08a590d989462aac553dd8cfd3a559914ba532068b8bb3c04fa; setup 316762 cycles; 9 confirmed file cycles; harness failed on missing Back ACK in cycle 10 despite logged navigation; DWT capture valid, acceptance incomplete; unchanged-control repeat reproduced higher costs; phase gate open |
+| 2026-09-20 | dbd1ebf5afb1dd1cbab8af857e18e97a685e1e39+ | Two stereo plus four Mono; two oscillators, ladder, modulation, locks, sequencing, streaming, live edits and ten Pattern save/load cycles | 6 | 48000/48 | 480 MHz | qspi `-O2` | 605.3s (121 windows) | 480000 | 144912 (30.2%) | 268865 (56.0135%) | 43.9865% | 0 | yes | COMFORTABLE | Daisy f6c8a195 / ESP32 78c63611; full workflow passed, zero stream underruns. Setup/session peak 272900 cycles (56.85%). Dirty-tree evidence; other mixes, bursts, latency and one-hour soak remain open. |
+| 2026-09-20 | dbd1ebf+ | 61-minute full-channel mix rotation, two oscillators, ladder, modulation, locks, streaming, live edits and 61 Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 3666.1s (733 windows) | 480000 | 149634 (31.2%) | 358030 (74.5896%) | 25.4104% | 0 | yes | REVIEW | HV-005/HV-019: zero stream underruns; final transition peak requires REVIEW; Daisy bbb29c9e, ESP32 82fbc618 |
+| 2026-09-20 | dbd1ebf+ | Two four-layer Mono notes, sequencer plus repeated MIDI fan-out, two oscillators, ladder, modulation, locks, streaming, live edits, ten Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 169034 (35.2%) | 274341 (57.1544%) | 42.8456% | 0 | yes | COMFORTABLE | HV-019: 504 injected MIDI bursts; Daisy bbb29c9e, ESP32 82fbc618; no physical MIDI/listening claim |
+| 2026-09-20 | dbd1ebf+ | One four-layer stereo note, sequencer plus repeated MIDI fan-out, two oscillators, ladder, modulation, locks, streaming, live edits, ten Pattern cycles | 4 | 48000/48 | 480 MHz | qspi `-O2` | 605.5s (121 windows) | 480000 | 121146 (25.2%) | 208760 (43.4917%) | 56.5083% | 0 | yes | COMFORTABLE | HV-019: 505 injected MIDI bursts; Daisy bbb29c9e, ESP32 82fbc618; no physical MIDI/listening claim |
+| 2026-09-20 | dbd1ebf+ | 16 Tracks x 4 Mono layers, same-frame batch, dual osc, ladder, modulation, locks, stream and Pattern files | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.9s (121 windows) | 480000 | 169698 (35.4%) | 316812 (66.0025%) | 33.9975% | 0 | yes | STAY | ac4f254f candidate; 10 Pattern cycles, zero stream underruns; mixed-channel final-image soak pending |
+| 2026-09-20 | dbd1ebf+ | Rapid full-channel stereo/Mono rotation every ten seconds, two oscillators, ladder, modulation, locks, streaming, live edits and ten Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 145494 (30.3%) | 287832 (59.9650%) | 40.0350% | 0 | yes | COMFORTABLE | Batched admission candidate ac4f254f, ESP32 82fbc618; rapid transitions only, final-image one-hour soak remains open |

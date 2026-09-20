@@ -306,7 +306,19 @@ SD/sample streaming should maintain sufficient read-ahead buffering that tempora
 
 Prefer CMSIS-DSP primitives where they provide a tested and optimized equivalent of custom DSP loops.
 
-For STM32H750, `float32_t` / `float` is normally the default DSP representation because Cortex-M7 provides a single-precision FPU.
+STM32H750 supports hardware single- and double-precision floating point;
+it is not a single-precision-only target. The current build uses
+`-mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16`, and generated code
+includes double-precision instructions such as `vdiv.f64`.
+[ST's H750 specification](https://www.st.com/en/microcontrollers-microprocessors/stm32h750-value-line.html)
+confirms the double-precision FPU.
+
+Prefer `float32_t` / `float` where it matches existing CMSIS-DSP kernels and
+keeps state compact. Preserve existing fixed-point paths unless measurement
+justifies changing them. Do not justify an optimization by assuming `double`
+is software-emulated; inspect the generated instructions and measure the
+actual operation. `powf` in this build is a linked library routine even though
+its arithmetic uses the FPU.
 
 Initialize CMSIS-DSP structures outside the audio callback.
 

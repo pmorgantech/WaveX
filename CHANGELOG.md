@@ -24,6 +24,23 @@ versioning and release process.
 
 
 
+- Optional correlated callback-peak profiling reports note queue, live controls,
+  sequencer preparation, voice initialization, modulation and rendering from
+  the same callback. Detailed captures are excluded from the normal timing gate.
+
+- Sampler and sequencer whole-note admission: all resolved layers enter as one
+  group, queue pressure refuses the whole note, and stealing retires all its
+  surviving layers. Stable group releases ignore reused voice slots; admitted
+  choke groups cannot choke sibling layers, and matching chokes keep priority
+  over unrelated held notes at capacity. Saved polyphony controls and MIDI
+  held-key fallback remain pending.
+
+- Host-tested whole-note admission planner for the polyphony roadmap: bounded
+  layered/stereo reservations, Track-instance ownership, local note caps and
+  Own only / Own first / Any victim selection with side-effect-free refusal.
+  The live allocator now uses this planner with Poly / Auto / Any defaults;
+  persistence, controls and full audio/DWT acceptance remain pending.
+
 - Project Save copy captures the selected Bank; Load restores its file identity
   and slot index with the completed Project transaction. New and Projects with
   no Bank reference clear the selection. Missing/invalid Banks or failed Track
@@ -515,6 +532,12 @@ versioning and release process.
 
 ### Fixed
 
+- Simultaneous layered sequencer events now plan admission before materializing
+  surviving voices. The 16-Track/four-layer pressure workload fell from a
+  114.51% callback peak to 66.00% over ten minutes, preserving whole-note steals,
+  choke ordering, sample offsets and random seeds. Full mixed-channel soak and
+  physical acceptance remain open.
+
 - WAV read recovery retries the failed absolute read position, preserving trimmed
   region and loop boundaries instead of calculating a position from the full file.
   SD fault-injection validation remains pending.
@@ -652,9 +675,20 @@ versioning and release process.
 
 ### Changed
 
+- Place sequencer start/step preparation and transport hot paths in ITCM.
+  The eight-Mono profiling capture reduced average callback cost by about 4.3%
+  and observed peak from 71.15% to 64.76%; full capacity/soak acceptance remains
+  open, including a missing frontend console acknowledgement in the workload.
+
 - ESP32 logs, console commands, HIL replies and screenshots use native USB
   Serial/JTAG instead of the 115,200-baud CH343 bridge. Flash/monitor targets
   pause and resume the managed logger to avoid competing for USB replies.
+- Cache per-voice LFO configuration and precompute integer-note pitch ratios
+  before audio starts, avoiding repeated trigger-time math while preserving the
+  existing tuning, retrigger, free-run, delay and fade behavior. Keep bounded
+  group admission and filter tuning in ITCM; matched DWT results and remaining
+  capacity checks are recorded in the callback performance log.
+
 - Consolidate the roadmap around remaining work: retire the separate Phase 0/1
   lists while retaining unfinished work and gates, remove completed/duplicate
   entries, and move deferred analog-board Phase 3 to the end.

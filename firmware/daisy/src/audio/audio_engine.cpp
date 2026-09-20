@@ -50,6 +50,7 @@ using q15_t = int16_t;
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "playback_cursor.hpp"
+#include "profiling/callback_detail.hpp"
 #include "sample_load_info.hpp"
 #include "sequencer/pattern_exchange.hpp"
 #include "sequencer/sequencer_command_queue.hpp"
@@ -331,6 +332,7 @@ struct NoteEvent {
     bool scoped_release = false;
     uint8_t note = 0;
     uint8_t track = 0;
+    uint8_t layer_count = 0;  // batch head only; remaining cells are its layers
     WaveX::AudioEngine::VoiceTriggerParams params;
 };
 static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
@@ -375,8 +377,23 @@ static bool drain_note_queue() {
     NoteEvent ev;
     while (s_note_queue.Pop(ev)) {
         if (ev.is_trigger) {
-            s_voice_manager.Trigger(ev.params);
-            any_trigger = true;
+            VoiceTriggerParams layers[kMaxLayerTriggers];
+            const uint8_t count = ev.layer_count;
+            if (!count || count > kMaxLayerTriggers)
+                continue;
+            layers[0] = ev.params;
+            bool complete = true;
+            for (uint8_t i = 1; i < count; ++i) {
+                // PushBatch publishes all siblings with the head. No producer
+                // can expose an incomplete group to this callback.
+                if (!s_note_queue.Pop(ev) || !ev.is_trigger || ev.layer_count) {
+                    complete = false;
+                    break;
+                }
+                layers[i] = ev.params;
+            }
+            if (complete)
+                any_trigger = (s_voice_manager.TriggerGroup(layers, count) != 0) || any_trigger;
         } else if (ev.scoped_release) {
             s_voice_manager.ReleaseTrack(ev.note, ev.track);
         } else {
@@ -431,76 +448,98 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
     SeqPatternRequestMessage read_request;
     bool read_requested = false, scoped_read = false;
     WaveX::Sequencer::SequencerCommand command;
-    while (s_seq_command_queue.Pop(command)) {
-        switch (command.type) {
-            case WaveX::Sequencer::SequencerCommandType::StopOnly:
-                s_seq_transport.StopForProject();
-                break;
-            case WaveX::Sequencer::SequencerCommandType::Transport:
-                s_seq_transport.ApplyTransport(command.transport);
-                break;
-            case WaveX::Sequencer::SequencerCommandType::PatternOp:
-                s_seq_transport.ApplyPatternOp(command.pattern_op);
-                break;
-            case WaveX::Sequencer::SequencerCommandType::SlotEdit:
-                s_seq_transport.ApplySlotEdit(command.slot_edit);
-                break;
-            case WaveX::Sequencer::SequencerCommandType::SlotPage:
-                read_request = command.pattern_request;
-                read_requested = scoped_read = true;
-                break;
-            case WaveX::Sequencer::SequencerCommandType::PatternRequest:
-                scoped_read = false;
-                read_request = command.pattern_request;
-                read_requested = true;
-                break;
-            case WaveX::Sequencer::SequencerCommandType::MidiClock:
-                s_seq_transport.OnMidiClock(command.midi_clock);
-                break;
-            case WaveX::Sequencer::SequencerCommandType::MidiCc:
-                s_seq_transport.OnMidiCc(command.midi_cc);
-                break;
+    {
+        CALLBACK_DETAIL_SCOPE(SeqCommands);
+        while (s_seq_command_queue.Pop(command)) {
+            switch (command.type) {
+                case WaveX::Sequencer::SequencerCommandType::StopOnly:
+                    s_seq_transport.StopForProject();
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::Transport:
+                    s_seq_transport.ApplyTransport(command.transport);
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::PatternOp:
+                    s_seq_transport.ApplyPatternOp(command.pattern_op);
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::SlotEdit:
+                    s_seq_transport.ApplySlotEdit(command.slot_edit);
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::SlotPage:
+                    read_request = command.pattern_request;
+                    read_requested = scoped_read = true;
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::PatternRequest:
+                    scoped_read = false;
+                    read_request = command.pattern_request;
+                    read_requested = true;
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::MidiClock:
+                    s_seq_transport.OnMidiClock(command.midi_clock);
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::MidiCc:
+                    s_seq_transport.OnMidiCc(command.midi_cc);
+                    break;
+            }
         }
-    }
-    // At most one bounded page copy per callback, regardless of request bursts.
-    if (read_requested) {
-        SeqPageSnapshot page;
-        page.scoped = scoped_read;
-        s_seq_transport.BuildSlotPage(read_request, page.value);
-        s_seq_page_mailbox.Publish(page);
+        // At most one bounded page copy per callback, regardless of request bursts.
+        if (read_requested) {
+            SeqPageSnapshot page;
+            page.scoped = scoped_read;
+            s_seq_transport.BuildSlotPage(read_request, page.value);
+            s_seq_page_mailbox.Publish(page);
+        }
     }
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
     WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
-    size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
-    if (s_pattern_exchange_storage.Get().Process(s_seq_transport, event_count == 0))
-        event_count = 0;  // a validated replacement discards this block's old-pattern triggers
-    s_seq_telemetry_frames += block_size;
-    if (s_seq_telemetry_frames >= s_seq_telemetry_interval) {
-        s_seq_telemetry_frames = 0;
-        s_seq_head_mailbox.Publish(s_seq_transport.BuildPlayhead());
+    size_t event_count;
+    {
+        CALLBACK_DETAIL_SCOPE(SeqTick);
+        event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
+        if (s_pattern_exchange_storage.Get().Process(s_seq_transport, event_count == 0))
+            event_count = 0;  // a validated replacement discards this block's old-pattern triggers
+        s_seq_telemetry_frames += block_size;
+        if (s_seq_telemetry_frames >= s_seq_telemetry_interval) {
+            s_seq_telemetry_frames = 0;
+            s_seq_head_mailbox.Publish(s_seq_transport.BuildPlayhead());
+        }
+        s_voice_manager.SetTempo(s_seq_transport.scheduler().Tempo());
     }
-    s_voice_manager.SetTempo(s_seq_transport.scheduler().Tempo());
     bool any_trigger = false;
-    for (size_t event_index = 0; event_index < event_count; ++event_index) {
-        const WaveX::Sequencer::TriggerEvent& event = events[event_index];
-        if (event.track >= WaveX::Sequencer::kMaxTracks || event.frame < block_start_frame) {
-            continue;
+    if (!s_seq_voices)
+        return false;
+    const auto& voice_map = s_seq_voices->mailbox.ConsumerValue();
+    static_assert(WaveX::Sequencer::kMaxEventsPerTick <= 32);
+    SequencerVoiceMap::Selection selected[WaveX::Sequencer::kMaxEventsPerTick];
+    for (size_t begin = 0; begin < event_count;) {
+        size_t end = begin + 1;
+        while (end < event_count && events[end].frame == events[begin].frame)
+            ++end;
+        const uint64_t frame = events[begin].frame;
+        if (frame >= block_start_frame && frame - block_start_frame < block_size) {
+            const auto offset = static_cast<uint16_t>(frame - block_start_frame);
+            const auto admitted = s_voice_manager.TriggerBatch(
+                static_cast<uint16_t>(end - begin),
+                [&](uint16_t request) {
+                    CALLBACK_DETAIL_SCOPE(SeqResolve);
+                    const auto& event = events[begin + request];
+                    selected[request] = voice_map.Select(event.track, event.note, event.velocity);
+                    return voice_map.Describe(selected[request]);
+                },
+                [&](uint16_t request, uint8_t layer, VoiceTriggerParams& params) {
+                    const auto& event = events[begin + request];
+                    {
+                        CALLBACK_DETAIL_SCOPE(SeqResolve);
+                        voice_map.Materialize(selected[request], layer, params);
+                    }
+                    {
+                        CALLBACK_DETAIL_SCOPE(SeqLocks);
+                        ApplyParamLocks(params, event.param_locks, event.param_lock_count);
+                        params.start_offset_frames = offset;
+                    }
+                });
+            any_trigger = admitted != 0 || any_trigger;
         }
-        const uint64_t offset = event.frame - block_start_frame;
-        if (offset >= block_size) {
-            continue;
-        }
-        if (!s_seq_voices)
-            continue;
-        VoiceTriggerParams layers[kMaxLayerTriggers];
-        const uint8_t layer_count = s_seq_voices->mailbox.ConsumerValue().Resolve(
-            event.track, event.note, event.velocity, layers);
-        for (uint8_t layer = 0; layer < layer_count; ++layer) {
-            ApplyParamLocks(layers[layer], event.param_locks, event.param_lock_count);
-            layers[layer].start_offset_frames = static_cast<uint16_t>(offset);
-            s_voice_manager.Trigger(layers[layer]);
-            any_trigger = true;
-        }
+        begin = end;
     }
     return any_trigger;
 }
@@ -2134,6 +2173,10 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 WAVEX_ITCM_CODE_NAMED("audio.Callback")
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     PROFILE_SCOPE(audio_callback);
+#if WAVEX_PROFILE_CALLBACK_DETAIL
+    const uint32_t detail_start = WaveX::Profiling::GetCycles();
+    WaveX::Profiling::callback_detail_window.Begin();
+#endif
     uint32_t callback_cycles_start = WaveX::Profiling::GetCycles();
     s_cpu_load_meter.OnBlockStart();
     ++s_callback_blocks;
@@ -2179,13 +2222,20 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
     PROFILE_BEGIN(voice_events);
-    bool any_note_on = drain_note_queue();
+    bool any_note_on;
+    {
+        CALLBACK_DETAIL_SCOPE(Queue);
+        any_note_on = drain_note_queue();
+    }
 
     // Publish control-plane changes only at a block boundary. A callback that
     // preempts the producer mid-copy keeps the previous complete snapshot and
     // picks up the new generation one block later.
-    s_track_live_updates.ApplyTo(s_voice_manager);
-    s_mixer_controls.ApplyTo(s_track_mixer);
+    {
+        CALLBACK_DETAIL_SCOPE(Controls);
+        s_track_live_updates.ApplyTo(s_voice_manager);
+        s_mixer_controls.ApplyTo(s_track_mixer);
+    }
 
     // Sequencer transport and pattern edits are callback-owned through the
     // bounded command queue. Its TriggerEvents start voices at their exact
@@ -2212,6 +2262,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // stage further down.
     {
         PROFILE_SCOPE(voice_modulation);
+        CALLBACK_DETAIL_SCOPE(Modulation);
         WaveX::AudioEngine::ModSources mod_global_sources;
         mod_global_sources.lfo1 = s_mod_lfo1.Tick();
         const WaveX::AudioEngine::ModSlotResolver mod_slot_resolver{nullptr, &ResolveModSlots};
@@ -2237,6 +2288,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         s_track_mixer.Tick(static_cast<uint32_t>(size));
         {
             PROFILE_SCOPE(voice_render);
+            CALLBACK_DETAIL_SCOPE(Render);
             s_voice_manager.Render(
                 vm_l, vm_r, size, metering ? s_mix_meter_window.Peaks() : nullptr);
         }
@@ -2342,6 +2394,13 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     telemetry.blocks = s_callback_blocks;
     telemetry.cycles = s_dwt_callback_cycles;
     s_telemetry_mailbox.Publish(telemetry);
+#if WAVEX_PROFILE_CALLBACK_DETAIL
+    // Excludes the peak-selection/mailbox copy and the outer profiler epilogue.
+    // Diagnostic scopes have overhead; compare gate images with detail OFF.
+    if (WaveX::Profiling::callback_detail_window.End(detail_start, WaveX::Profiling::GetCycles()))
+        WaveX::Profiling::callback_detail_mailbox.Publish(
+            WaveX::Profiling::callback_detail_window.Peak());
+#endif
 }
 
 // MSG_CONTROL_CHANGE -> Stage A paraphonic path (item 5 stage 3). Main-loop
@@ -3027,19 +3086,18 @@ static void TriggerTrackNoteOn(uint8_t slot, const NoteMessage& note_msg) {
         return;
     }
 
-    for (uint8_t i = 0; i < count; ++i) {
-        NoteEvent event;
-        event.is_trigger = true;
-        event.note = note_msg.note;
-        event.track = slot;
-        event.params = params[i];
-        if (!s_note_queue.Push(event)) {
-            WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u layer=%u DROPPED - note queue full",
-                                  (unsigned)slot,
-                                  (unsigned)note_msg.note,
-                                  (unsigned)i);
-            break;
-        }
+    if (!s_note_queue.PushBatch(count, [&](NoteEvent& event, uint32_t i) {
+            event = NoteEvent{};
+            event.is_trigger = true;
+            event.note = note_msg.note;
+            event.track = slot;
+            event.layer_count = i == 0 ? count : 0;
+            event.params = params[i];
+        })) {
+        WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u layers=%u DROPPED - note queue full",
+                              (unsigned)slot,
+                              (unsigned)note_msg.note,
+                              (unsigned)count);
     }
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u vel=%u -> %u layers (%lu frames)",

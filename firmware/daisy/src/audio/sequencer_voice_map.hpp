@@ -15,6 +15,7 @@ struct SequencerVoiceMap {
     struct Key {
         uint8_t key_lo = 0, key_hi = 0, vel_lo = 1, vel_hi = 127, flags = 0;
         bool drum = false;
+        uint8_t channels = 1, choke = 0;
     };
     // A small lookup window, not a limit on supported note ranges or zones.
     static constexpr uint8_t kDirectDrumKeys = 16;
@@ -69,6 +70,9 @@ struct SequencerVoiceMap {
                 instrument.mode == InstrumentMode::Drum || !instrument.osc[osc].keytrack};
             dest.zones[index] =
                 PrepareZoneTrigger(instrument, zone, sample, track, zone.root_note, 127, osc);
+            const auto& trigger = dest.zones[index];
+            dest.keys[index].channels = trigger.channels == 2 && !trigger.mono ? 2 : 1;
+            dest.keys[index].choke = trigger.choke_group;
         }
         // Derive only when every prepared zone owns one distinct note in a
         // compact window. Velocity bounds/fades still use the zone key.
@@ -96,67 +100,129 @@ struct SequencerVoiceMap {
         dest.direct_drum = true;
     }
 
+    // Indices borrow the acquired immutable map for this callback only. No
+    // sample/DSP copies or velocity-fade arithmetic are needed for admission.
+    struct Selection {
+        uint8_t track = 0, note = 0, velocity = 0, count = 0;
+        uint8_t zones[2][kMaxLayerTriggers]{};
+    };
+
+    WAVEX_ITCM_CODE_NAMED("resolve.Select")
+    Selection Select(uint8_t track,
+                     uint8_t note,
+                     uint8_t velocity,
+                     uint8_t max = kMaxLayerTriggers) const {
+        Selection selected;
+        if (track >= kNumTracks || note > 127 || velocity == 0 || velocity > 127)
+            return selected;
+        selected.track = track;
+        selected.note = note;
+        selected.velocity = velocity;
+        max = std::min(max, kMaxLayerTriggers);
+        for (auto& oscillator: selected.zones)
+            for (auto& index: oscillator)
+                index = kNoZone;
+        for (uint8_t osc = 0; osc < 2; ++osc) {
+            const auto& source = Oscillator(track, osc);
+            uint8_t begin = 0, end = std::min(source.count, kMaxZones);
+            if (source.direct_drum) {
+                if (note < source.drum_base || note - source.drum_base >= kDirectDrumKeys)
+                    continue;
+                begin = source.drum_zones[note - source.drum_base];
+                if (begin >= end)
+                    continue;
+                end = begin + 1;
+            }
+            uint8_t count = 0;
+            for (uint8_t i = begin; i < end && count < max; ++i) {
+                const auto& key = source.keys[i];
+                if (note >= key.key_lo && note <= key.key_hi && velocity >= key.vel_lo &&
+                    velocity <= key.vel_hi)
+                    selected.zones[osc][count++] = i;
+            }
+            selected.count = std::max(selected.count, count);
+        }
+        return selected;
+    }
+
+    TriggerDescription Describe(const Selection& selected) const {
+        TriggerDescription result;
+        result.track = selected.track;
+        result.count = selected.count;
+        for (uint8_t i = 0; i < selected.count; ++i) {
+            const bool primary = selected.zones[0][i] != kNoZone;
+            const auto& key = Oscillator(selected.track, primary ? 0 : 1)
+                                  .keys[selected.zones[primary ? 0 : 1][i]];
+            auto& layer = result.layers[i];
+            layer.channels = key.channels;
+            layer.choke = key.choke;
+            if (primary && selected.zones[1][i] != kNoZone)
+                layer.channels =
+                    std::max(layer.channels,
+                             tracks[selected.track].secondary.keys[selected.zones[1][i]].channels);
+        }
+        return result;
+    }
+
+    WAVEX_ITCM_CODE_NAMED("resolve.Materialize")
+    void Materialize(const Selection& selected, uint8_t layer, VoiceTriggerParams& out) const {
+        const bool primary = selected.zones[0][layer] != kNoZone;
+        const uint8_t osc = primary ? 0 : 1;
+        const auto& source = Oscillator(selected.track, osc);
+        const auto index = selected.zones[osc][layer];
+        const auto& key = source.keys[index];
+        out = source.zones[index];
+        ApplyNote(out, key, selected.note);
+        out.trigger_note = selected.note;
+        out.velocity = selected.velocity;
+        out.gain_mul *= FadeGain(key, selected.velocity);
+        if (primary && selected.zones[1][layer] != kNoZone) {
+            const auto& second = tracks[selected.track].secondary;
+            const auto second_index = selected.zones[1][layer];
+            const auto& p = second.zones[second_index];
+            // Copy only oscillator fields; the first layer owns shared DSP.
+            out.secondary = static_cast<const VoiceSampleParams&>(p);
+            ApplyNote(out.secondary, second.keys[second_index], selected.note);
+            const float gain = p.gain_mul * FadeGain(second.keys[second_index], selected.velocity);
+            out.dry_level *= out.gain_mul;
+            out.source_level *= out.gain_mul;
+            out.secondary.dry_level *= gain;
+            out.secondary.source_level *= gain;
+            out.gain_mul = 1.f;
+        }
+    }
+
     uint8_t Resolve(uint8_t track,
                     uint8_t note,
                     uint8_t velocity,
                     VoiceTriggerParams* out,
                     uint8_t max = kMaxLayerTriggers) const {
-        if (track >= kNumTracks || note > 127 || velocity == 0 || velocity > 127 || !out)
+        if (!out)
             return 0;
-        if (max > kMaxLayerTriggers)
-            max = kMaxLayerTriggers;
-        const auto& source = tracks[track];
-        const auto first = ResolveOscillator(source, note, velocity, out, max);
-        if (source.secondary.count == 0)
-            return first;
-        VoiceTriggerParams secondary[kMaxLayerTriggers];
-        const auto second = ResolveOscillator(source.secondary, note, velocity, secondary, max);
-        for (uint8_t i = 0; i < second; ++i) {
-            if (i < first)
-                PairOscillatorTrigger(out[i], secondary[i]);
-            else
-                out[i] = secondary[i];
-        }
-        return first > second ? first : second;
+        const auto selected = Select(track, note, velocity, max);
+        for (uint8_t i = 0; i < selected.count; ++i)
+            Materialize(selected, i, out[i]);
+        return selected.count;
     }
 
-    static WAVEX_ITCM_CODE_NAMED("resolve") uint8_t
-        ResolveOscillator(const PreparedOscillator& source,
-                          uint8_t note,
-                          uint8_t velocity,
-                          VoiceTriggerParams* out,
-                          uint8_t max) {
-        uint8_t begin = 0;
-        uint8_t end = source.count < kMaxZones ? source.count : kMaxZones;
-        if (source.direct_drum) {
-            if (note < source.drum_base || note - source.drum_base >= kDirectDrumKeys)
-                return 0;
-            begin = source.drum_zones[note - source.drum_base];
-            if (begin >= end)
-                return 0;
-            end = begin + 1;
-        }
-        uint8_t count = 0;
-        for (uint8_t i = begin; i < end && count < max; ++i) {
-            const auto& key = source.keys[i];
-            if (note < key.key_lo || note > key.key_hi || velocity < key.vel_lo ||
-                velocity > key.vel_hi)
-                continue;
-            auto& p = out[count++];
-            p = source.zones[i];
-            p.note = key.drum ? p.root_note : note;
-            p.trigger_note = note;
-            p.key_note = p.drum ? p.root_note : note;
-            p.velocity = velocity;
-            Zone fade;
-            fade.vel_lo = key.vel_lo;
-            fade.vel_hi = key.vel_hi;
-            fade.flags = key.flags;
-            p.gain_mul *= VelocityXfadeGain(fade, velocity);
-        }
-        return count;
+   private:
+    const PreparedOscillator& Oscillator(uint8_t track, uint8_t osc) const {
+        return osc == 0 ? static_cast<const PreparedOscillator&>(tracks[track])
+                        : tracks[track].secondary;
+    }
+    static void ApplyNote(VoiceSampleParams& p, const Key& key, uint8_t note) {
+        p.note = key.drum ? p.root_note : note;
+        p.key_note = p.drum ? p.root_note : note;
+    }
+    static float FadeGain(const Key& key, uint8_t velocity) {
+        Zone fade;
+        fade.vel_lo = key.vel_lo;
+        fade.vel_hi = key.vel_hi;
+        fade.flags = key.flags;
+        return VelocityXfadeGain(fade, velocity);
     }
 
+   public:
     // Foreground sparse copy: unused capacity is not live state. Copying all
     // 512 zone slots on every cutoff edit needlessly churns the SDRAM/cache
     // shared with audio. Per-Track revisions skip unchanged rows when a

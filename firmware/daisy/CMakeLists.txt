@@ -256,6 +256,13 @@ add_compile_definitions(
 
 # Profiling option
 option(WAVEX_PROFILING_ENABLED "Enable the STM32H7 DWT/ITM profiling helpers" OFF)
+option(WAVEX_PROFILE_CALLBACK_DETAIL "Capture correlated callback peak stages (diagnostic overhead)" OFF)
+if(WAVEX_PROFILE_CALLBACK_DETAIL)
+    if(NOT WAVEX_PROFILING_ENABLED)
+        message(FATAL_ERROR "WAVEX_PROFILE_CALLBACK_DETAIL requires WAVEX_PROFILING_ENABLED")
+    endif()
+    add_compile_definitions(WAVEX_PROFILE_CALLBACK_DETAIL=1)
+endif()
 if(WAVEX_PROFILING_ENABLED)
     add_compile_definitions(WAVEX_PROFILING_ENABLED=1)
     # Keep the timing machinery constant when comparing firmware -O levels.

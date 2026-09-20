@@ -28,6 +28,7 @@
 //             BPM so it tracks the external clock's phase correction rather
 //             than free-running at the raw estimate.
 
+#include "memory_sections.h"
 #include "spi_protocol/protocol.h"
 
 #include "midi/event_ring.hpp"
@@ -179,6 +180,7 @@ class SequencerTransport {
     }
 
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
+    WAVEX_ITCM_CODE_NAMED("transport.ApplyTransport")
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
         if (song_project_ && (m.command == Protocol::SEQ_TRANSPORT_STOP ||
                               m.command == Protocol::SEQ_TRANSPORT_PLAY ||
@@ -465,6 +467,7 @@ class SequencerTransport {
     // Advance exactly one control tick. In MIDI mode, first advances the
     // follower and syncs the scheduler tempo to its servo-corrected rate.
     // Returns trigger events for this block (see SequencerScheduler::Process).
+    WAVEX_ITCM_CODE_NAMED("transport.Tick")
     size_t Tick(TriggerEvent* out_events, size_t max_events) {
         if (!scheduler_.IsPlaying() && pending_pattern_dirty_) {
             CommitPendingPattern();

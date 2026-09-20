@@ -26,6 +26,7 @@
 #include "profiling/profiler.h"
 
 #include "audio/sfz_loader.hpp"
+#include "profiling/callback_detail.hpp"
 #include "timebase.hpp"
 
 using namespace daisy;
@@ -562,13 +563,15 @@ static void PrintProfilingStats(DaisySeed& hw) {
     // from this line and rejects a capture without it. Repeated per window
     // so a capture started mid-run still carries it.
     WaveX::Log::PrintLine(
-        "profile_config: core_hz=%u sample_rate=%u block_size=%u storage=%s opt=%s link=%s",
+        "profile_config: core_hz=%u sample_rate=%u block_size=%u storage=%s opt=%s link=%s "
+        "callback_detail=%u",
         (unsigned)SystemCoreClock,
         (unsigned)hw.AudioSampleRate(),
         (unsigned)hw.AudioBlockSize(),
         WAVEX_PROFILE_STORAGE,
         WAVEX_PROFILE_OPT,
-        WAVEX_MCU_LINK_NAME);
+        WAVEX_MCU_LINK_NAME,
+        (unsigned)WAVEX_PROFILE_CALLBACK_DETAIL);
     uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
     for (uint32_t i = 0; i < zone_count; ++i) {
         const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
@@ -596,6 +599,23 @@ static void PrintProfilingStats(DaisySeed& hw) {
             (unsigned)min_ns,
             (unsigned)WaveX::Profiling::CyclesToNanoseconds(zone->last_cycles));
     }
+#if WAVEX_PROFILE_CALLBACK_DETAIL
+    WaveX::Profiling::CallbackPeak peak;
+    if (WaveX::Profiling::callback_detail_mailbox.ConsumeLatest(peak)) {
+        // Every stage below belongs to this exact winning callback. These
+        // 5000-block windows are independent of the main-loop dump interval.
+        WaveX::Log::PrintLine("callback_peak: window=%u block=%u total_cycles=%u detail=1",
+                              (unsigned)peak.window,
+                              (unsigned)peak.block,
+                              (unsigned)peak.total);
+        for (size_t i = 0; i < WaveX::Profiling::kCallbackStages; ++i)
+            WaveX::Log::PrintLine("peak_stage: window=%u name=%s cycles=%u calls=%u",
+                                  (unsigned)peak.window,
+                                  WaveX::Profiling::kCallbackStageNames[i],
+                                  (unsigned)peak.cycles[i],
+                                  (unsigned)peak.calls[i]);
+    }
+#endif
     WaveX::Log::PrintLine("=======================\n");
 }
 #endif

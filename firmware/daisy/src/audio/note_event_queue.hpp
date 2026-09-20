@@ -32,13 +32,24 @@ class NoteEventQueue {
 
     // Main-loop producer.
     bool Push(const Event& event) {
+        return PushBatch(1, [&](Event& destination, uint32_t) { destination = event; });
+    }
+
+    // Publish every layer of one musical note together, or publish nothing.
+    // fill runs only after capacity admission, on producer-owned cells that
+    // the consumer cannot yet observe. It must not re-enter this producer.
+    template <typename Fill>
+    bool PushBatch(uint32_t count, Fill&& fill) {
+        if (!count || count > Capacity)
+            return false;
         const uint32_t write = __atomic_load_n(&write_, __ATOMIC_RELAXED);
         const uint32_t read = __atomic_load_n(&read_, __ATOMIC_ACQUIRE);
-        if (write - read >= Capacity) {
+        if (count > Capacity - (write - read)) {
             return false;
         }
-        events_[write % Capacity] = event;
-        __atomic_store_n(&write_, write + 1u, __ATOMIC_RELEASE);
+        for (uint32_t i = 0; i < count; ++i)
+            fill(events_[(write + i) % Capacity], i);
+        __atomic_store_n(&write_, write + count, __ATOMIC_RELEASE);
         return true;
     }
 

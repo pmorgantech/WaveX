@@ -21,6 +21,10 @@
 #include "audio/track_mix.hpp"
 #include "envelope.hpp"
 #include "fade.hpp"
+#include "note_group_admission.hpp"
+#include "note_pitch_table.hpp"
+#include "note_trigger_batch.hpp"
+#include "profiling/callback_detail.hpp"
 #include "voice_filter.hpp"
 #include <array>
 #include <cmath>
@@ -39,7 +43,7 @@ enum class VoiceState : uint8_t { Idle, Playing };
 // component. A single float cannot advance by one frame once it reaches 2^24,
 // which is well inside the duration of a mono sample that fits the SDRAM
 // arena. Keeping the integer and fraction separate also makes the callback's
-// per-sample advance two integer adds rather than a software double operation.
+// per-sample advance two integer adds with bounded integer arithmetic.
 class PlaybackPhase {
    public:
     static constexpr uint32_t kFractionOne = 16777216u;
@@ -158,6 +162,7 @@ struct Voice : VoiceSampleState {
     float locked_pitch_scale = 1;
     bool one_shot = false;  // ignore note-off; stop at the sample/region end
     uint32_t age = 0;       // trigger order, for stealing/release-newest-first
+    uint64_t group_id = 0;  // one admission identity shared by every layer
 
     uint8_t render_channels = 1;  // reservation lasts through the release tail
     VoiceFilter filter, right_filter;
@@ -362,6 +367,10 @@ class VoiceManager {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         frame_clock_ = beat_clock_ = 0;
         tempo_bpm_ = 0;
+        next_group_id_ = 1;
+        next_age_ = 0;
+        track_bindings_.fill(1);
+        note_pitch_.Init();
         SetTempo(120);
         live_pitch_scales_.fill(1.0f);
         // DSP initialization belongs to startup, not every note-on. Trigger
@@ -469,7 +478,7 @@ class VoiceManager {
                     (p.instrument.lfo[0].pitch_follow && !p.instrument.lfo[0].sync_div) ||
                     (p.instrument.lfo[1].pitch_follow && !p.instrument.lfo[1].sync_div);
                 if (follow && !v.lfo_pitch_known) {
-                    v.lfo_pitch_ratio = std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12);
+                    v.lfo_pitch_ratio = note_pitch_.Ratio(v.note, 60);
                     v.lfo_pitch_known = true;
                 }
                 for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
@@ -488,38 +497,158 @@ class VoiceManager {
         }
     }
 
-    // Triggers a new voice, stealing enough channels if needed (prefers a
-    // voice already in its release tail, else the oldest-triggered - see
-    // FindVoiceToSteal()). No-op if `params.sample` is null or
-    // `params.sample_frames < 2` (can't interpolate).
-    WAVEX_ITCM_CODE_NAMED("voice.Trigger") void Trigger(const VoiceTriggerParams& params) {
-        if (!params.sample || params.sample_frames < 2)
-            return;
-        // Choke: mute other voices in the same group before allocating this
-        // one (the new voice must not choke itself). No-op for group 0.
-        if (params.choke_group != 0)
-            Choke(params.choke_group, 0.005f, params.track);
-        const uint8_t channels =
-            SourceChannels(params) == 2 || SourceChannels(params.secondary) == 2 ? 2 : 1;
-        // A stereo note may need two mono victims. Each pass retires one
-        // active reservation; the configured note-slot bound limits the work.
-        for (size_t n = 0;
-             n < voices_.size() && ActiveChannelCount() + channels > WAVEX_AUDIO_CHANNEL_BUDGET;
-             ++n) {
-            const int victim = FindVoiceToSteal();
-            if (victim < 0)
-                return;
-            voices_[static_cast<size_t>(victim)].state = VoiceState::Idle;
-        }
-        int idx = FindFreeVoice();
-        if (idx < 0)
-            idx = FindVoiceToSteal();
-        if (idx < 0)
-            return;
-        Voice& v = voices_[static_cast<size_t>(idx)];
+    void Trigger(const VoiceTriggerParams& params) { TriggerGroup(&params, 1); }
 
+    // One callback-owned transaction per musical note. Plan the total stereo/
+    // layer cost first; refusal cannot steal or choke an existing note. The
+    // returned identity survives render-slot reuse and can scope a future
+    // sequencer gate release without cutting off a later note of the same pitch.
+    WAVEX_ITCM_CODE_NAMED("voice.TriggerGroup")
+    uint64_t TriggerGroup(const VoiceTriggerParams* layers,
+                          uint8_t count,
+                          Allocation::Policy policy = {}) {
+        if (!layers || !count || count > voices_.size() || !next_group_id_ ||
+            layers[0].track >= track_bindings_.size())
+            return 0;
+        const uint8_t track = layers[0].track;
+        const auto note = [](const VoiceTriggerParams& p) {
+            return p.trigger_note == 0xFF ? p.note : p.trigger_note;
+        };
+        uint8_t channels = 0;
+        bool has_choke = false;
+        for (uint8_t i = 0; i < count; ++i) {
+            const auto& p = layers[i];
+            if (!p.sample || p.sample_frames < 2 || p.track != track ||
+                note(p) != note(layers[0]) ||
+                p.start_offset_frames != layers[0].start_offset_frames)
+                return 0;
+            channels += TriggerChannels(p);
+            has_choke = has_choke || p.choke_group != 0;
+        }
+        typename Allocation::Admission<>::Snapshot groups{};
+        for (size_t i = 0; i < voices_.size(); ++i) {
+            const auto& v = voices_[i];
+            if (v.IsFree())
+                continue;
+            size_t group = 0;
+            while (group < i && groups[group].id != v.group_id)
+                ++group;
+            auto& g = groups[group];
+            if (!g.slots) {
+                g.id = v.group_id;
+                g.owner = {track_bindings_[v.track], v.track};
+                g.releasing = true;
+            }
+            g.slots |= uint64_t{1} << i;
+            g.channels += v.render_channels;
+            bool releasing = v.envelope.IsReleasing();
+            // Preserve choke-before-steal priority without mutating envelopes
+            // until admission succeeds. A partly choked group remains held.
+            if (has_choke && v.track == track && v.choke_group)
+                for (uint8_t layer = 0; layer < count; ++layer)
+                    releasing = releasing || layers[layer].choke_group == v.choke_group;
+            g.releasing = g.releasing && releasing;
+        }
+        const auto plan = Allocation::Admission<>::Build(
+            groups, {{track_bindings_[track], track}, policy, count, channels});
+        if (plan.result != Allocation::Result::Accepted)
+            return 0;
+        for (size_t i = 0; i < voices_.size(); ++i)
+            if (plan.retire_slots & (uint64_t{1} << i))
+                voices_[i].state = VoiceState::Idle;
+        // Choke only pre-existing voices, never siblings of the incoming note.
+        for (uint8_t i = 0; i < count; ++i)
+            Choke(layers[i].choke_group, .005f, track);
+        const uint64_t id = next_group_id_++;
+        uint8_t layer = 0;
+        for (size_t i = 0; i < voices_.size(); ++i) {
+            if (!(plan.new_slots & (uint64_t{1} << i)))
+                continue;
+            StartVoice(voices_[i], layers[layer++], next_age_++, NextTriggerRandom());
+            voices_[i].group_id = id;
+        }
+        return id;
+    }
+
+    // Same-frame notes only. Describe supplies validated costs/chokes from an
+    // immutable prepared map; materialize supplies the corresponding parameters
+    // for a surviving (request, layer). Neither callback may mutate this manager.
+    // Only eight compact slot records and one full trigger live on the stack.
+    template <typename Describe, typename Materialize>
+    WAVEX_ITCM_CODE_NAMED("voice.TriggerBatch")
+    uint64_t TriggerBatch(uint16_t count, Describe describe, Materialize materialize) {
+        if (count > 32)
+            return 0;
+        NoteTriggerBatch batch;
+        uint32_t ages[WAVEX_NUM_VOICES]{}, random[WAVEX_NUM_VOICES]{};
+        for (size_t i = 0; i < voices_.size(); ++i) {
+            const auto& v = voices_[i];
+            if (!v.IsFree())
+                batch.slots[i] = {v.group_id,
+                                  {track_bindings_[v.track], v.track},
+                                  NoteTriggerBatch::kExisting,
+                                  0,
+                                  v.render_channels,
+                                  v.choke_group,
+                                  v.envelope.IsReleasing()};
+        }
+        uint64_t last_id = 0;
+        for (uint16_t request = 0; request < count; ++request) {
+            const auto note = describe(request);
+            if (note.track >= track_bindings_.size())
+                continue;
+            CALLBACK_DETAIL_SCOPE(SeqTrigger);
+            const auto plan =
+                batch.Admit(note, track_bindings_[note.track], next_group_id_, request);
+            if (plan.result != Allocation::Result::Accepted)
+                continue;
+            last_id = next_group_id_++;
+            for (size_t i = 0; i < voices_.size(); ++i)
+                if (plan.new_slots & (uint64_t{1} << i)) {
+                    ages[i] = next_age_++;
+                    random[i] = NextTriggerRandom();
+                }
+        }
+        for (size_t i = 0; i < voices_.size(); ++i) {
+            auto& voice = voices_[i];
+            const auto& slot = batch.slots[i];
+            if (!slot.id) {
+                voice.state = VoiceState::Idle;
+                continue;
+            }
+            if (slot.request != NoteTriggerBatch::kExisting) {
+                VoiceTriggerParams params;
+                materialize(slot.request, slot.layer, params);
+                CALLBACK_DETAIL_SCOPE(SeqTrigger);
+                StartVoice(voice, params, ages[i], random[i]);
+                voice.group_id = slot.id;
+            }
+            if (slot.releasing && !voice.envelope.IsReleasing())
+                ChokeVoice(voice, .005f);
+        }
+        return last_id;
+    }
+
+    // Stale IDs are harmless after stealing, sample retirement or slot reuse.
+    // As with keyboard note-off, a one-shot layer ignores a normal gate release.
+    void ReleaseGroup(uint64_t id) {
+        if (!id)
+            return;
+        for (auto& v: voices_) {
+            if (!v.IsFree() && v.group_id == id && !v.one_shot && !v.envelope.IsReleasing()) {
+                v.envelope.Release();
+                v.env2.Release();
+                v.env3.Release();
+            }
+        }
+    }
+
+   private:
+    WAVEX_ITCM_CODE_NAMED("voice.StartVoice")
+    void StartVoice(Voice& v, const VoiceTriggerParams& params, uint32_t age, uint32_t random) {
+        CALLBACK_DETAIL_SCOPE(VoiceStart);
         v.state = VoiceState::Playing;
-        v.render_channels = channels;
+        v.render_channels = TriggerChannels(params);
         v.dry_gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.gain = v.dry_gain * params.instrument_gain;
         v.zone_pan = params.zone_pan;
@@ -534,7 +663,7 @@ class VoiceManager {
         v.locked_pitch_scale = params.locked_pitch_scale;
         v.base_resonance = params.filter_resonance;
         v.amp_params = {params.attack_s, params.decay_s, params.sustain_level, params.release_s};
-        v.age = next_age_++;
+        v.age = age;
 
         // A stolen voice keeps its struct - without this reset it would
         // render its first block or two of the new note with the previous
@@ -556,65 +685,89 @@ class VoiceManager {
         // test sees the same sequence every run.
         v.mod_velocity = static_cast<float>(params.velocity) / 127.0f;
         v.mod_note = static_cast<float>(params.note) / 127.0f;
+        v.mod_random = (static_cast<float>(random >> 8) / 8388608.0f) - 1.0f;
+
+        {
+            CALLBACK_DETAIL_SCOPE(SourceInit);
+            InitSource(v, params, VoicePitchScale(v));
+            v.secondary = VoiceSampleState{};
+            if (params.secondary.sample && params.secondary.sample_frames >= 2)
+                InitSource(v.secondary, params.secondary, VoicePitchScale(v));
+        }
+        {
+            CALLBACK_DETAIL_SCOPE(FilterInit);
+            v.filter.SetConfig(params.filter_config);
+
+            if (v.render_channels == 2)
+
+                v.right_filter.SetConfig(params.filter_config);
+            v.filter.SetTopology(params.filter_topology);
+            if (v.render_channels == 2)
+                v.right_filter.SetTopology(params.filter_topology);
+            v.filter.SetMode(params.filter_mode);
+            if (v.render_channels == 2)
+                v.right_filter.SetMode(params.filter_mode);
+            v.base_cutoff_hz = params.filter_cutoff_hz;
+            v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
+            if (v.render_channels == 2)
+                v.right_filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
+            v.filter.Reset();
+            if (v.render_channels == 2)
+                v.right_filter.Reset();
+        }
+        {
+            CALLBACK_DETAIL_SCOPE(EnvelopeInit);
+            v.envelope.SetParams(
+                params.attack_s, params.decay_s, params.sustain_level, params.release_s);
+            v.envelope.Retrigger();
+
+            v.env2.SetParams(params.filter_env_attack_s,
+                             params.filter_env_decay_s,
+                             params.filter_env_sustain_level,
+                             params.filter_env_release_s);
+            v.env2.Retrigger();
+            v.env3.SetParams(params.aux_env_attack_s,
+                             params.aux_env_decay_s,
+                             params.aux_env_sustain_level,
+                             params.aux_env_release_s);
+            v.env3.Retrigger();
+        }
+        {
+            CALLBACK_DETAIL_SCOPE(LfoInit);
+            const bool follow = (params.lfo[0].pitch_follow && !params.lfo[0].sync_div) ||
+                                (params.lfo[1].pitch_follow && !params.lfo[1].sync_div);
+            v.lfo_pitch_known = follow;
+            v.lfo_pitch_ratio = follow ? note_pitch_.Ratio(v.note, 60) : 1;
+            for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
+                v.lfo[i].Start(params.lfo[i],
+                               sample_rate_,
+                               v.lfo_pitch_ratio,
+                               frame_clock_,
+                               beat_clock_,
+                               beat_step_,
+                               v.start_offset_frames,
+                               random ^ (0x9e3779b9u * (i + 1u)),
+                               i);
+        }
+    }
+
+    uint32_t NextTriggerRandom() {
         rng_ ^= rng_ << 13;
         rng_ ^= rng_ >> 17;
         rng_ ^= rng_ << 5;
-        v.mod_random = (static_cast<float>(rng_ >> 8) / 8388608.0f) - 1.0f;
-
-        InitSource(v, params, VoicePitchScale(v));
-        v.secondary = VoiceSampleState{};
-        if (params.secondary.sample && params.secondary.sample_frames >= 2)
-            InitSource(v.secondary, params.secondary, VoicePitchScale(v));
-
-        v.filter.SetConfig(params.filter_config);
-
-        if (v.render_channels == 2)
-
-            v.right_filter.SetConfig(params.filter_config);
-        v.filter.SetTopology(params.filter_topology);
-        if (v.render_channels == 2)
-            v.right_filter.SetTopology(params.filter_topology);
-        v.filter.SetMode(params.filter_mode);
-        if (v.render_channels == 2)
-            v.right_filter.SetMode(params.filter_mode);
-        v.base_cutoff_hz = params.filter_cutoff_hz;
-        v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
-        if (v.render_channels == 2)
-            v.right_filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
-        v.filter.Reset();
-        if (v.render_channels == 2)
-            v.right_filter.Reset();
-
-        v.envelope.SetParams(
-            params.attack_s, params.decay_s, params.sustain_level, params.release_s);
-        v.envelope.Retrigger();
-
-        v.env2.SetParams(params.filter_env_attack_s,
-                         params.filter_env_decay_s,
-                         params.filter_env_sustain_level,
-                         params.filter_env_release_s);
-        v.env2.Retrigger();
-        v.env3.SetParams(params.aux_env_attack_s,
-                         params.aux_env_decay_s,
-                         params.aux_env_sustain_level,
-                         params.aux_env_release_s);
-        v.env3.Retrigger();
-        const bool follow = (params.lfo[0].pitch_follow && !params.lfo[0].sync_div) ||
-                            (params.lfo[1].pitch_follow && !params.lfo[1].sync_div);
-        v.lfo_pitch_known = follow;
-        v.lfo_pitch_ratio = follow ? std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12) : 1;
-        for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
-            v.lfo[i].Start(params.lfo[i],
-                           sample_rate_,
-                           v.lfo_pitch_ratio,
-                           frame_clock_,
-                           beat_clock_,
-                           beat_step_,
-                           v.start_offset_frames,
-                           rng_ ^ (0x9e3779b9u * (i + 1u)),
-                           i);
+        return rng_;
     }
 
+    static void ChokeVoice(Voice& v, float seconds) {
+        v.envelope.SetReleaseTime(seconds);
+        v.envelope.Release();
+        v.env2.SetReleaseTime(seconds);
+        v.env3.SetReleaseTime(seconds);
+        v.env2.Release();
+        v.env3.Release();
+    }
+
+   public:
     // Starts the release phase of the most recently triggered still-active
     // voice for `note` (envelope decays over its release time - the voice
     // stays allocated/rendering until the envelope reaches silence, it does
@@ -632,9 +785,7 @@ class VoiceManager {
             }
         }
         if (found >= 0) {
-            voices_[static_cast<size_t>(found)].envelope.Release();
-            voices_[static_cast<size_t>(found)].env2.Release();
-            voices_[static_cast<size_t>(found)].env3.Release();
+            ReleaseGroup(voices_[static_cast<size_t>(found)].group_id);
         }
     }
 
@@ -838,6 +989,9 @@ class VoiceManager {
         for (auto& v: voices_) {
             v.state = VoiceState::Idle;
         }
+        for (auto& binding: track_bindings_)
+            if (++binding == 0)
+                binding = 1;
     }
 
     // Choke group (instrument-model.md §3): forces every playing voice in
@@ -853,12 +1007,7 @@ class VoiceManager {
         for (auto& v: voices_) {
             if (v.state == VoiceState::Playing && v.choke_group == group &&
                 (track == 0xFF || v.track == track) && !v.envelope.IsReleasing()) {
-                v.envelope.SetReleaseTime(fast_release_s);
-                v.envelope.Release();
-                v.env2.SetReleaseTime(fast_release_s);
-                v.env3.SetReleaseTime(fast_release_s);
-                v.env2.Release();
-                v.env3.Release();
+                ChokeVoice(v, fast_release_s);
             }
         }
     }
@@ -872,6 +1021,8 @@ class VoiceManager {
             if (v.track == track)
                 v.state = VoiceState::Idle;
         }
+        if (track < track_bindings_.size() && ++track_bindings_[track] == 0)
+            track_bindings_[track] = 1;
     }
 
     uint8_t ActiveVoiceCount() const {
@@ -1016,9 +1167,7 @@ class VoiceManager {
                 ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
                 : 1.0f;
         const uint8_t key = params.oscillator < 2 ? params.key_note : params.note;
-        v.key_ratio = std::pow(
-            2.0f,
-            static_cast<float>(static_cast<int>(key) - static_cast<int>(params.root_note)) / 12.0f);
+        v.key_ratio = note_pitch_.Ratio(key, params.root_note);
         v.dry_increment = rate_ratio * params.dry_pitch_ratio;
         v.base_increment = rate_ratio * params.pitch_ratio_mul *
                            (params.oscillator < 2 && !params.keytrack ? 1.f : v.key_ratio);
@@ -1108,41 +1257,18 @@ class VoiceManager {
     /// Optional per-track mixer; nullptr means the pre-mixer behaviour.
     /// Not owned - see SetTrackMixer().
     const WaveX::Mix::TrackMixer* track_mixer_ = nullptr;
+    static uint8_t TriggerChannels(const VoiceTriggerParams& params) {
+        return SourceChannels(params) == 2 || SourceChannels(params.secondary) == 2 ? 2 : 1;
+    }
     static uint8_t SourceChannels(const VoiceSampleParams& source) {
         return source.sample && source.sample_frames >= 2 && source.channels == 2 && !source.mono
                    ? 2
                    : 1;
     }
-    int FindFreeVoice() const {
-        for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
-            if (voices_[i].IsFree())
-                return i;
-        }
-        return -1;
-    }
-
-    // Prefers stealing a voice already in its release tail (least
-    // perceptually disruptive); falls back to the oldest-triggered voice
-    // if none are releasing.
-    int FindVoiceToSteal() const {
-        int releasing_oldest = -1;
-        int overall_oldest = -1;
-        for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
-            if (voices_[i].IsFree())
-                continue;
-            if (overall_oldest < 0 ||
-                voices_[i].age < voices_[static_cast<size_t>(overall_oldest)].age)
-                overall_oldest = i;
-            if (voices_[i].envelope.IsReleasing() &&
-                (releasing_oldest < 0 ||
-                 voices_[i].age < voices_[static_cast<size_t>(releasing_oldest)].age)) {
-                releasing_oldest = i;
-            }
-        }
-        return releasing_oldest >= 0 ? releasing_oldest : overall_oldest;
-    }
-
     std::array<Voice, WAVEX_NUM_VOICES> voices_{};
+    NotePitchTable note_pitch_;
+    std::array<uint32_t, WaveX::Mix::kNumTracks> track_bindings_{};
+    uint64_t next_group_id_ = 1;  // zero after wrap refuses further admissions
     uint32_t next_age_ = 0;
     uint32_t sample_rate_ = 48000;
     uint64_t frame_clock_ = 0, beat_clock_ = 0;

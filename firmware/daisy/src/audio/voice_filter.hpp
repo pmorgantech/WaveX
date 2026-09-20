@@ -56,6 +56,8 @@
 //
 // HAL-free: plain float arithmetic, host-testable.
 
+#include "memory_sections.h"
+
 #include "ladder_zdf.hpp"
 #include "svf_filter.hpp"
 #include <cstdint>
@@ -96,7 +98,7 @@ class VoiceFilter {
     // Instrument-owned. A change retunes the incoming implementation (it has
     // not been tuned since it was last active, or ever) and starts it clean.
     // A value this build does not know falls back to the SVF.
-    void SetTopology(FilterTopology topology) {
+    WAVEX_ITCM_CODE_NAMED("filter.SetTopology") void SetTopology(FilterTopology topology) {
         if (static_cast<uint8_t>(topology) >= kFilterTopologyCount)
             topology = FilterTopology::WaveXSvf;
         if (topology == topology_)
@@ -129,7 +131,7 @@ class VoiceFilter {
 
     // One tuning pair produces one coefficient set. Keep the integrators
     // intact, just as the separate setters do during a sounding note.
-    void SetParameters(float hz, float res) {
+    WAVEX_ITCM_CODE_NAMED("filter.SetParameters") void SetParameters(float hz, float res) {
         hz = hz > 0.0f ? hz : 0.0f;
         res = res < 0.0f ? 0.0f : (res > 1.0f ? 1.0f : res);
         // A full live Instrument snapshot also arrives for oscillator, amp,
@@ -193,7 +195,9 @@ class VoiceFilter {
         ladder_.SetInputDrive(1.0f + config_.drive * 3.0f);
     }
 
-    void Retune() {
+    // Called from note admission and block-rate modulation; keep tuning with
+    // the ITCM callback rather than fetching it from QSPI during SD activity.
+    WAVEX_ITCM_CODE_NAMED("filter.Retune") void Retune() {
         if (topology_ == FilterTopology::WaveXSvf) {
             mine_.SetParameters(cutoff_hz_, resonance_);
             return;

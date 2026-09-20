@@ -46,7 +46,7 @@ class VoiceLfo {
     void UpdateSettings(const Protocol::InstLfoSettings& settings,
                         uint32_t sample_rate,
                         float pitch_ratio) {
-        if (std::memcmp(&settings_, &settings, sizeof(settings)) == 0)
+        if (ConfigurationMatches(settings, sample_rate, pitch_ratio))
             return;
         Configure(settings, sample_rate, pitch_ratio);
         Recompute();
@@ -68,12 +68,27 @@ class VoiceLfo {
     }
 
    private:
+    bool ConfigurationMatches(const Protocol::InstLfoSettings& settings,
+                              uint32_t sample_rate,
+                              float pitch_ratio) const {
+        return configured_ && configured_sample_rate_ == (sample_rate ? sample_rate : 48000) &&
+               (!settings.pitch_follow || settings.sync_div ||
+                configured_pitch_ratio_ == pitch_ratio) &&
+               std::memcmp(&settings_, &settings, sizeof(settings)) == 0;
+    }
     WAVEX_ITCM_CODE_NAMED("lfo.Configure")
     void Configure(const Protocol::InstLfoSettings& settings,
                    uint32_t sample_rate,
                    float pitch_ratio) {
+        // Physical voices commonly retrigger the same sound. Reuse only the
+        // derived configuration; Start still resets note age, phase and seed.
+        if (ConfigurationMatches(settings, sample_rate, pitch_ratio))
+            return;
         settings_ = settings;
         sample_rate = sample_rate ? sample_rate : 48000;
+        configured_sample_rate_ = sample_rate;
+        configured_pitch_ratio_ = pitch_ratio;
+        configured_ = true;
         wave_ = settings.wave;
         division_ = settings.sync_div;
         enabled_ = wave_ <= 4 && LfoControl::ValidDivision(division_);
@@ -131,6 +146,9 @@ class VoiceLfo {
         value_ = wave * gain;
     }
     Protocol::InstLfoSettings settings_;
+    uint32_t configured_sample_rate_ = 0;
+    float configured_pitch_ratio_ = 0;
+    bool configured_ = false;
     uint64_t phase_ = 0;
     uint32_t rate_step_ = 0, delay_frames_ = 0, fade_frames_ = 0, elapsed_frames_ = 0, seed_ = 0;
     float fade_scale_ = 1, value_ = 0;

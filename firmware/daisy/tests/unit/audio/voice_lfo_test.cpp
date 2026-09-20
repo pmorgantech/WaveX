@@ -168,3 +168,53 @@ TEST(VoiceLfo, SyncModeEditPreservesHeldPhaseAndUsesCurrentTempo) {
     l.Advance(9000, VoiceLfo::BeatStep(60, 48000));
     EXPECT_NEAR(std::min(l.Phase(), 1.f - l.Phase()), 0, .00002f);
 }
+
+TEST(VoiceLfo, ReusedConfigurationStillRestartsDelayPhaseAndRandomSeed) {
+    InstLfoSettings s;
+    s.wave = 4;
+    s.delay_s = .01f;
+    s.fade_s = .02f;
+    VoiceLfo reused;
+    for (uint32_t seed: {17u, 29u, 101u}) {
+        VoiceLfo fresh;
+        reused.Start(s, 1000, 1, 375, 0, 0, 0, seed, 0);
+        fresh.Start(s, 1000, 1, 375, 0, 0, 0, seed, 0);
+        EXPECT_FLOAT_EQ(reused.Phase(), 0);
+        EXPECT_FLOAT_EQ(reused.Value(), 0);
+        for (uint32_t frames: {5u, 10u, 20u, 1000u}) {
+            EXPECT_FLOAT_EQ(reused.Advance(frames, 0), fresh.Advance(frames, 0));
+            EXPECT_FLOAT_EQ(reused.Phase(), fresh.Phase());
+        }
+    }
+    s.retrigger = 0;
+    for (uint64_t clock: {375u, 750u}) {
+        VoiceLfo fresh;
+        reused.Start(s, 1000, 1, clock, 0, 0, 3, 1, 0);
+        fresh.Start(s, 1000, 1, clock, 0, 0, 3, 1, 0);
+        EXPECT_FLOAT_EQ(reused.Phase(), fresh.Phase());
+        EXPECT_FLOAT_EQ(reused.Advance(30, 0), fresh.Advance(30, 0));
+    }
+}
+
+TEST(VoiceLfo, UnchangedSettingsReconfigureForSampleRateAndFollowedPitch) {
+    InstLfoSettings s;
+    s.wave = 2;
+    s.pitch_follow = 1;
+    VoiceLfo l;
+    l.Start(s, 1000, 1, 0, 0, 0, 0, 1, 0);
+    l.Advance(125, 0);
+    EXPECT_NEAR(l.Phase(), .125f, 1e-5);
+    l.UpdateSettings(s, 1000, 2);
+    EXPECT_NEAR(l.Phase(), .125f, 1e-5);
+    l.Advance(125, 0);
+    EXPECT_NEAR(l.Phase(), .375f, 1e-5);
+    l.UpdateSettings(s, 2000, 2);
+    l.Advance(125, 0);
+    EXPECT_NEAR(l.Phase(), .5f, 1e-5);
+    l.Start(s, 2000, 4, 0, 0, 0, 0, 1, 0);
+    l.Advance(125, 0);
+    EXPECT_NEAR(l.Phase(), .25f, 1e-5);
+    l.Start(s, 0, 1, 0, 0, 0, 0, 1, 0);
+    l.Advance(12000, 0);
+    EXPECT_NEAR(l.Phase(), .25f, 1e-5);
+}

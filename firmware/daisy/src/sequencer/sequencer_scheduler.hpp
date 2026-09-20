@@ -9,6 +9,8 @@
 // control tick (one audio block) from the Daisy audio callback, at the same
 // site as the paraphonic envelope / CV staging. The callback-owned transport
 // supplies the required pending/active Pattern hand-off between steps.
+// Named ITCM sections keep start/step preparation beside the audio callback;
+// host builds erase the placement annotations. See callback-performance-log.md.
 //
 // Timing model / anti-drift design (sequencer.md §2 wants "fixed point...
 // to avoid drift" - the design below achieves that goal, but not via a
@@ -50,6 +52,8 @@
 // discipline (double-buffered pattern rows, edits applied between steps)
 // is the caller's responsibility per sequencer.md §4 and is not
 // implemented in this class.
+
+#include "memory_sections.h"
 
 #include "pattern.hpp"
 #include <algorithm>
@@ -116,6 +120,7 @@ class SequencerScheduler {
     // very first step of every track fires immediately (tick 0), matching
     // standard sequencer/drum-machine behavior: the downbeat sounds the
     // instant playback starts, it does not wait one full step interval.
+    WAVEX_ITCM_CODE_NAMED("scheduler.Start")
     void Start() {
         frame_counter_ = frame_anchor_ = 0;
         tick_anchor_ = pattern_origin_tick_ = 0;
@@ -218,6 +223,7 @@ class SequencerScheduler {
     // `max_events`), sorted by frame (ties broken by track index for
     // determinism), and returns the count written. No-op (returns 0)
     // if stopped or no pattern is set.
+    WAVEX_ITCM_CODE_NAMED("scheduler.Process")
     size_t Process(TriggerEvent* out_events, size_t max_events) {
         processed_step_boundary_ = false;
         switched_pattern_ = false;
@@ -279,6 +285,7 @@ class SequencerScheduler {
         uint8_t pending_retrig_step = 0;
     };
 
+    WAVEX_ITCM_CODE_NAMED("scheduler.AppendRange")
     void AppendRange(TriggerEvent* local,
                      size_t& local_count,
                      uint64_t block_start_frame,
@@ -464,6 +471,7 @@ class SequencerScheduler {
 
     // Adds the per-(track,step) micro-timing offset on top of the shared
     // scale+swing boundary.
+    WAVEX_ITCM_CODE_NAMED("scheduler.ComputeTriggerTick")
     double ComputeTriggerTick(uint8_t track_index, uint8_t step_index, uint32_t loop_count) const {
         double boundary = StepBoundaryTicks(step_index, loop_count);
         const Step& step = pattern_->tracks[track_index].steps[step_index];

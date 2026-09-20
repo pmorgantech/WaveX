@@ -332,8 +332,10 @@ Use the already vendored CMSIS-DSP implementation where it fits:
   where the existing voice/filter path already does. Repeated conversions or
   changing the whole renderer's representation can erase a kernel-level win.
 
-The Cortex-M7 has DSP instructions and a single-precision FPU, but no NEON or
-Helium vector unit. In particular, CMSIS's
+The STM32H750 Cortex-M7 has DSP instructions and hardware single- and
+double-precision floating point, but no NEON or Helium vector unit. See the
+[Daisy FPU guidance](../daisy_rt_audio_coding_guide.md#8-cmsis-dsp-policy).
+In particular, CMSIS's
 [`arm_vexp_f32` scalar path](https://github.com/ARM-software/CMSIS-DSP/blob/main/Source/FastMathFunctions/arm_vexp_f32.c)
 calls `expf` in a loop, and the corresponding `arm_vlog_f32` uses `logf` on this
 target. Merely using the fast-math namespace does not accelerate those calls.

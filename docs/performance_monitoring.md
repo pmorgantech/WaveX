@@ -72,6 +72,7 @@ PROFILE_END(my_section);
 ```
 
 Real zones already registered in `audio_engine.cpp`: `audio_callback`,
+`voice_events`, `voice_modulation`, `voice_render`,
 `wav_pump_io`, `format_conversion`, `ring_buffer_push`, `prebuffer_audio`,
 `sd_refill` — grep `PROFILE_SCOPE`/`PROFILE_REGISTER_ZONE` there for live
 examples.
@@ -86,6 +87,28 @@ loop while `End()` runs from the audio ISR, so it takes a
 `ScopedIrqBlocker` internally to avoid tearing the non-atomic 64-bit
 `total_cycles` accumulator (`profiler.cpp`, fixed in the same session this
 doc was corrected).
+
+For peak attribution, also enable `WAVEX_PROFILE_CALLBACK_DETAIL=ON` in a
+separate profiling build directory. This adds bounded stage timing through the
+existing DWT reader. Every 5,000 callbacks, the callback publishes one immutable
+record containing the winning block number, total cycles and that **same
+block's** stage cycles/call counts. The foreground prints `callback_peak:` and
+`peak_stage:` lines, keyed by window ID. Windows are callback-counted and do not
+align exactly with the foreground's normal five-second zone reports; skipped
+window IDs indicate that the consumer missed a completed window.
+
+Queue, controls, sequencer commands/tick/resolve/locks/trigger, modulation and
+render are disjoint. `voice_start` is nested inside queue or sequencer triggering;
+its source/filter/envelope/LFO initialization stages are nested again. Do not
+sum parent and child costs. Total minus the disjoint stages includes streaming,
+metering, telemetry, other unmarked work and instrumentation. The detail total
+ends before peak selection/publication and the outer profiler epilogue. It also
+excludes interrupt entry latency, like the existing callback timer.
+
+These diagnostic scopes perturb timing and are compiled out by default.
+`callback_performance.py` rejects detailed captures for the acceptance gate;
+repeat that gate with detail **OFF**. Independent zone maxima alone cannot
+identify which stages coincided in the worst callback.
 
 `WaveX::Profiling::GetCycles()` / `CyclesToMicroseconds()` are the raw
 DWT-cycle-counter primitives underneath both facilities, if you need a
@@ -108,6 +131,14 @@ gate: one slow block can glitch even when the average looks comfortable.
 
 At the current target of 480 MHz, 48 kHz, and 48-sample blocks, the callback
 deadline is 480,000 cycles. The decision bands are:
+
+These are conservative project policy, not Cortex-M7 hardware limits or a
+discontinuity at 70%. A higher acceptance threshold needs an explicit budget
+decision backed by transition/burst tests, interrupt-entry latency and soak
+evidence. Report weighted average load alongside the peak, but do not infer
+deadline safety from that average. At this block size, 70%, 80% and 90% leave
+300, 200 and 100 microseconds respectively. Entry delay before the callback's
+profiling scope is not included in its DWT elapsed time.
 
 | Worst callback | Current cycle boundary | Decision |
 |---|---:|---|

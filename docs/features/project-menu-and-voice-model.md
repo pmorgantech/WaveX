@@ -4,8 +4,8 @@
 host/compile verified, with ten focused two-board checks passing. Listening,
 physical controls and the complete soak gate remain open. Scene, session
 persistence, effects and drift retain their target/proposal status.
-Updated 2026-09-17. Instrument allocation hints below are a requested proposal,
-not implemented allocator behavior.
+Updated 2026-09-18. Instrument allocation controls remain proposed; the pure
+admission planner below is tested independently of the live allocator.
 This document consolidates the terminology and menu discussion so the remaining
 work can be scheduled. It distinguishes current behavior, requested changes and
 proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
@@ -184,7 +184,9 @@ promise that audition, FX and other callback work have no cost.
 
 ## Instrument and Kit allocation policy
 
-**Requested 2026-09-17; proposal, not implemented.** Instruments and drum Kits
+**Requested 2026-09-17; saved policy and controls remain unimplemented.** The
+live allocator admits complete layer groups using Poly / Auto / Any; the
+planner also supports other policies, exercised by host tests. Instruments and drum Kits
 should carry useful allocation defaults: monophonic behavior, a 1–8 note limit,
 and whether stealing is restricted to their own sounding notes or can take
 from other sounds. This extends the existing planned Track polyphony policy;
@@ -235,8 +237,13 @@ group contains all resolved layer voices and their channel costs. Two
 oscillators already submix inside one voice; stereo L/R remain inseparable.
 Count the musical group once for the user-facing polyphony limit, while
 accounting for every layer slot and render channel against global capacity.
-The existing per-layer trigger path needs group admission before this rule can
-be implemented; merely counting Track voices would truncate layered sounds.
+The live sampler and sequencer now submit each resolved note as one group.
+Foreground queue admission publishes every layer together or refuses the whole
+note; callback admission likewise commits all reservations together. Same-frame
+sequencer admission uses compact prepared metadata and initializes only surviving
+layers, preserving admission order, chokes, identities and random sequences.
+Different sample offsets remain separate batches; the measured result and open
+capacity checks are in [the callback log](../callback-performance-log.md).
 
 Mono implies a cap of one group. The proposed first keyboard behavior is
 last-note priority with envelope retrigger, including a defined fallback to
@@ -309,7 +316,62 @@ pad/Kit cap interaction, stereo/multilayer whole-group admission, release/choke
 accounting, Mono held-key/repeated-note identity, policy changes and old-file
 defaults. Hardware gates cover audible stealing/retrigger and worst-case DWT
 cost during bursts at full capacity, with sequencer, modulation and audition.
-This remains the roadmap's polyphony-policy work, not an implemented feature.
+Saved policy, held-key fallback and the controls remain roadmap work. The
+implemented runtime foundation below does not enable those product settings.
+
+### Runtime admission foundation — 2026-09-18
+
+[`note_group_admission.hpp`](../../firmware/daisy/src/audio/note_group_admission.hpp)
+implements a pure, fixed-capacity victim/reservation planner, used by
+`VoiceManager::TriggerGroup`. The callback derives the active snapshot from
+live render slots, then commits admission without interleaved mutation. It does
+not expose Mono, caps or stealing controls in the product yet.
+
+| Record | Source of truth and lifetime |
+|---|---|
+| Owner | Track number plus nonzero binding generation. Shared WAVs and two instances of one WXI do not share ownership. |
+| Group | One admitted musical trigger, with a unique increasing 64-bit ID, remaining layer-slot mask, total reserved channels and whether all remaining layers release or will be choked by an admitted request. |
+| Request | The entire resolved trigger's slot/channel costs and one already-resolved Poly/Mono, Auto/1–8, Own only/Own first/Any policy. |
+| Plan | Whole-group victims, all their retired render slots, and deterministic lowest free slots for the incoming trigger; every failure returns empty masks. |
+
+The callback owns group IDs and Track binding generations. Group IDs also
+order onset age; zero is reserved. Exhaustion refuses new notes until engine
+initialization with audio stopped; IDs do not reset on Track or transport stops.
+Track retirement kills all its voices before advancing its binding generation.
+`ReleaseGroup(id)` ignores stale identities and respects one-shot layers. The
+legacy Track/pitch note-off still releases all matching held groups; MIDI
+repeated-key ownership and Mono fallback remain separate work. As individual layers end, their slots and
+channel reservations leave the group; its identity survives until the last layer
+ends. Choke/release tails remain charged until actually retired. Victim ranking accounts for the incoming note's prospective chokes without
+changing envelopes; a group is eligible as releasing only when all surviving
+layers already release or will be choked. Choke effects apply only after
+successful admission and before starting any sibling layer,
+so a rejected note cannot choke and a layered hit cannot choke itself.
+
+Planning enforces the local cap first, including release tails and even when
+global capacity is available. Global pressure then follows the selected scope;
+within a scope, entirely releasing groups precede held groups, then older IDs
+win. A local cap never evicts another Track as a substitute for an own victim.
+The planner validates disjoint slots, unique identities, valid owners and channel
+totals before choosing victims. Searches and bit operations are bounded by the
+configured capacity (up to 64); there is no allocation, I/O or mutable global
+state. That bound is not a measured callback-cost claim.
+
+Host cases cover layered/stereo retirement, cap reduction, foreign release
+versus own held victims, binding-generation isolation, rejection after tentative
+victim selection, independent channel/slot exhaustion and the highest mask bit.
+An exhaustive four-slot test enumerates victim subsets independently to check
+feasibility and resource conservation. Cortex-M7 compilation supplements these
+checks; audible transitions, callback DWT and the complete workload remain
+[HV-019](../hardware-validation.md#hv-019--note-group-allocation-policy).
+
+Next integration work must provide held-key ownership and Mono fallback,
+then saved policies and controls; stable group IDs already replace per-layer Trigger
+calls. Retrigger smoothing, versioned Instrument/Project
+inheritance, explicit legacy-field mapping and Apply/Revert/UI remain pending.
+Kit pad overrides remain a separate proposal. Existing saved policy fields
+keep their prior interpretation; no wire or on-disk format changes accompany
+this runtime step.
 
 ## Oscillator drift backlog
 
