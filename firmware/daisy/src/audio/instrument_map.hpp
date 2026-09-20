@@ -104,6 +104,7 @@ inline void FromFile(const Wxi::InstrumentFile& doc, Sfz::MappedInstrument& out)
     out.instrument.trim_pan = doc.trim_pan;
     out.instrument.output = doc.output;
     out.instrument.poly_mode = doc.poly_mode;
+    out.instrument.allocation = doc.allocation;
     out.instrument.osc_mix = doc.osc_mix;
     out.instrument.velocity_curve = doc.amp.velocity_curve;
     for (uint8_t e = 0; e < 3; ++e) {
@@ -224,6 +225,7 @@ inline bool ToFile(const Instrument& instrument,
     doc.trim_pan = instrument.trim_pan;
     doc.output = instrument.output;
     doc.poly_mode = instrument.poly_mode;
+    doc.allocation = instrument.allocation;
     doc.osc_mix = instrument.osc_mix;
     doc.amp.velocity_curve = instrument.velocity_curve;
     for (uint8_t e = 0; e < 3; ++e) {

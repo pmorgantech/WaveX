@@ -84,6 +84,12 @@ static InstEditSyncMessage s_action_reply;
 static uint32_t s_action_completed[kNumTracks]{};
 static uint8_t s_action_error[kNumTracks]{};
 static bool s_action_pending = false;
+static AllocationSyncMessage s_allocation_reply;
+static bool s_allocation_pending = false;
+static uint32_t s_allocation_completed[2][kNumTracks]{};
+static uint8_t s_allocation_error[2][kNumTracks]{};
+static Allocation::Override s_allocation_undo[kNumTracks];
+static bool s_allocation_dirty[kNumTracks]{};
 using ModTable = std::array<ModSlot, kMaxModSlots>;
 static SnapshotMailbox<ModTable> s_mod_mailboxes[kNumTracks];
 static ModTable s_mod_active[kNumTracks];  // callback-owned after Reset()
@@ -842,7 +848,7 @@ void Reset() {
     s_osc_pending = false;
     s_mod_pending = false;
     s_lfo_pending = false;
-    s_action_pending = false;
+    s_action_pending = s_allocation_pending = false;
     if (s_bank)
         WaveX::ReconstructInPlace(*s_bank);
     else
@@ -850,6 +856,11 @@ void Reset() {
     for (uint8_t track = 0; track < kNumTracks; ++track) {
         BumpKeyRevision(track);
         s_sound_undo[track].Apply();
+        s_allocation_dirty[track] = false;
+        for (uint8_t scope = 0; scope < 2; ++scope) {
+            s_allocation_completed[scope][track] = 0;
+            s_allocation_error[scope][track] = 0;
+        }
         s_action_completed[track] = 0;
         s_action_error[track] = 0;
         s_sound_completed[track] = 0;
@@ -1110,6 +1121,92 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     s_index = 0;
     s_phase = Phase::AllocateSample;
     SendStatus(INST_STATUS_LOAD_BEGIN);
+}
+
+Allocation::Override TrackAllocation(uint8_t track) {
+    return track < kNumTracks ? s_bank->At(track).allocation : Allocation::Override{};
+}
+AllocationSyncMessage ReadAllocationState(uint8_t track, uint8_t scope) {
+    AllocationSyncMessage out;
+    out.track = track;
+    out.scope = scope;
+    out.busy = Busy();
+    if (track >= kNumTracks || scope > ALLOC_TRACK)
+        return out;
+    const auto& t = s_bank->At(track);
+    out.loaded = t.instrument.origin != InstrumentOrigin::None;
+    out.valid = scope == ALLOC_TRACK || out.loaded;
+    out.revision = s_key_revision[track];
+    out.completed_request_id = s_allocation_completed[scope][track];
+    out.error = s_allocation_error[scope][track];
+    out.dirty = scope == ALLOC_SOUND ? s_sound_undo[track].Active() : s_allocation_dirty[track];
+    out.inherited = t.allocation.inherit;
+    out.sound = t.instrument.allocation;
+    out.track_policy = t.allocation.policy;
+    return out;
+}
+bool OnAllocationOp(const AllocationOpMessage& request) {
+    s_allocation_reply = ReadAllocationState(request.track, request.scope);
+    s_allocation_reply.request_id = request.request_id;
+    s_allocation_pending = true;
+    if (!IsValidAllocationOp(request)) {
+        s_allocation_reply.completed_request_id = request.request_id;
+        s_allocation_reply.error = INST_ERROR_BAD_FILE;
+        return false;
+    }
+    const auto track = request.track, scope = request.scope;
+    if (request.op == ALLOC_GET || s_allocation_completed[scope][track] == request.request_id)
+        return false;
+    if (Busy()) {
+        s_allocation_reply.completed_request_id = request.request_id;
+        s_allocation_reply.error = INST_ERROR_BUSY;
+        return false;
+    }
+    auto& t = s_bank->At(track);
+    uint8_t error = INST_ERROR_NONE;
+    bool changed = false;
+    if (request.revision != s_key_revision[track] ||
+        (scope == ALLOC_SOUND && t.instrument.origin == InstrumentOrigin::None))
+        error = INST_ERROR_BAD_FILE;
+    else if (scope == ALLOC_SOUND) {
+        if (request.op == ALLOC_APPLY)
+            s_sound_undo[track].Apply();
+        else if (request.op == ALLOC_REVERT) {
+            changed = s_sound_undo[track].Revert(t.instrument);
+            if (changed)
+                PublishModSlots(track);
+        } else if (t.instrument.allocation != request.policy) {
+            s_sound_undo[track].Capture(t.instrument);
+            t.instrument.allocation = request.policy;
+            changed = true;
+        }
+    } else {
+        if (request.op == ALLOC_APPLY)
+            s_allocation_dirty[track] = false;
+        else if (request.op == ALLOC_REVERT) {
+            if (s_allocation_dirty[track]) {
+                t.allocation = s_allocation_undo[track];
+                s_allocation_dirty[track] = false;
+                changed = true;
+            }
+        } else {
+            const Allocation::Override value{request.policy, request.inherit != 0};
+            if (t.allocation != value) {
+                if (!s_allocation_dirty[track])
+                    s_allocation_undo[track] = t.allocation;
+                s_allocation_dirty[track] = true;
+                t.allocation = value;
+                changed = true;
+            }
+        }
+    }
+    if (!error)
+        BumpKeyRevision(track);
+    s_allocation_completed[scope][track] = request.request_id;
+    s_allocation_error[scope][track] = error;
+    s_allocation_reply = ReadAllocationState(track, scope);
+    s_allocation_reply.request_id = request.request_id;
+    return changed;
 }
 
 InstEditSyncMessage ReadEditState(uint8_t track) {
@@ -1427,6 +1524,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_allocation_pending &&
+        WaveX::Comm::LinkSend(MSG_ALLOC_SYNC, &s_allocation_reply, sizeof(s_allocation_reply)) >= 0)
+        s_allocation_pending = false;
     if (s_action_pending &&
         WaveX::Comm::LinkSend(MSG_INST_EDIT_SYNC, &s_action_reply, sizeof(s_action_reply)) >= 0)
         s_action_pending = false;
@@ -1898,6 +1998,8 @@ bool FinishProjectLoad(bool commit, int only_track, uint16_t recall_targets) {
             if (only_track >= 0 && !(recall_targets & (1u << track)))
                 continue;
             s_sound_undo[track].Apply();
+            if (only_track < 0)
+                s_allocation_dirty[track] = false;
             BumpKeyRevision(track);
             PublishModSlots(track);
         }
@@ -2081,8 +2183,11 @@ void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks) {
             continue;
         if (TrackLoading(track))
             map.Revoke(static_cast<uint16_t>(1u << track));
-        else
-            map.PrepareTrack(track, s_bank->At(track).instrument, s_loaded_resolver);
+        else {
+            const auto& source = s_bank->At(track);
+            map.PrepareTrack(track, source.instrument, s_loaded_resolver);
+            map.tracks[track].policy = source.allocation.Resolve(source.instrument.allocation);
+        }
     }
 }
 

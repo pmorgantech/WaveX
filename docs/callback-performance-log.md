@@ -26,6 +26,35 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Saved policy and Mono held-key fallback — 2026-09-20
+
+Short diagnostic screen, **not** the ten-minute/one-hour acceptance gate:
+16 Tracks × four Mono-output layers with both oscillators, ladder, modulation,
+locks, sequencer, streaming, filter edits and one Pattern save/load. All sound
+policies use Mono play mode. One MIDI key stays held while two later pitches
+are pressed and released each pass, exercising fallback independently of
+sequencer steals. There were 131 injected note-ons in 81.14 s.
+
+DWT: 16 complete windows / 80,018 callbacks, average 175,238.73 cycles
+(**36.5081%**), maximum 333,800 cycles (**69.5417%** of 480,000).
+Zero queue-full refusals, stream underruns or sampled console RX drops.
+This is close to the continuation threshold; keep extended and physical MIDI /
+audible-transition checks open. It is a different release workload from the
+prior note-on-only Poly screen, not a matched performance improvement claim.
+
+Persistent QSPI `-O2`, profiling on, detail/RTT off; source `c3c0d04+`.
+Daisy SHA256 `206c5fb93aef9a9d6efae7809d8a4ccc2f9f58d7514d029b05e985a6638310ad`;
+ESP32 `09c527f75ba21eef9ce24b03a5372e47418724cba99bccbd636e50c76577c936`.
+Capture: `logs/stereo-0-ladder-20260920-170323.log/.json`.
+
+The matched **Poly note-on-only** screen on the same image completed 80.09 s,
+68 note-ons and one Pattern cycle: 16 windows / 80,021 callbacks, average
+173,349.59 cycles (**36.1145%**), maximum 318,478 cycles (**66.3496%**), zero
+queue-full refusals, stream underruns or sampled console RX drops. Capture:
+`logs/stereo-0-ladder-20260920-170706.log/.json`. The earlier compact-queue image
+screen was 34.8683% average / 62.1127% peak; this is not a claimed speedup.
+Both new screens remain short diagnostics with limited residual headroom.
+
 ## Compact live-note admission — 2026-09-20
 
 The foreground now queues one input press with a captured Track mask, rather

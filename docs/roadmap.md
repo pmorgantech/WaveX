@@ -8,10 +8,9 @@ Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-**Next software work:** Complete Mono held-key fallback, saved polyphony policies
-and controls, then the remaining Phase 2.5 tasks in order while panel wiring
-is pending. Same-frame layered admission is implemented and its reproduced
-16-Track deadline failure passes the extended pressure check. Residual capacity
+**Next software work:** Melodic sequencing, then the remaining Phase 2.5 tasks
+in order while panel wiring is pending. Same-frame layered admission is
+implemented and its reproduced 16-Track deadline failure passes the extended pressure check. Residual capacity
 and physical gates remain open below.
 
 ## Contents
@@ -103,17 +102,16 @@ panel; remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 Continue from the [Track/Instrument/Bank model](features/track-and-patch-model.md),
 subject to the callback checkpoint:
 
-1. **Polyphony policy.** Complete Mono fallback and its held-key behavior on the
-   source-scoped FIFO release runtime. Repeat the combined MIDI pressure test
-   over the full acceptance duration: compact input admission removed the
-   reproduced 540 queue refusals in the matched short screen (62.1127% peak),
-   but arbitrary overload and physical MIDI latency remain separate checks.
-   Do not equate console RX drops with musical admission failures. Add saved Mono/Auto/1–8-note
-   caps and Own only / Own first / Any stealing with Track inheritance/overrides;
-   define old-file defaults. Include wire/storage support, Apply/Revert, UI and
-   audible-steal/DWT checks (HV-019). Kit-wide and per-pad refinements remain
-   proposed; the global channel budget does not increase. See the
-   [allocation proposal](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
+1. **Polyphony validation (HV-019).** Saved Instrument/Kit policy, Track
+   inheritance/overrides, old-file defaults, Apply/Revert, controls and Mono
+   held-key fallback are implemented. Complete audible-steal/retrigger,
+   physical MIDI latency and extended final-image pressure checks. Short saved-policy
+   screens pass at 66.3496% Poly / 69.5417% Mono-fallback peaks; the latter leaves
+   little room before the current continuation threshold. Compact MIDI
+   admission removed the reproduced 540 queue refusals in the matched short
+   screen; arbitrary overload remains bounded, not guaranteed lossless.
+   Per-pad policy refinements remain proposed. See the
+   [allocation model](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
 2. **Melodic sequencing.** Resolve the [note-length decision](#note-lengths-and-one-shot-playback--decision-pending),
    then add chord/tie lanes, step/live recording and erase.
 3. **Remaining modulation.** Add MIDI CC/channel-pressure forwarding,

@@ -71,6 +71,9 @@ uint8_t ProjectSnapshotError();  // meaningful after Busy() becomes false
 // Returns true only for a newly applied edit; caller republishes that Track.
 WaveX::Protocol::InstOscSyncMessage ReadOscState(uint8_t track, uint8_t oscillator);
 WaveX::Protocol::InstEditSyncMessage ReadEditState(uint8_t track);
+Allocation::Override TrackAllocation(uint8_t track);
+WaveX::Protocol::AllocationSyncMessage ReadAllocationState(uint8_t track, uint8_t scope);
+bool OnAllocationOp(const WaveX::Protocol::AllocationOpMessage& request);
 bool OnEditOp(const WaveX::Protocol::InstEditOpMessage& request);
 bool OnLfoOp(const WaveX::Protocol::InstLfoOpMessage& request);
 WaveX::Protocol::InstLfoSyncMessage ReadLfoState(uint8_t track);
@@ -180,7 +183,7 @@ const ModSlot* GetModSlots(uint8_t track);
 // remain stored pending the measured allocation policy.
 bool SetTrackMidiIn(uint8_t track, uint8_t midi_in);  // TrackMidiIn encoding
 uint8_t TrackMidiIn(uint8_t track);
-bool SetTrackPolyLimit(uint8_t track, uint8_t limit);  // 0 = none, else <= WAVEX_NUM_VOICES
+bool SetTrackPolyLimit(uint8_t track, uint8_t limit);  // legacy metadata only
 uint8_t TrackPolyLimit(uint8_t track);
 bool SetTrackPriority(uint8_t track, uint8_t priority);
 uint8_t TrackPriority(uint8_t track);

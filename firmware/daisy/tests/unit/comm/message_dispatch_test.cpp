@@ -1033,3 +1033,19 @@ TEST_F(MessageDispatchTest, SlotTransferValidatesAndReachesBusyAdmission) {
     ASSERT_EQ(GetDispatchRecord().bank_slot_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().bank_slot_ops[0].source_slot, 127);
 }
+
+TEST_F(MessageDispatchTest, AllocationEditsReachEngineOnlyAsCompletePayloadsOutsideProjectLease) {
+    AllocationOpMessage op;
+    op.request_id = 1;
+    op.revision = 2;
+    op.op = ALLOC_SET;
+    for (size_t size = 0; size < sizeof(op); ++size)
+        ProcessInterMcuMessage(MSG_ALLOC_OP, 1, reinterpret_cast<const uint8_t*>(&op), size);
+    EXPECT_TRUE(GetDispatchRecord().allocation_ops.empty());
+    Dispatch(MSG_ALLOC_OP, op);
+    ASSERT_EQ(GetDispatchRecord().allocation_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().allocation_ops[0].request_id, 1u);
+    GetDispatchRecord().project_busy = true;
+    Dispatch(MSG_ALLOC_OP, op);
+    EXPECT_EQ(GetDispatchRecord().allocation_ops.size(), 1u);
+}

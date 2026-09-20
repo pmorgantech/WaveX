@@ -252,6 +252,28 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+    } else if (std::strcmp(c.verb, "ALLOC") == 0) {
+        long track, scope;
+        if (!NextInt(&p, &track) || !NextInt(&p, &scope) || track < 0 || track >= 16 || scope < 0 ||
+            scope > 1) {
+            FormatErr(seq, "badallocation", reply, sizeof(reply));
+        } else {
+            const auto state = WaveX::AudioEngine::SfzLoader::ReadAllocationState(
+                static_cast<uint8_t>(track), static_cast<uint8_t>(scope));
+            const auto policy = scope == 0 || state.inherited ? state.sound : state.track_policy;
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "valid", state.valid);
+            len = AppendKvInt(reply, sizeof(reply), len, "busy", state.busy);
+            len = AppendKvInt(reply, sizeof(reply), len, "dirty", state.dirty);
+            len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
+            len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            len = AppendKvInt(reply, sizeof(reply), len, "mode", static_cast<uint8_t>(policy.mode));
+            len = AppendKvInt(reply, sizeof(reply), len, "limit", policy.limit);
+            len =
+                AppendKvInt(reply, sizeof(reply), len, "steal", static_cast<uint8_t>(policy.steal));
+            AppendKvInt(reply, sizeof(reply), len, "inherit", state.inherited);
+        }
     } else if (std::strcmp(c.verb, "EDIT") == 0) {
         long track;
         if (!NextInt(&p, &track) || track < 0 || track >= 16) {

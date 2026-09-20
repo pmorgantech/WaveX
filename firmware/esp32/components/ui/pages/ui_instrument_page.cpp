@@ -8,6 +8,7 @@
 #include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
+#include "ui/ui_allocation_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_pad_map_page.h"
 #include "ui/ui_palette.h"
@@ -1135,6 +1136,14 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
                [this] { soundAction(WaveX::Protocol::INST_EDIT_REVERT); },
                alive_ && sound_.Dirty() && !draftActive(),
                "No edits"};
+    if (stage_ != static_cast<int>(Stage::Oscillator))
+        keys[5] = {
+            "Polyphony",
+            [] {
+                UINavigator::instance().push(createAllocationPage(WaveX::Protocol::ALLOC_SOUND));
+            },
+            !draftActive(),
+            "Updating sound..."};
     return keys;
 }
 

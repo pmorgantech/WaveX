@@ -32,6 +32,8 @@ struct SequencerVoiceMap {
     struct PreparedTrack : PreparedOscillator {
         uint64_t revision = 0;  // foreground cache identity, not callback state
         PreparedOscillator secondary;
+        Allocation::Policy policy;
+        bool keyboard = true;
     };
     PreparedTrack tracks[kNumTracks]{};
 
@@ -40,6 +42,8 @@ struct SequencerVoiceMap {
             return;
         auto& dest = tracks[track];
         ++dest.revision;
+        dest.policy = instrument.allocation;
+        dest.keyboard = instrument.mode == InstrumentMode::Keyboard;
         PrepareOscillator(dest, instrument, resolver, track, 0);
         PrepareOscillator(dest.secondary, instrument, resolver, track, 1);
     }
@@ -148,6 +152,7 @@ struct SequencerVoiceMap {
     TriggerDescription Describe(const Selection& selected) const {
         TriggerDescription result;
         result.track = selected.track;
+        result.policy = tracks[selected.track].policy;
         result.count = selected.count;
         for (uint8_t i = 0; i < selected.count; ++i) {
             const bool primary = selected.zones[0][i] != kNoZone;
@@ -235,6 +240,8 @@ struct SequencerVoiceMap {
             if (src.revision != 0 && dest.revision == src.revision)
                 continue;
             dest.revision = src.revision;
+            dest.policy = src.policy;
+            dest.keyboard = src.keyboard;
             CopyOscillator(dest, src);
             CopyOscillator(dest.secondary, src.secondary);
         }

@@ -223,6 +223,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "INST_OSC_SYNC"))
                 inter_mcu_store_oscillator(message);
         } break;
+        case WaveX::Protocol::MSG_ALLOC_SYNC: {
+            WaveX::Protocol::AllocationSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "ALLOC_SYNC") &&
+                WaveX::Protocol::IsValidAllocationSync(message))
+                inter_mcu_store_allocation(message);
+        } break;
         case WaveX::Protocol::MSG_INST_EDIT_SYNC: {
             WaveX::Protocol::InstEditSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "INST_EDIT_SYNC"))

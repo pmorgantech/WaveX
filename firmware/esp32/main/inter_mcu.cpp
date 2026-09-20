@@ -1375,6 +1375,37 @@ bool inter_mcu_get_oscillator(WaveX::Protocol::InstOscSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_allocation_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::AllocationSyncMessage s_allocation;
+bool s_allocation_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_allocation(const WaveX::Protocol::AllocationOpMessage& request) {
+    if (!WaveX::Protocol::IsValidAllocationOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_ALLOC_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_allocation(const WaveX::Protocol::AllocationSyncMessage& state) {
+    if (!WaveX::Protocol::IsValidAllocationSync(state))
+        return;
+    taskENTER_CRITICAL(&s_allocation_lock);
+    s_allocation = state;
+    s_allocation_valid = true;
+    taskEXIT_CRITICAL(&s_allocation_lock);
+}
+bool inter_mcu_get_allocation(WaveX::Protocol::AllocationSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_allocation_lock);
+    const bool valid = s_allocation_valid;
+    if (valid)
+        *out = s_allocation;
+    taskEXIT_CRITICAL(&s_allocation_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_instrument_edit_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstEditSyncMessage s_instrument_edit;
 bool s_instrument_edit_valid = false;

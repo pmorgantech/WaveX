@@ -34,7 +34,7 @@ def _confirmed(esp, label, operation, error=0):
     )
 
 
-@pytest.fixture
+@pytest.fixture(name="empty_project")
 def empty_project(esp32, daisy):
     _files(esp32)
     _confirmed(esp32, "New", 3)

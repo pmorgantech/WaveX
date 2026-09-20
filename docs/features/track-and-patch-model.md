@@ -133,7 +133,8 @@ struct Track {
 
 `midi_in` routes notes and enabled Program Changes. Project → Shift exposes the
 saved Program Change enable flag. `poly_limit`/`priority` remain stored and on
-the wire pending the measured allocation policy.
+the wire as inert legacy metadata. The explicit saved allocation policy in §5
+owns runtime caps and stealing.
 
 ### 2.2 MIDI routing: poly, omni, and everything between
 
@@ -144,7 +145,9 @@ A note from the **MIDI input** carries a channel. A note from an **internal sour
   - **Multi/poly mode** (default): track *t* has `midi_in = t+1`. One channel per track, as today.
   - **Omni**: any set of tracks with `midi_in = Omni` all play from any channel. "All tracks omni" is the classic single-timbral mode; "two tracks omni" is a split-less layer.
   - **Off**: sequencer-only tracks that ignore the keyboard.
-- Note-off routes identically. Voices already carry their track, so a note-off reaching three tracks releases the right three voices.
+- Note-off consumes the oldest unreleased press for its input source/pitch and
+  releases its original groups, even after routing changes or stealing. MIDI
+  channels and direct Track sources have separate identities.
 - The existing global ESP32-side channel filter (`midi_set_input_channel`) was redundant and is **removed** rather than kept as a second, conflicting filter — a Track set to listen on MIDI 5 could otherwise be silenced by a settings page with nothing on screen to explain why. Settings › MIDI now shows "Receive channel — per Track"; the Track page (stage 4) is where it is edited. Until then the defaults reproduce the previous behaviour exactly, and the debug console sets it for bench work.
 
 Routing lives on the **Daisy**, not the ESP32, because tracks live there, it is a 16-entry compare in the note handler (main loop, not the callback), and it keeps one note = one link message regardless of how many tracks it lands on. The mixer's "ESP32 expands solo before sending" precedent does not apply: solo is UI state, routing is engine state.
@@ -439,17 +442,20 @@ still reserves capacity because live level edits can make it audible.
 Mono changes affect new notes, and never expand a held voice's reservation.
 The user requested saved Instrument/Kit allocation defaults on 2026-09-17:
 Mono, 1–8-note limits and own-versus-global stealing. The newer
-[allocation proposal](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
+[allocation model](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
 owns the semantics and supersedes this section's earlier Track-only algorithm.
 Tracks may override those defaults without changing the saved sound.
 
 Keep one shared physical pool. Enforce local limits before using a free slot,
 then plan whole-note/layer-group victims within the permitted steal scope.
 Own-only behavior does not reserve capacity or protect a sound from incoming
-steals. Choke groups remain Track-local. Stored Track limit/priority fields and
-Instrument poly mode are preparation, not implemented admission behavior;
-Instrument/Kit persistence and the centralized wire contract also need explicit
-updates and compatibility tests before UI/engine implementation.
+steals. Choke groups remain Track-local. Saved policies now use a separate
+versioned WXI Allocation chunk and Project Track override, with centralized
+`MSG_ALLOC_OP`/`MSG_ALLOC_SYNC`, confirmed UI and independent Track undo.
+Instrument policy shares sound Apply/Revert. Legacy limit/priority/poly-mode
+fields remain inert metadata; old files default to Poly/Auto/Any and inheritance.
+Mono keyboard fallback follows the last admitted held key without tying key
+identity to voice slots. See the allocation model for bounds and open bench gates.
 
 ---
 
@@ -530,7 +536,8 @@ Rejected: 4 before 7 (the Track page would have needed a second visit); 6 straig
 5. **Voice architecture** (§3.1) — typed `Oscillator` wrapper, Osc 2 + submix, `FilterType`, Env 3, two per-voice LFOs (global LFO 2 retired), new mod destinations, `output`/`poly_mode` on the Instrument, `INST_OP_SET_OSC/FILTER/ENV/LFO`, Instrument page tabs. **DWT-measured** with both oscillators at `WAVEX_NUM_VOICES` before the count is changed. Can be split per sub-item; each is host-testable in `VoiceManagerTest`.
 6. **Bank** (§3.6) — `.wxb` reader/writer (nests the stage-4 Instrument chunks), `MSG_BANK_OP/STATUS`, Bank page, Program Change recall, "save with samples".
 7. ~~**Track model + MIDI routing**~~ (§2) — **done 2026-09-05**: `Track` struct (Instrument + `midi_in`/`poly_limit`/`priority`/`program_change`) behind `Tracks::At()`, `NOTE_ADDR_TRACK` addressing with split `_track`/`_midi` senders on the frontend, Daisy-side fan-out in the note handler (main loop), `MSG_TRACK_OP` 0x63, and the ESP32 global channel filter removed. `midi_in` is the only field with behaviour; the other three are stored and on the wire for stages 8 and 6. The sequencer (Goal B) can now address Tracks with `NOTE_ADDR_TRACK`.
-8. **Polyphony policy** (§5) — measure first; `poly_limit`, `priority`, track-aware steal.
+8. **Polyphony policy** (§5) — implemented through the explicit saved allocation
+   policy and Mono held-key runtime; remaining physical checks are HV-019.
 9. **FX** — reserved chunk only; no design here.
 
 Stage 4's pad-map piece and stage 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in the remaining sequencer work (`sequencer.md`) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.

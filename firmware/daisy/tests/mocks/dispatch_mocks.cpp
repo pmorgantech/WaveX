@@ -239,6 +239,9 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& m) {
     WaveX::Test::GetDispatchRecord().track_state_requests.push_back(m);
 }
+void OnAllocationOp(const WaveX::Protocol::AllocationOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().allocation_ops.push_back(m);
+}
 void OnEditOp(const WaveX::Protocol::InstEditOpMessage& m) {
     WaveX::Test::GetDispatchRecord().edit_ops.push_back(m);
 }

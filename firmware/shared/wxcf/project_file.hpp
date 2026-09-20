@@ -12,7 +12,7 @@ namespace ProjectFile {
 using PatternFile::Result;
 using namespace Sequencer;
 constexpr uint16_t kFileType = 6;
-constexpr uint16_t kVersion = 0x0101;
+constexpr uint16_t kVersion = 0x0102;
 constexpr uint32_t kMaxFileBytes = 4 * 1024 * 1024;
 constexpr uint32_t kHeadBytes = 36, kTrackBytes = 272, kPatternPrefixBytes = 44;
 constexpr uint32_t kPatternBytes =
@@ -62,9 +62,9 @@ inline bool Head(const Project& p) {
            p.input_mode <= Protocol::SEQ_INPUT_LIVE_ERASE && Gain(p.master_gain);
 }
 inline bool Track(const ProjectTrack& t) {
-    return Path(t.instrument_path) && Protocol::TrackMidiInValid(t.midi_in) &&
-           t.poly_limit <= 128 && Gain(t.mix.gain) && std::isfinite(t.mix.pan_offset) &&
-           t.mix.pan_offset >= -1 && t.mix.pan_offset <= 1;
+    return Allocation::Valid(t.allocation.policy) && Path(t.instrument_path) &&
+           Protocol::TrackMidiInValid(t.midi_in) && t.poly_limit <= 128 && Gain(t.mix.gain) &&
+           std::isfinite(t.mix.pan_offset) && t.mix.pan_offset >= -1 && t.mix.pan_offset <= 1;
 }
 inline bool Sample(const ProjectSample& s) {
     const auto end = s.end_frame ? s.end_frame : s.total_frames;
@@ -175,6 +175,10 @@ class Encoder {
             detail::Float(b + 260, t.mix.gain);
             detail::Float(b + 264, t.mix.pan_offset);
             b[268] = t.mix.mute;
+            b[269] =
+                static_cast<uint8_t>(t.allocation.policy.mode) | (t.allocation.inherit ? 0x80 : 0);
+            b[270] = t.allocation.policy.limit;
+            b[271] = static_cast<uint8_t>(t.allocation.policy.steal);
             if (!Chunk(static_cast<uint16_t>(0x100 + index_), b, kTrackBytes))
                 return result_ = Result::IoError;
             if (++index_ == kMaxTracks) {
@@ -434,7 +438,16 @@ class Decoder {
             track.mix.gain = detail::Float(b + 260);
             track.mix.pan_offset = detail::Float(b + 264);
             track.mix.mute = b[268] != 0;
-            if (b[259] > 1 || b[268] > 1 || b[269] || b[270] || b[271] || !detail::Track(track))
+            track.allocation = {};
+            if (h.chunk_version >= 0x0102) {
+                track.allocation.inherit = (b[269] & 0x80) != 0;
+                track.allocation.policy = {static_cast<Allocation::PlayMode>(b[269] & 0x7f),
+                                           b[270],
+                                           static_cast<Allocation::StealFrom>(b[271])};
+            } else if (b[269] || b[270] || b[271]) {
+                return Fail(Result::Invalid);
+            }
+            if (b[259] > 1 || b[268] > 1 || !detail::Track(track))
                 return Fail(Result::Invalid);
             tracks_ |= static_cast<uint16_t>(1u << t);
         } else if (h.chunk_id >= 0x200 && h.chunk_id < 0x200 + kMaxPatterns) {

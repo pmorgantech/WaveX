@@ -577,9 +577,15 @@ class VoiceManager {
     // immutable prepared map; materialize supplies the corresponding parameters
     // for a surviving (request, layer). Neither callback may mutate this manager.
     // Only eight compact slot records and one full trigger live on the stack.
-    template <typename Describe, typename Materialize>
+    struct IgnoreAdmission {
+        void operator()(uint16_t, uint64_t) const {}
+    };
+    template <typename Describe, typename Materialize, typename Admitted = IgnoreAdmission>
     WAVEX_ITCM_CODE_NAMED("voice.TriggerBatch")
-    uint64_t TriggerBatch(uint16_t count, Describe describe, Materialize materialize) {
+    uint64_t TriggerBatch(uint16_t count,
+                          Describe describe,
+                          Materialize materialize,
+                          Admitted admitted = {}) {
         if (count > 32)
             return 0;
         NoteTriggerBatch batch;
@@ -606,6 +612,7 @@ class VoiceManager {
             if (plan.result != Allocation::Result::Accepted)
                 continue;
             last_id = next_group_id_++;
+            admitted(request, last_id);
             for (size_t i = 0; i < voices_.size(); ++i)
                 if (plan.new_slots & (uint64_t{1} << i)) {
                     ages[i] = next_age_++;

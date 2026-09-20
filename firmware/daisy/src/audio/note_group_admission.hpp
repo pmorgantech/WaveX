@@ -2,21 +2,16 @@
 
 #include "config/hardware_config.h"
 
+#include "audio/note_policy.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
 namespace WaveX::AudioEngine::Allocation {
-enum class PlayMode : uint8_t { Poly, Mono };
-enum class StealFrom : uint8_t { OwnOnly, OwnFirst, Any };
-
-// Resolved sound/Track policy. Persistence and inheritance are separate from
-// admission; no legacy file fields are reinterpreted by this model.
-struct Policy {
-    PlayMode mode = PlayMode::Poly;
-    uint8_t limit = 0;  // Auto, or 1..8 musical groups (release tails included)
-    StealFrom steal = StealFrom::Any;
-};
+using WaveX::Allocation::Override;
+using WaveX::Allocation::PlayMode;
+using WaveX::Allocation::Policy;
+using WaveX::Allocation::StealFrom;
 struct Owner {
     uint32_t binding = 0;  // nonzero Track binding generation, never a Sample ID
     uint8_t track = 0;

@@ -179,6 +179,7 @@ struct Instrument {
     // edit - so "this piano's envelope" belongs to the piano and travels
     // with it between Tracks and Banks, rather than being whatever the
     // engine's knobs last happened to say.
+    Allocation::Policy allocation;
     InstrumentFilter filter;
     InstrumentEnv env[3];
     // What to call this instrument on screen: an import's .sfz basename, set
@@ -463,16 +464,17 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
  * sound is replaced. Filter/envelope/tuning belong to the Instrument (§2.3).
  *
  * `midi_in` routes notes and enabled Program Changes. `poly_limit`/`priority`
- * remain stored pending the measured allocation policy.
+ * remain inert legacy metadata; `allocation` owns the explicit policy override.
  */
 struct Track {
     Instrument instrument;
+    Allocation::Override allocation;
 
     /// TrackMidiIn (protocol.h): 0 = Omni, 1..16 = that channel, 0xFF = Off.
     /// Default is Omni-per-index: see Tracks::Reset().
     uint8_t midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
-    uint8_t poly_limit = 0;      // 0 = no limit; stage 8
-    uint8_t priority = 0;        // steal priority, 0 = lowest; stage 8
+    uint8_t poly_limit = 0;      // inert legacy metadata
+    uint8_t priority = 0;        // inert legacy metadata
     uint8_t program_change = 1;  // enabled for new Tracks; saved Projects retain their value
 };
 

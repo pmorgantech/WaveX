@@ -216,6 +216,11 @@ def main():
         required=True,
     )
     parser.add_argument("--seconds", type=float, default=605)
+    parser.add_argument(
+        "--mono-keys",
+        action="store_true",
+        help="Mono held-key fallback bursts; requires --midi-bursts",
+    )
     parser.add_argument("--layers", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument(
         "--midi-bursts",
@@ -250,6 +255,8 @@ def main():
         "--commit", required=True, help="Source commit used to build --image"
     )
     args = parser.parse_args()
+    if args.mono_keys and not args.midi_bursts:
+        parser.error("--mono-keys requires --midi-bursts")
     if args.seconds <= 0:
         parser.error("--seconds must be positive")
     if args.mix_seconds <= 0:
@@ -280,6 +287,7 @@ def main():
         "layers": args.layers,
         "active_tracks": active_tracks,
         "midi_bursts": 0,
+        "mono_keys": args.mono_keys,
         "mix_interval_seconds": args.mix_seconds if args.cycle_mixes else None,
         "topology": args.topology,
         "seconds_requested": args.seconds,
@@ -407,6 +415,30 @@ def main():
                     int(args.topology == "ladder"),
                 )
             )
+        # Instrument replacement preserves Track overrides; reset them here.
+        for track in range(16):
+            for scope in (1, 0) if track < active_tracks else (1,):
+                state = d.cmd("ALLOC", track, scope)
+                request = next(REQUESTS)
+                send(
+                    d,
+                    0x86,
+                    "<IIBBBBBBBB",
+                    request,
+                    int(state["revision"]),
+                    track,
+                    1,
+                    scope,
+                    int(scope == 1),
+                    int(args.mono_keys),
+                    0,
+                    2,
+                    0,
+                )
+                accepted(d.cmd("ALLOC", track, scope), request)
+        if args.mono_keys:
+            d.midi_note(1, 60, 100)
+            data["midi_bursts"] += 1
         pattern_op(5, value16=16)
         pattern_op(7, value8=60)
         for track in range(16):
@@ -496,8 +528,15 @@ def main():
             if args.midi_bursts:
                 # This is the real foreground MIDI fan-out/queue path, injected
                 # through the console; it does not validate physical MIDI I/O.
-                d.midi_note(1, 60, 100)
-                data["midi_bursts"] += 1
+                if args.mono_keys:
+                    d.midi_note(1, 64, 100)
+                    d.midi_note(1, 67, 100)
+                    d.midi_note(1, 67, on=False)
+                    d.midi_note(1, 64, on=False)
+                    data["midi_bursts"] += 2
+                else:
+                    d.midi_note(1, 60, 100)
+                    data["midi_bursts"] += 1
             filter_edit(
                 d,
                 tick % active_tracks,
@@ -565,6 +604,9 @@ def main():
             send(d, 0x33, "<I", 0)
             for track in range(16):
                 d.note(track, 60, on=False)
+            if args.mono_keys:
+                for pitch in (67, 64, 60):
+                    d.midi_note(1, pitch, on=False)
             if args.midi_bursts:
                 d.reset_routing()
             e.home()

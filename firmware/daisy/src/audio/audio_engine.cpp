@@ -3203,6 +3203,10 @@ static void PublishInstrumentSound(uint8_t track) {
     if (filter && env)
         s_track_live_updates.Publish(ComposeTrackLive(track, *filter, *env));
 }
+void OnAllocationOp(const AllocationOpMessage& request) {
+    if (SfzLoader::OnAllocationOp(request))
+        PublishInstrumentSound(request.track);
+}
 void OnEditOp(const InstEditOpMessage& request) {
     if (SfzLoader::OnEditOp(request))
         PublishInstrumentSound(request.track);

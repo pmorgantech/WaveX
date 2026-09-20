@@ -36,6 +36,7 @@
 // Atomicity ("write <name>.tmp, f_close, f_rename") belongs to the FatFs
 // wrapper, exactly as it does for wxcf.hpp - nothing here knows about files.
 
+#include "audio/note_policy.hpp"
 #include "wxcf/wxcf.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -88,6 +89,7 @@ enum ChunkId : uint16_t {
     // written today; a reader that meets one skips it. Reserving the id now
     // is what lets a file with FX load on firmware that has no FX.
     kChunkFxch = 0x0060,
+    kChunkAllocation = 0x0070,
 };
 
 static constexpr uint16_t kChunkVersion = 0x0100;  // every chunk is 1.0 today
@@ -202,6 +204,7 @@ struct ModSlot {
 // oscillators' 32 zone paths each, so it is a resident buffer on the Daisy -
 // the InstrumentLoader's working document - never a stack local.
 struct InstrumentFile {
+    Allocation::Policy allocation;
     char name[kNameBytes] = {};
     uint8_t tags = 0;  // bitmask, §3.4
     Mode mode = Mode::Keyboard;
@@ -581,6 +584,7 @@ inline uint32_t TotalFileSize(const InstrumentFile& doc) {
     const uint32_t chunk_hdr = static_cast<uint32_t>(Wxcf::kChunkHeaderSize);
     uint32_t n = static_cast<uint32_t>(Wxcf::kHeaderSize);
     n += chunk_hdr + kHeadWireSize;
+    n += chunk_hdr + 4;
     for (uint8_t i = 0; i < kNumOscillators; ++i)
         n += chunk_hdr + OscChunkSize(doc.osc[i]);
     n += chunk_hdr + kFiltWireSize;
@@ -606,6 +610,8 @@ inline uint32_t TotalFileSize(const InstrumentFile& doc) {
 // what this build can hold, so a caller that leaves the array partly filled
 // cannot emit uninitialised paths.
 inline Result Write(Wxcf::IoContext io, const InstrumentFile& doc) {
+    if (!Allocation::Valid(doc.allocation))
+        return Result::BadChunk;
     Wxcf::Writer w(io);
     uint8_t buf[kScratchBytes];
 
@@ -614,6 +620,13 @@ inline Result Write(Wxcf::IoContext io, const InstrumentFile& doc) {
 
     detail::EncodeHead(doc, buf);
     if (w.WriteChunk(kChunkHead, kChunkVersion, buf, kHeadWireSize) != Wxcf::Result::Ok)
+        return Result::IoError;
+
+    buf[0] = static_cast<uint8_t>(doc.allocation.mode);
+    buf[1] = doc.allocation.limit;
+    buf[2] = static_cast<uint8_t>(doc.allocation.steal);
+    buf[3] = 0;
+    if (w.WriteChunk(kChunkAllocation, kChunkVersion, buf, 4) != Wxcf::Result::Ok)
         return Result::IoError;
 
     for (uint8_t i = 0; i < kNumOscillators; ++i) {
@@ -815,7 +828,7 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
         return Result::BadVersion;
 
     uint8_t buf[kScratchBytes];
-    bool saw_head = false;
+    bool saw_head = false, saw_allocation = false;
     Wxcf::ChunkHeader ch;
     uint64_t consumed = Wxcf::kHeaderSize;
     if (total_len != 0 && total_len < consumed)
@@ -834,6 +847,19 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
             return Result::BadChunk;
         Result res = Result::Ok;
         switch (ch.chunk_id) {
+            case kChunkAllocation:
+                if (saw_allocation || ch.chunk_version != kChunkVersion || ch.payload_len != 4)
+                    return Result::BadChunk;
+                res = detail::ReadFixedPayload(r, ch.payload_len, buf, 4);
+                if (res != Result::Ok)
+                    return res;
+                out.allocation = {static_cast<Allocation::PlayMode>(buf[0]),
+                                  buf[1],
+                                  static_cast<Allocation::StealFrom>(buf[2])};
+                if (buf[3] || !Allocation::Valid(out.allocation))
+                    return Result::BadChunk;
+                saw_allocation = true;
+                break;
             case kChunkHead:
                 res = detail::ReadFixedPayload(r, ch.payload_len, buf, kHeadWireSize);
                 if (res == Result::Ok) {

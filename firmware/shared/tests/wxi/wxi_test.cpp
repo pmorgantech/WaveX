@@ -859,3 +859,33 @@ TEST(WxiCodec, LfoExtendedRatesAndAppendOnlyDivisionSurviveSave) {
         EXPECT_EQ(out.lfo[1].sync_div, id);
     }
 }
+
+TEST(WxiCodec, AllocationPolicyRoundTripAndLegacyDefaults) {
+    InstrumentFile in, out;
+    in.allocation = {WaveX::Allocation::PlayMode::Mono, 3, WaveX::Allocation::StealFrom::OwnFirst};
+    MemoryIo m;
+    ASSERT_EQ(Wxi::Write(m.AsWriter(), in), Result::Ok);
+    ASSERT_EQ(Wxi::Read(m.AsReader(), out), Result::Ok);
+    EXPECT_EQ(out.allocation, in.allocation);
+    std::vector<uint8_t> bytes;
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    uint8_t head[Wxi::kHeadWireSize]{};
+    head[37] = 2;  // The inert legacy legato field must not activate Mono.
+    PutChunk(bytes, Wxi::kChunkHead, std::vector<uint8_t>(head, head + sizeof(head)));
+    m = {};
+    m.buf = bytes;
+    ASSERT_EQ(Wxi::Read(m.AsReader(), out), Result::Ok);
+    EXPECT_EQ(out.allocation, WaveX::Allocation::Policy{});
+    for (const auto payload:
+         {std::vector<uint8_t>{2, 0, 2, 0}, {0, 9, 2, 0}, {0, 0, 3, 0}, {0, 0, 2, 1}, {0, 0, 2}}) {
+        m = {};
+        m.buf = bytes;
+        PutChunk(m.buf, Wxi::kChunkAllocation, payload);
+        EXPECT_EQ(Wxi::Read(m.AsReader(), out), Result::BadChunk);
+    }
+    m = {};
+    m.buf = bytes;
+    PutChunk(m.buf, Wxi::kChunkAllocation, {0, 0, 2, 0});
+    PutChunk(m.buf, Wxi::kChunkAllocation, {0, 0, 2, 0});
+    EXPECT_EQ(Wxi::Read(m.AsReader(), out), Result::BadChunk);
+}

@@ -379,6 +379,15 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             }
 #endif
             break;
+        case MSG_ALLOC_OP:
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            if (payload && payload_size == sizeof(AllocationOpMessage)) {
+                AllocationOpMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                WaveX::AudioEngine::OnAllocationOp(msg);
+            }
+#endif
+            break;
         case MSG_INST_EDIT_OP:
 #if WAVEX_AUDIO_ENGINE_ENABLED
             if (payload && payload_size == sizeof(InstEditOpMessage)) {

@@ -274,7 +274,9 @@ This milestone establishes storage and ownership. The existing Key Map/Pad Map c
 The following renderer milestone adds Oscillator 2; additional modulators
 and touch controls remain open.
 Reserved wavetable sources remain unimplemented. Output/poly mode are retained
-settings, not a claim that their routing/voice policy is active.
+legacy settings, not a claim that their routing/voice policy is active.
+Saved allocation now has its own optional WXI chunk and explicit legacy defaults;
+see [allocation ownership](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
 
 Normal firmware stores the foreground Track records in cacheable D2 RAM,
 constructed explicitly after System initialization. DMA buffers remain in

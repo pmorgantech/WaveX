@@ -323,8 +323,11 @@ parameters/apply locks/initialize only layers that survive admission. Different
 sample offsets remain separate batches. The foreground note queue publishes
 compact routed presses with FIFO source/pitch identities, so layer fan-out does
 not consume queue entries. Live releases preserve original ownership across
-stealing and routing changes and cannot release sequencer groups. Saved allocation policy and held-key
-fallback remain open in the roadmap.
+stealing and routing changes and cannot release sequencer groups. Immutable
+prepared maps carry Instrument allocation defaults or an explicit Track override.
+Mono keyboard fallback uses a separate bounded held-key ledger, never render-slot
+identity. Policies persist in WXI/Project records with explicit legacy defaults;
+see the [allocation model](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
 
 Each renderer supports region/loop markers, fades, native-rate compensation,
 pitch, SVF/ladder filtering, three envelopes, two LFOs and the modulation matrix.
@@ -517,9 +520,8 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 3. **Sampler Instrument workflow**: the Zone model, SFZ import, the shared
    selected Track and the Sample Pool (one indexed, refcounted registry;
    imports on any number of Tracks share samples by path), pad mapping, WXI
-   save/load, Banks, two oscillators and Instrument editors exist. Saved
-   polyphony policies/controls, held-key fallback, recording and melodic
-   sequencing remain open Phase 2.5 work.
+   save/load, Banks, two oscillators, saved polyphony controls and Mono held-key
+   fallback exist. Recording and melodic sequencing remain open Phase 2.5 work.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the
    bounded render-job scheduler and destructive editing/mangling pipeline are
    unimplemented.

@@ -1138,6 +1138,39 @@ the existing DWT logger. Preserve source fixtures and record exact image hashes.
   edits apply at a callback boundary, and lowered caps act at the next admission.
   Pad overrides are tested only if separately adopted.
 
+**2026-09-20 saved policy / Mono integration:** Instrument/Kit defaults and
+Track overrides now reach the immutable callback map and round-trip through
+WXI/Bank/Project codecs. Host tests cover legacy defaults, invalid policy bytes,
+retained completion/revisions, independent undo, ledger exhaustion, repeated
+keys, global stealing, mode/binding retirement and one-shots. Static DTCM is
+61,288 B, below the 64 KiB static cap that preserves the other 64 KiB for stack.
+
+Two-board `tests/hil/test_polyphony.py` passes (17.14 s): Mono fallback,
+FIFO repeated pitch, a Poly two-group Track cap, inheritance, Apply/Revert and
+unique Project save/new/load restoring both sound defaults and Track override.
+Evidence: `logs/polyphony-hil-final.log/.xml`; normal Daisy SHA256
+`95dd34cf715e35625409cf9273f06dc9503fe1d76f838ac5659639eebfaa88bd`,
+ESP32 `09c527f75ba21eef9ce24b03a5372e47418724cba99bccbd636e50c76577c936`.
+Final normal-image regression: **10/10 passed in 69.59 s** across
+`test_polyphony`, `test_live_note_identity`, `test_sequencer_tracks` and
+`test_note_groups` (`logs/polyphony-final-image-hil.log/.xml`). Images: Daisy
+`0982375b0b21044b3511db483094ffc42c6bb08ecf0dca336f08a2325d917fb2`, ESP32
+`3d17b704ca294b0e9f6db15d4bf17bb5a3aad6d852a513e7486967b259754e91`.
+
+Earlier fixture/setup and save-wait failures are preserved in
+`logs/polyphony-hil*.log`; the final test waits for backend-confirmed save identity
+and starts with a reset bench Pool. This checks injected touch events/readback,
+not physical MIDI, reboot recovery or audible transitions. The actual LVGL
+Track Polyphony snapshot (`logs/polyphony-track.png`, 1280×800) was inspected:
+labels/values, focused field, guidance and softkeys fit without clipping. This
+is framebuffer-content evidence, not a physical panel/touch or frame-time gate.
+Those portions of 019c remain open. The short Mono fallback pressure screen
+passes with 36.5081% average / 69.5417% maximum callback load and zero queue
+refusals or stream underruns (131 injected note-ons, 81.14 s, one Pattern cycle).
+See [the exact images and capture](callback-performance-log.md#saved-policy-and-mono-held-key-fallback--2026-09-20);
+the same-image Poly screen is 36.1145% average / 66.3496% peak, zero refusals
+(68 note-ons, 80.09 s, one Pattern cycle). Extended timing acceptance is still open.
+
 **2026-09-20 admission-batch result:** Same-frame events now plan from compact
 prepared zone metadata and materialize only surviving layers. The former
 16-Track/four-layer overrun passes 605.86 seconds / ten Pattern cycles at

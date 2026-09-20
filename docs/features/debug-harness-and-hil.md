@@ -522,3 +522,15 @@ oscillator snapshot as the transport (zero-based indices). It reports revision,
 last completed edit/error, type, occupied zone count, coarse/fine tuning and
 key tracking; level and mix use thousandths. It is read-only. Changes use the
 normal `MSG_INST_OSC_OP` dispatcher, including revision and busy checks.
+
+### Allocation readback and pressure checks
+
+Daisy `ALLOC <track> <scope>` reads the authoritative policy (scope 0 sound,
+1 Track), effective mode/limit/steal, inheritance, revision and retained outcome.
+Mutations use `MSG_ALLOC_OP` through the normal revision-checked dispatcher.
+`tests/hil/test_polyphony.py` exercises confirmed UI controls, held/repeated keys,
+Track caps, inheritance, independent undo and a uniquely named Project save/load.
+The channel benchmark's `--mono-keys --midi-bursts` option keeps one base key held
+and presses/releases two later pitches each pass to exercise fallback. It resets
+Track inheritance explicitly because loading a new Instrument preserves overrides.
+These console injections do not validate physical DIN/USB MIDI latency.

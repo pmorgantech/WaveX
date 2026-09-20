@@ -6,6 +6,7 @@
 #include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
+#include "ui/ui_allocation_page.h"
 #include "ui/ui_bank_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_project_files_page.h"
@@ -405,6 +406,12 @@ std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getShiftedSoftkeys() {
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
     keys[1] = {"Banks", [] { UINavigator::instance().push(createBankPage()); }};
     keys[2] = {"Project files", [] { UINavigator::instance().push(createProjectFilesPage()); }};
+    keys[4] = {"Track poly", [] {
+                   UINavigator::instance().push(createAllocationPage(WaveX::Protocol::ALLOC_TRACK));
+               }};
+    keys[5] = {"Sound poly", [] {
+                   UINavigator::instance().push(createAllocationPage(WaveX::Protocol::ALLOC_SOUND));
+               }};
     keys[3] = {model_.State().program_change ? "Program: On" : "Program: Off",
                [this] { setProgramChange(!model_.State().program_change); },
                alive_ && model_.Ready(),

@@ -197,6 +197,7 @@ void ProjectSession::CaptureSession() {
     for (uint8_t t = 0; t < kNumTracks; ++t) {
         auto& target = scratch_->tracks[t];
         target.midi_in = SfzLoader::TrackMidiIn(t);
+        target.allocation = SfzLoader::TrackAllocation(t);
         target.poly_limit = SfzLoader::TrackPolyLimit(t);
         target.priority = SfzLoader::TrackPriority(t);
         target.program_change = SfzLoader::TrackProgramChange(t);
@@ -519,6 +520,7 @@ void ProjectSession::Pump() {
                 auto& target = candidate_->tracks.At(t);
                 const auto& source = scratch_->tracks[t];
                 target.midi_in = source.midi_in;
+                target.allocation = source.allocation;
                 target.poly_limit = source.poly_limit;
                 target.priority = source.priority;
                 target.program_change = source.program_change;

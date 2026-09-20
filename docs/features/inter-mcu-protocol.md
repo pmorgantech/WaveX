@@ -120,9 +120,11 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_MIDI_PROGRAM | 0x84 | E→D | `MidiProgramMessage` | raw channel/program; Daisy resolves enabled matching Tracks against the active Bank |
 | MSG_BANK_SLOT_OP | 0x85 | E→D | `BankSlotOpMessage` | copy/move an explicit source slot into a destination in a new named Bank |
 | MSG_BANK_STATUS | 0x83 | D→E | `BankStatusMessage` | revisioned stable slot, storage availability and retained completion |
+| MSG_ALLOC_OP | 0x86 | E→D | `AllocationOpMessage` (16 B) | revision-checked GET/SET/APPLY/REVERT for Instrument default or Track override |
+| MSG_ALLOC_SYNC | 0x87 | D→E | `AllocationSyncMessage` (26 B) | correlated policy pair, inheritance, dirty, loaded and retained outcome |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
-| MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). `midi_in` routes notes and enabled Program Changes; polyphony/priority remain stored for the measured allocation policy. An out-of-range track or value is rejected and logged, not clamped |
+| MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). `midi_in` routes notes and enabled Program Changes; polyphony/priority remain inert legacy metadata; `MSG_ALLOC_OP` owns runtime allocation settings. An out-of-range track or value is rejected and logged, not clamped |
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` changes user mutes; `SET_SOLO_MASK` (op 0x08) selects audible Tracks without changing those mutes, with zero disabling Solo. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_STATE_REQ | 0x7B | E→D | `MixStateRequest` | correlated mixer read; nonzero request id and Track 0–15, or 0xFF for master gain |
 | MSG_MIX_STATE | 0x7C | D→E | `MixStateMessage` | matching identity, validity, gain/pan in existing mixer wire units and mute target; foreground accepted state, applied through the existing block-boundary handoff; no ramp telemetry; master replies use pan=32768 and mute=0 |
@@ -141,7 +143,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, 0x86–0x87 for allocation policy, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
@@ -282,6 +284,16 @@ readback. The Pad Sound page is reached from Pad Map's shifted Sound key;
 Save copy on Pad Map persists the existing zone fields in WXI.
 
 ## Track Instrument sound preview and undo
+
+Allocation operations share the Instrument edit revision. Scope 0 edits the
+sound default and its common sound undo point; scope 1 edits the independent
+Track override/undo point. Both validate mode 0/1, limit 0–8 and stealing 0–2;
+inheritance is allowed only at Track scope. GET is read-only. Completed IDs
+are retained per Track/scope; stale revisions cannot consume later undo state.
+Successful edits publish an immutable prepared map at the callback boundary.
+Legacy `TRACK_OP_SET_POLY_LIMIT`/priority values remain metadata and do not
+compete with the explicit allocation contract. See
+[allocation ownership and legacy rules](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
 
 `MSG_INST_EDIT_OP` (0x80) and `MSG_INST_EDIT_SYNC` (0x81) extend the exhausted
 Instrument message range with typed filter and amp edits plus GET, Apply and

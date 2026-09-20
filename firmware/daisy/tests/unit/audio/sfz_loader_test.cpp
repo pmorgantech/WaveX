@@ -307,6 +307,12 @@ TEST_F(SfzLoaderTest, SparseKitSaveReloadPreservesPadAndCardIdentity) {
     const auto a = SampleId("/kits/a.wav");
     Edit(INST_OP_NEW, 0, "Sparse");
     Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, a, 7);
+    AllocationOpMessage policy;
+    policy.request_id = 939001;
+    policy.revision = SfzLoader::ReadEditState(0).revision;
+    policy.op = ALLOC_SET;
+    policy.policy = {Allocation::PlayMode::Poly, 4, Allocation::StealFrom::OwnOnly};
+    ASSERT_TRUE(SfzLoader::OnAllocationOp(policy));
     auto saved = Edit(INST_OP_SAVE, 0, "Sparse saved");
     ASSERT_EQ(saved.error, INST_ERROR_NONE);
     ASSERT_NE(MockFatFS::Instance().GetFile("0:/wavex/instruments/Sparse saved.wxi"), nullptr);
@@ -315,6 +321,7 @@ TEST_F(SfzLoaderTest, SparseKitSaveReloadPreservesPadAndCardIdentity) {
     ASSERT_EQ(pool_.Count(), 0u);
     ASSERT_TRUE(SfzLoader::Load(
         "0:/wavex/instruments/Sparse saved.wxi", 2, pool_, memory_, io_.data(), io_.size()));
+    EXPECT_EQ(SfzLoader::ReadAllocationState(2, ALLOC_SOUND).sound, policy.policy);
     auto loaded = Edit(INST_OP_GET_PAD_MAP, 2);
     EXPECT_EQ(loaded.editable, 1);
     EXPECT_STREQ(loaded.name, "Sparse saved");
@@ -2769,4 +2776,42 @@ TEST_F(SfzLoaderTest, BankSlotTransferWriteFailureKeepsActiveBankAndRevision) {
     ASSERT_TRUE(bank.RequestSlotOperation(request));
     EXPECT_EQ(RunBank(bank), BANK_OK);  // no PCM dependency reads
     EXPECT_STREQ(bank.Status().name, "Failed");
+}
+
+TEST_F(SfzLoaderTest, AllocationInheritanceSoundUndoAndStaleEditProtection) {
+    ASSERT_TRUE(Load(0));
+    AllocationOpMessage op;
+    op.request_id = 940001;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = ALLOC_SET;
+    op.policy = {Allocation::PlayMode::Mono, 3, Allocation::StealFrom::OwnOnly};
+    ASSERT_TRUE(SfzLoader::OnAllocationOp(op));
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    SequencerVoiceMap prepared;
+    SfzLoader::PrepareSequencerVoices(prepared);
+    EXPECT_EQ(prepared.tracks[0].policy, op.policy);
+    EXPECT_FALSE(SfzLoader::OnAllocationOp(op));
+    op.request_id++;
+    op.policy.limit = 4;
+    EXPECT_FALSE(SfzLoader::OnAllocationOp(op));  // stale revision
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.request_id++;
+    op.scope = ALLOC_TRACK;
+    op.inherit = 0;
+    op.policy = {Allocation::PlayMode::Poly, 2, Allocation::StealFrom::OwnFirst};
+    ASSERT_TRUE(SfzLoader::OnAllocationOp(op));
+    SfzLoader::PrepareSequencerVoices(prepared);
+    EXPECT_EQ(prepared.tracks[0].policy, op.policy);
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = ALLOC_REVERT;
+    ASSERT_TRUE(SfzLoader::OnAllocationOp(op));
+    EXPECT_TRUE(SfzLoader::TrackAllocation(0).inherit);
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);  // Track undo did not consume sound undo.
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.scope = ALLOC_SOUND;
+    ASSERT_TRUE(SfzLoader::OnAllocationOp(op));
+    EXPECT_EQ(SfzLoader::ReadAllocationState(0, ALLOC_SOUND).sound, Allocation::Policy{});
+    EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
 }

@@ -60,6 +60,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
     std::vector<WaveX::Protocol::TrackStateRequest> track_state_requests;
     std::vector<WaveX::Protocol::InstModOpMessage> mod_ops;
+    std::vector<WaveX::Protocol::AllocationOpMessage> allocation_ops;
     std::vector<WaveX::Protocol::InstEditOpMessage> edit_ops;
     std::vector<WaveX::Protocol::InstLfoOpMessage> lfo_ops;
     std::vector<WaveX::Protocol::InstOscOpMessage> osc_ops;

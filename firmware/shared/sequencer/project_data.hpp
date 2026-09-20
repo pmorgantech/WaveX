@@ -2,6 +2,7 @@
 
 #include "spi_protocol/protocol.h"
 
+#include "audio/note_policy.hpp"
 #include "audio/track_mix.hpp"
 #include "sequencer/pattern_data.hpp"
 
@@ -27,6 +28,7 @@ struct ProjectSample {
     uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
 };
 struct ProjectTrack {
+    Allocation::Override allocation;
     char instrument_path[Protocol::BROWSE_PATH_MAX]{};
     uint8_t midi_in = Protocol::TRACK_MIDI_IN_OMNI;
     uint8_t poly_limit = 0, priority = 0;

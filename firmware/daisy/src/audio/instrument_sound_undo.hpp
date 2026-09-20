@@ -11,6 +11,7 @@ class InstrumentSoundUndo {
     void Capture(const Instrument& ins) {
         if (active_)
             return;
+        allocation_ = ins.allocation;
         filter_ = ins.filter;
         std::copy_n(ins.env, 3, env_);
         std::copy_n(ins.lfo, 2, lfo_);
@@ -29,6 +30,7 @@ class InstrumentSoundUndo {
     bool Revert(Instrument& ins) {
         if (!active_)
             return false;
+        ins.allocation = allocation_;
         ins.filter = filter_;
         std::copy_n(env_, 3, ins.env);
         std::copy_n(lfo_, 2, ins.lfo);
@@ -59,6 +61,7 @@ class InstrumentSoundUndo {
         uint8_t keytrack = 1;
         bool mono = false;
     };
+    Allocation::Policy allocation_;
     InstrumentFilter filter_;
     InstrumentEnv env_[3];
     InstrumentLfo lfo_[2];

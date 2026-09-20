@@ -161,3 +161,137 @@ TEST_F(LiveNotes, UnmatchedReleaseDoesNotConsumeNextPressAndOneShotsIgnoreReleas
     notes.Drain(&map, voices);
     EXPECT_EQ(Held(16, 1), 1u);
 }
+
+TEST_F(LiveNotes, MonoFallbackRetriggersLastHeldPitchAndIgnoresOlderRelease) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Press(0, 60, 70, 1);
+    notes.Press(0, 62, 90, 1);
+    notes.Press(0, 64, 110, 1);
+    notes.Drain(&map, voices);
+    ASSERT_EQ(Held(0), 1u);
+    notes.Release(0, 62);
+    notes.Drain(&map, voices);
+    ASSERT_EQ(Held(0), 1u);
+    notes.Release(0, 64);
+    notes.Drain(&map, voices);
+    ASSERT_EQ(Held(0), 1u);
+    for (uint8_t i = 0; i < 8; ++i)
+        if (!voices.GetVoice(i).IsFree() && !voices.GetVoice(i).envelope.IsReleasing())
+            EXPECT_EQ(voices.GetVoice(i).live_note.note, 60);
+    notes.Release(0, 60);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+}
+TEST_F(LiveNotes, MonoRepeatedPitchUsesFifoAndStolenKeysCanReturn) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Press(0, 60, 70, 1);
+    notes.Press(0, 60, 90, 1);
+    notes.Drain(&map, voices);
+    notes.Release(0, 60);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0, 2), 1u);
+    notes.Press(0, 62, 90, 1);
+    notes.Drain(&map, voices);
+    for (uint8_t pitch = 70; pitch < 78; ++pitch)
+        notes.Press(1, pitch, 100, 2);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+    notes.Release(0, 62);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0, 2), 1u);
+    notes.Release(0, 60);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+}
+TEST_F(LiveNotes, MonoModeChangeAndBindingStopForgetHeldKeys) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Press(0, 60, 70, 1);
+    notes.Press(0, 62, 90, 1);
+    notes.Drain(&map, voices);
+    notes.StopTracks(1, voices);
+    notes.Press(0, 64, 90, 1);
+    notes.Drain(&map, voices);
+    notes.Release(0, 64);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+    notes.Press(0, 66, 70, 1);
+    notes.Press(0, 68, 90, 1);
+    notes.Drain(&map, voices);
+    map.tracks[0].policy.mode = Allocation::PlayMode::Poly;
+    notes.Drain(&map, voices);
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Drain(&map, voices);
+    notes.Release(0, 68);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+}
+TEST_F(LiveNotes, MonoOneShotsDoNotReturnToOlderHeldKeys) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Press(0, 60, 70, 1);
+    notes.Drain(&map, voices);
+    map.tracks[0].zones[0].one_shot = true;
+    notes.Press(0, 62, 90, 1);
+    notes.Drain(&map, voices);
+    notes.Release(0, 62);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 1u);
+    for (uint8_t i = 0; i < 8; ++i)
+        if (!voices.GetVoice(i).IsFree())
+            EXPECT_EQ(voices.GetVoice(i).live_note.note, 62);
+}
+TEST_F(LiveNotes, MonoLedgerFullRefusesWholePressWithoutLosingReleaseIdentity) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    for (uint8_t pitch = 0; pitch < 64; ++pitch) {
+        notes.Press(0, pitch, 100, 1);
+        notes.Drain(&map, voices);
+    }
+    notes.Press(0, 64, 100, 1);
+    notes.Drain(&map, voices);
+    notes.Release(0, 64);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 1u);
+    notes.Release(0, 63);
+    notes.Drain(&map, voices);
+    for (uint8_t i = 0; i < 8; ++i)
+        if (!voices.GetVoice(i).IsFree() && !voices.GetVoice(i).envelope.IsReleasing())
+            EXPECT_EQ(voices.GetVoice(i).live_note.note, 62);
+}
+TEST_F(LiveNotes, OwnOnlyAdmissionRefusalDoesNotDisplaceHeldFallback) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    map.tracks[0].policy.steal = Allocation::StealFrom::OwnOnly;
+    notes.Press(0, 60, 100, 1);
+    notes.Press(0, 62, 100, 1);
+    notes.Drain(&map, voices);
+    for (uint8_t pitch = 70; pitch < 78; ++pitch)
+        notes.Press(1, pitch, 100, 2);
+    notes.Drain(&map, voices);
+    notes.Press(0, 64, 100, 1);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+    notes.StopTracks(2, voices);
+    notes.Release(0, 64);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+    notes.Release(0, 62);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 1u);
+}
+
+TEST_F(LiveNotes, MonoOverflowOffFallsBackOnceAndDoesNotResurrectReleasedKeys) {
+    map.tracks[0].policy.mode = Allocation::PlayMode::Mono;
+    notes.Press(0, 60, 90, 1);
+    notes.Press(0, 64, 100, 1);
+    notes.Drain(&map, voices);
+    for (uint8_t i = 0; i < 64; ++i)
+        ASSERT_TRUE(notes.Press(1, 70, 100, 0));
+    EXPECT_FALSE(notes.Release(0, 64));
+    notes.Drain(&map, voices);
+    ASSERT_EQ(Held(0), 1u);
+    for (uint8_t i = 0; i < 8; ++i)
+        if (!voices.GetVoice(i).IsFree() && !voices.GetVoice(i).envelope.IsReleasing())
+            EXPECT_EQ(voices.GetVoice(i).live_note.note, 60);
+    notes.Release(0, 60);
+    notes.Drain(&map, voices);
+    notes.Drain(&map, voices);
+    EXPECT_EQ(Held(0), 0u);
+}

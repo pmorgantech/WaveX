@@ -138,6 +138,11 @@ void inter_mcu_store_instrument_lfo(const WaveX::Protocol::InstLfoSyncMessage& s
     cap.instrument_lfo = state;
 }
 
+void inter_mcu_store_allocation(const WaveX::Protocol::AllocationSyncMessage& state) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.allocation_calls;
+    cap.allocation = state;
+}
 void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state) {
     auto& cap = GetInterMcuCapture();
     ++cap.instrument_edit_calls;

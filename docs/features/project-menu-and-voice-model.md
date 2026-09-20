@@ -1,11 +1,10 @@
 # Project, menus, mixing and voice channels
 
-**Status:** Stereo/Mono allocation and Project Track controls implemented;
-host/compile verified, with ten focused two-board checks passing. Listening,
-physical controls and the complete soak gate remain open. Scene, session
-persistence, effects and drift retain their target/proposal status.
-Updated 2026-09-18. Instrument allocation controls remain proposed; the pure
-admission planner below is tested independently of the live allocator.
+**Status:** Stereo/Mono rendering, saved Instrument/Track allocation controls,
+Mono held-key fallback and Project persistence are implemented with host,
+compile and selected two-board coverage. Listening, physical controls, reboot
+recovery and the complete soak gate remain open. Scenes, effects and drift
+retain their target/proposal status. Updated 2026-09-20.
 This document consolidates the terminology and menu discussion so the remaining
 work can be scheduled. It distinguishes current behavior, requested changes and
 proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
@@ -27,8 +26,8 @@ proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
 | Entity | Owns or describes | Relationship |
 |---|---|---|
 | Project | The working session: Track setup, mixer, Patterns, Songs, settings and asset references; Scenes when implemented | Top-level save/load unit |
-| Track | Instrument assignment, MIDI routing, mix strip and proposed allocation-policy overrides | 16 per Project; shared selection across pages |
-| Instrument | A reusable sound: two oscillators, their maps, filter, amp, envelopes, LFOs and modulation; proposed saved allocation defaults | Loaded into a Track; saved as WXI; a Kit is a drum-mode Instrument |
+| Track | Instrument assignment, MIDI routing, mix strip and allocation-policy overrides | 16 per Project; shared selection across pages |
+| Instrument | A reusable sound: two oscillators, their maps, filter, amp, envelopes, LFOs and modulation; saved allocation defaults | Loaded into a Track; saved as WXI; a Kit is a drum-mode Instrument |
 | Oscillator | One sound source and its source settings | Two per Instrument; sampled stereo can use one oscillator |
 | Sample / Zone | Sample is PCM plus metadata; Zone maps a Sample to key/velocity ranges | Zones reference Sample Pool entries; files persist asset references |
 | Pattern | Musical events and parameter locks addressing Tracks | Project codec supports 128 named slots; Pattern changes preserve Track assignments |
@@ -184,17 +183,15 @@ promise that audition, FX and other callback work have no cost.
 
 ## Instrument and Kit allocation policy
 
-**Requested 2026-09-17; saved policy and controls remain unimplemented.** The
-live allocator admits complete layer groups using Poly / Auto / Any; the
-planner also supports other policies, exercised by host tests. Instruments and drum Kits
-should carry useful allocation defaults: monophonic behavior, a 1–8 note limit,
-and whether stealing is restricted to their own sounding notes or can take
-from other sounds. This extends the existing planned Track polyphony policy;
-it does not increase the configured physical render budget.
+**Implemented 2026-09-20:** Instrument/Kit defaults and independent Track
+inheritance/overrides, saved formats, Apply/Revert, confirmed UI controls and
+Mono held-key fallback. Physical MIDI latency, audible transitions and the full
+capacity gate remain [HV-019](../hardware-validation.md#hv-019--note-group-allocation-policy).
+Per-pad caps remain a separate proposal; the global render budget is unchanged.
 
 ### Settings and ownership
 
-| Setting | Proposed values | Meaning |
+| Setting | Values | Meaning |
 |---|---|---|
 | Play mode | Poly / Mono | Mono permits one musical note at a time; independent of the oscillator's stereo-to-Mono downmix switch |
 | Polyphony | Auto / 1–8 initially | Maximum simultaneous note groups, including release tails; Auto adds no local cap |
@@ -207,13 +204,18 @@ preference. A one-voice kick and a four-voice cymbal should be possible without
 making the whole Kit monophonic. Choke groups still express deliberate
 interactions such as a closed hat stopping an open hat.
 
-Save sound defaults in the Instrument's WXI definition, including Kit pad
-overrides if adopted. A Project may override the loaded sound's allocation
-settings per Track, with explicit **Use Instrument** inheritance. Track setup
-must not silently rewrite the saved Instrument. Reconcile existing stored
-`Track::poly_limit`/`priority` and `Instrument::poly_mode` with that inheritance
-in a versioned persistence design; do not reinterpret legacy zero fields
-without an explicit old-file rule.
+Sound defaults are saved in WXI's optional Allocation chunk (0x0070, version
+1.0; mode/limit/steal and a zero reserved byte). Missing chunks default to
+Poly/Auto/Any even if the inert legacy `poly_mode` was nonzero. Projects write
+version 1.2 Track chunks: bytes 269–271 hold mode (bit 7 means inherit), limit,
+and steal scope. Older Track chunks require zero reserved bytes and default to
+Use Instrument. Legacy `poly_limit`/`priority` fields remain inert metadata;
+they are never reinterpreted as these settings. Banks embed the same WXI codec.
+
+The Instrument sound undo point includes its policy. Track overrides have an
+independent undo point and survive Instrument replacement; a new or loaded
+Project resets that undo point. Apply retains edits in the session; Save copy
+persists them. A Track override never mutates the Instrument default.
 
 At runtime, "own" means the requesting Track's loaded Instrument instance,
 with a binding generation. Two Tracks loading the same WXI remain independent.
@@ -256,21 +258,29 @@ release; unmatched offs do not consume future presses. One-shot layers still
 ignore normal key releases.
 
 The fixed 64-event queue admits at most 32 routed requests and 32 input events
-per callback. Overflow offs retain per-source/pitch serial watermarks, including
+per callback. With any Mono Track, sixteen routed input requests reserve the
+other sixteen admissions for at most one final held-key fallback per Track. Overflow offs retain per-source/pitch serial watermarks, including
 older triggers still waiting behind that work limit. Input counters and this
 CPU-only handoff live in explicitly initialized DTCM. A source/pitch serial never
 wraps into an old identity: after UINT32_MAX presses, new presses on that key
 are refused until engine reinitialization. Burst queuing can add multiple blocks
 of latency; this bound is not a claim that every burst meets physical MIDI latency.
 
-Mono implies a cap of one group. The proposed first keyboard behavior is
-last-note priority with envelope retrigger, including a defined fallback to
-the last still-held note. Releasing an older key must not stop the replacement
-note. Keep held-key bookkeeping separate from render-slot identity; ordinary
-stealing must not make a later note-off release an unrelated replacement.
-One-shot drum hits use retrigger/replacement rather than held-key fallback.
-Legato, portamento and envelope continuation require their own defined behavior;
-polyphony one alone does not implement those features.
+Mono caps admission at one group. Gated keyboard presses use last-admitted-key
+priority and full envelope retrigger. Releasing an older key leaves the current
+key alone; releasing the latest retriggers the last admitted key still held.
+The callback owns a fixed 64-entry held-key ledger independent of render slots.
+Global stealing does not discard held keys. A full ledger refuses new Mono
+Track requests without evicting a key or changing note-off identity. Admission
+refusals never enter that ledger. Binding retirement and Poly/Mono transitions
+clear the affected Track's held keys. All-one-shot groups and drum Instruments
+retrigger/replace without fallback. Legato, portamento, continuation and
+click-free stealing are not implied by Mono.
+
+Fallback requests coalesce to the final held candidate for each Track at the
+end of a callback. A refused fallback is not retried every block; another key
+change can cause a new request. Overflow release watermarks cover the held
+ledger as well as surviving voices and queued triggers.
 
 ### Admission and stealing
 
@@ -309,8 +319,7 @@ budget. Do not promise click-free stealing from a metadata-only policy change.
 Policy edits apply at a callback boundary. Existing notes can finish; a lowered
 cap is enforced on the next attempted admission rather than cutting notes as
 the control moves. Legacy files with no allocation settings retain current
-Poly / Auto / Any behavior. Explicit old Track settings require the persistence
-mapping noted above.
+Poly / Auto / Any behavior. Explicit old Track fields remain inert metadata as described above.
 
 ### Examples and acceptance
 
@@ -334,16 +343,20 @@ pad/Kit cap interaction, stereo/multilayer whole-group admission, release/choke
 accounting, Mono held-key/repeated-note identity, policy changes and old-file
 defaults. Hardware gates cover audible stealing/retrigger and worst-case DWT
 cost during bursts at full capacity, with sequencer, modulation and audition.
-Saved policy, held-key fallback and the controls remain roadmap work. The
-implemented runtime foundation below does not enable those product settings.
+Project's shifted softkeys open **Track poly** and **Sound poly**. Instrument
+editor stages other than Oscillator also expose **Polyphony** on Shift. Four
+value tiles show inheritance, play mode, group limit and stealing; changing a
+Track value creates an override. Confirmed snapshots and revision-checked edits
+prevent stale pages from overwriting a replacement. A timeout reads back the
+backend state and never automatically retries a mutation.
 
 ### Runtime admission foundation — 2026-09-18
 
 [`note_group_admission.hpp`](../../firmware/daisy/src/audio/note_group_admission.hpp)
 implements a pure, fixed-capacity victim/reservation planner, used by
 `VoiceManager::TriggerGroup`. The callback derives the active snapshot from
-live render slots, then commits admission without interleaved mutation. It does
-not expose Mono, caps or stealing controls in the product yet.
+live render slots, then commits admission without interleaved mutation. It
+uses the resolved saved policy for live and sequencer notes.
 
 | Record | Source of truth and lifetime |
 |---|---|
@@ -356,9 +369,9 @@ The callback owns group IDs and Track binding generations. Group IDs also
 order onset age; zero is reserved. Exhaustion refuses new notes until engine
 initialization with audio stopped; IDs do not reset on Track or transport stops.
 Track retirement kills all its voices before advancing its binding generation.
-`ReleaseGroup(id)` ignores stale identities and respects one-shot layers. The
-legacy Track/pitch note-off still releases all matching held groups; MIDI
-repeated-key ownership and Mono fallback remain separate work. As individual layers end, their slots and
+`ReleaseGroup(id)` ignores stale identities and respects one-shot layers.
+Live note-offs use source/pitch FIFO identities and cannot release sequencer
+groups. As individual layers end, their slots and
 channel reservations leave the group; its identity survives until the last layer
 ends. Choke/release tails remain charged until actually retired. Victim ranking accounts for the incoming note's prospective chokes without
 changing envelopes; a group is eligible as releasing only when all surviving
@@ -383,13 +396,9 @@ feasibility and resource conservation. Cortex-M7 compilation supplements these
 checks; audible transitions, callback DWT and the complete workload remain
 [HV-019](../hardware-validation.md#hv-019--note-group-allocation-policy).
 
-Next integration work must provide held-key ownership and Mono fallback,
-then saved policies and controls; stable group IDs already replace per-layer Trigger
-calls. Retrigger smoothing, versioned Instrument/Project
-inheritance, explicit legacy-field mapping and Apply/Revert/UI remain pending.
-Kit pad overrides remain a separate proposal. Existing saved policy fields
-keep their prior interpretation; no wire or on-disk format changes accompany
-this runtime step.
+Remaining work is the audible transition/capacity gate and optional pad policy
+refinements. No click-free transition or physical MIDI latency claim follows
+from the host and console-injected checks.
 
 ## Oscillator drift backlog
 

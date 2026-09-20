@@ -89,6 +89,43 @@ Result Decode(Memory& m, Sequencer::Project& p) {
     ProjectFile::Decoder decoder(m.Io(), p);
     return AdvanceAll(decoder, m);
 }
+TEST(ProjectFile, AllocationOverrideSurvivesAndLegacyDefaultsToInstrument) {
+    auto p = Example();
+    p->tracks[15].allocation = {{Allocation::PlayMode::Mono, 4, Allocation::StealFrom::OwnOnly},
+                                false};
+    auto m = Encode(*p);
+    auto restored = std::make_unique<Sequencer::Project>();
+    ASSERT_EQ(Decode(m, *restored), Result::Done);
+    EXPECT_EQ(restored->tracks[15].allocation, p->tracks[15].allocation);
+    const auto valid_bytes = m.bytes;
+    for (size_t offset = Wxcf::kHeaderSize; offset < m.bytes.size();) {
+        const auto* b = valid_bytes.data() + offset;
+        const auto id = Wxcf::detail::ReadU16LE(b);
+        const auto len = Wxcf::detail::ReadU32LE(b + 4);
+        if (id == 0x10f) {
+            for (const auto field: {269u, 270u, 271u}) {
+                m.bytes = valid_bytes;
+                m.bytes[offset + 8 + field] = 9;
+                EXPECT_EQ(Decode(m, *restored), Result::Invalid);
+            }
+            m.bytes = valid_bytes;
+            break;
+        }
+        offset += 8 + len;
+    }
+    for (size_t offset = Wxcf::kHeaderSize; offset < m.bytes.size();) {
+        auto* b = m.bytes.data() + offset;
+        const auto id = Wxcf::detail::ReadU16LE(b);
+        const auto len = Wxcf::detail::ReadU32LE(b + 4);
+        if (id >= 0x100 && id < 0x110) {
+            Wxcf::detail::WriteU16LE(b + 2, 0x0101);
+            b[8 + 269] = b[8 + 270] = b[8 + 271] = 0;
+        }
+        offset += 8 + len;
+    }
+    ASSERT_EQ(Decode(m, *restored), Result::Done);
+    EXPECT_EQ(restored->tracks[15].allocation, Allocation::Override{});
+}
 TEST(ProjectFile, RoundTripSparsePatternsSongsAndSessionSettings) {
     auto p = Example();
     auto m = Encode(*p);

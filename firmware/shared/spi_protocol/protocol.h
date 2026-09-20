@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "audio/lfo_config.hpp"
+#include "audio/note_policy.hpp"
 
 namespace WaveX {
 namespace Protocol {
@@ -192,6 +193,8 @@ enum MessageType : uint8_t {
     MSG_MIDI_PROGRAM = 0x84,    // E->D: channel-routed MIDI Program Change
     MSG_BANK_STATUS = 0x83,     // D->E: stable slot and retained operation outcome
     MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
+    MSG_ALLOC_OP = 0x86,        // E->D: Instrument policy or Track override
+    MSG_ALLOC_SYNC = 0x87,      // D->E: policy, inheritance and retained edit outcome
     MSG_ERROR = 0xFF
 };
 
@@ -2482,6 +2485,35 @@ inline bool IsValidInstModOp(const InstModOpMessage& m) {
                                     : m.index < INST_MOD_SLOT_COUNT && IsValidInstModSlot(m.slot);
 }
 
+// Policy settings use the Instrument edit revision and sound undo point.
+// Track overrides have an independent undo point; GET never mutates either.
+enum AllocationOp : uint8_t { ALLOC_GET, ALLOC_SET, ALLOC_APPLY, ALLOC_REVERT };
+enum AllocationScope : uint8_t { ALLOC_SOUND, ALLOC_TRACK };
+struct AllocationOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, op = ALLOC_GET, scope = ALLOC_SOUND, inherit = 0;
+    Allocation::Policy policy;
+    uint8_t reserved = 0;
+} __attribute__((packed));
+struct AllocationSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, valid = 0, busy = 0, error = 0;
+    uint8_t scope = ALLOC_SOUND, dirty = 0, inherited = 1, loaded = 0;
+    Allocation::Policy sound, track_policy;
+} __attribute__((packed));
+static_assert(sizeof(AllocationOpMessage) == 16, "Allocation operation wire size");
+static_assert(sizeof(AllocationSyncMessage) == 26, "Allocation snapshot wire size");
+inline bool IsValidAllocationOp(const AllocationOpMessage& m) {
+    return m.request_id && m.track < 16 && m.op <= ALLOC_REVERT && m.scope <= ALLOC_TRACK &&
+           m.inherit <= 1 && (m.scope == ALLOC_TRACK || !m.inherit) && !m.reserved &&
+           Allocation::Valid(m.policy) && (m.op == ALLOC_GET || m.revision);
+}
+inline bool IsValidAllocationSync(const AllocationSyncMessage& m) {
+    return m.request_id && m.track < 16 && m.scope <= ALLOC_TRACK && m.valid <= 1 && m.busy <= 1 &&
+           m.dirty <= 1 && m.inherited <= 1 && m.loaded <= 1 && Allocation::Valid(m.sound) &&
+           Allocation::Valid(m.track_policy);
+}
+
 // Instrument sound edits retain a backend undo point. 0x80/81 extend the
 // exhausted Instrument block; recording/mix and offline-render ids stay separate.
 enum InstEditOp : uint8_t {
@@ -3216,6 +3248,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_ALLOC_OP:
+            return "ALLOC_OP";
+        case MSG_ALLOC_SYNC:
+            return "ALLOC_SYNC";
         case MSG_INST_EDIT_OP:
             return "INST_EDIT_OP";
         case MSG_INST_EDIT_SYNC:

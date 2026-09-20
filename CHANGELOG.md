@@ -13,6 +13,17 @@ versioning and release process.
 
 ### Added
 
+- Added saved Instrument/Kit Poly/Mono, Auto/1–8-group and Own only/Own
+  first/Any allocation policies, per-Track inheritance and overrides, and
+  confirmed polyphony-page Apply/Revert controls. WXI, Bank and Project saves
+  retain the settings; older files retain Poly/Auto/Any and Track inheritance.
+  Mono keyboards retrigger the last admitted key still held using a bounded
+  ledger independent of stolen voices, while one-shots retain replacement
+  behavior.
+
+- Added `ALLOC` policy readback and a `--mono-keys --midi-bursts` bench mode for
+  exercising held-key fallback and repeated-note identity.
+
 - Repeatable isolated-peer restart checks and callback bench scenarios for
   cycling all stereo/Mono mixes, layered notes and foreground MIDI trigger
   bursts, with image identities and per-run captures.
@@ -29,8 +40,7 @@ versioning and release process.
   group, queue pressure refuses the whole note, and stealing retires all its
   surviving layers. Stable group releases ignore reused voice slots; admitted
   choke groups cannot choke sibling layers, and matching chokes keep priority
-  over unrelated held notes at capacity. Saved polyphony controls and MIDI
-  held-key fallback remain pending.
+  over unrelated held notes at capacity.
 
 - Full 16-pad kit and pad-pattern hardware regression: alternating sample/choke
   assignments, WXI recall onto another Track, and all-pad Pattern save/load.

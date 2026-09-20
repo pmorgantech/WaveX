@@ -894,3 +894,23 @@ TEST_F(PacketRouterTest, BankStatusRejectsTruncationAndInvalidSlots) {
     EXPECT_EQ(GetInterMcuCapture().bank_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().bank_status.slot, 127);
 }
+
+TEST_F(PacketRouterTest, AllocationSnapshotsRejectTruncationAndInvalidPolicies) {
+    AllocationSyncMessage state;
+    state.request_id = 19;
+    state.revision = 27;
+    state.track = 3;
+    auto packet = ProtocolTestHelper::CreateWaveXPacket(MSG_ALLOC_SYNC, &state, sizeof(state));
+    router_->route_packet(packet.data(), packet.size());
+    ASSERT_EQ(GetInterMcuCapture().allocation_calls, 1);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&state);
+    for (size_t size = 0; size < sizeof(state); ++size)
+        router_->route_uart_message(MSG_ALLOC_SYNC, bytes, size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().allocation_calls, 1);
+    state.sound.limit = 9;
+    router_->route_uart_message(MSG_ALLOC_SYNC, bytes, sizeof(state), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().allocation_calls, 1);
+    state.sound.limit = 8;
+    router_->route_uart_message(MSG_ALLOC_SYNC, bytes, sizeof(state), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().allocation_calls, 2);
+}
