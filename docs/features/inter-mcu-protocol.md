@@ -80,8 +80,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_STORAGE_STATUS | 0x39 | D→E | `StorageStatusMessage{mounted, reserved[3]}` | **unsolicited**: SD mounted (1) or lost (0). The frontend has no view of the card slot and cannot poll for this, so ejection/insertion is only observable if the backend says so. On loss the backend also sends `MSG_SAMPLE_STOP_RESP` + an empty `MSG_BROWSE_RESP` so audition exits and the listing clears; on mount the browser re-lists its current path. |
 | MSG_DIAG_SUBSCRIBE | 0x3A | E→D | `DiagSubscribeMessage{enable, interval_hz, reserved[2]}` | start/stop the telemetry push. Subscription-gated on purpose: the push flows only while the diagnostics page is open, so it costs nothing the rest of the time. `interval_hz` is clamped 1–10 by the backend. |
 | MSG_DIAG_PUSH | 0x3B | D→E | `DiagPushMessage` (102 B → `PKT_SIZE_128`) | **unsolicited** while subscribed: one interval of audio/storage/link/MIDI telemetry plus the backend's system-heap level. Counters are **deltas over `interval_ms`, reset on read**; absolute values only for levels and states. At 2 Hz this is ~216 B/s against a 200 KB/s link — under 0.15%. |
-| MSG_SAMPLE_EDIT_SET | 0x3C | E→D | `SampleEditMessage{sample_id, loop_enabled, reserved, gain_db_x10, start_frame, end_frame, loop_start, loop_end, fade_in_ms, fade_out_ms}` | non-destructive playback-edit command (roadmap 1.5.1) for Pool sample `sample_id` (16-bit since protocol 3; the one-byte `slot` it replaced truncated every Pool id, and 0 then meant "newest"). An id the backend cannot find is dropped. Sentinel `end_frame`/`loop_end` 0 = end of file/region. This is the **command**; the backend clamps and never assumes these values were taken verbatim — its reply is the authoritative `MSG_SAMPLE_META`. |
-| MSG_SAMPLE_META | 0x3D | D→E | `SampleMetadata{sample_id, generation, sample_rate, total_frames, start_frame, end_frame, loop_start, loop_end, gain_db_x10, fade_in_ms, fade_out_ms, channels, bits_per_sample, loop_enabled, channel_mode, flags, reserved, name[48]}` | authoritative per-sample record (roadmap 1.5.5 item 1), owned by the Daisy and pushed on every change — geometry, edit markers, fades, and load/resident state in one place so playback and display paths cannot disagree. `generation` bumps only on a content change (destructive render), not on marker edits, so a waveform cache keyed on (sample_id, generation) survives edits. Since protocol 2 the record carries `used_by` (Track mask) and `flags` bit 0 resident / bit 1 pinned; a record pushed with the resident bit clear means "unloaded, forget it" |
+| MSG_SAMPLE_EDIT_SET | 0x3C | E→D | `SampleEditMessage{sample_id, loop_enabled, loop_crossfade_ms, gain_db_x10, start_frame, end_frame, loop_start, loop_end, fade_in_ms, fade_out_ms, channel_mode}` | non-destructive playback-edit command (roadmap 1.5.1) for Pool sample `sample_id` (16-bit since protocol 3; the one-byte `slot` it replaced truncated every Pool id, and 0 then meant "newest"). An id the backend cannot find is dropped. Sentinel `end_frame`/`loop_end` 0 = end of file/region. This is the **command**; the backend clamps and never assumes these values were taken verbatim — its reply is the authoritative `MSG_SAMPLE_META`. |
+| MSG_SAMPLE_META | 0x3D | D→E | `SampleMetadata{sample_id, generation, sample_rate, total_frames, start_frame, end_frame, loop_start, loop_end, gain_db_x10, fade_in_ms, fade_out_ms, channels, bits_per_sample, loop_enabled, channel_mode, flags, loop_crossfade_ms, used_by, name[48]}` | authoritative per-sample record (roadmap 1.5.5 item 1), owned by the Daisy and pushed on every change — geometry, edit markers, fades, and load/resident state in one place so playback and display paths cannot disagree. `generation` bumps on PCM or channel-mapping changes, not on marker edits, so a waveform cache keyed on (sample_id, generation) survives region-only edits. Since protocol 2 the record carries `used_by` (Track mask) and `flags` bit 0 resident / bit 1 pinned; a record pushed with the resident bit clear means "unloaded, forget it" |
 | MSG_SAMPLE_META_REQ | 0x3E | E→D | `SampleMetaReqMessage{sample_id}` | request a metadata resend; `sample_id` 0 means "every loaded sample" (how the frontend repopulates after its own restart) |
 | MSG_ENVELOPE_REQ | 0x3F | E→D | `EnvelopeReqMessage{sample_id, columns, start_frame, end_frame}` | request a min/max envelope for a frame window (roadmap 1.5.5 item 2), not decimated samples — avoids the aliasing the decimated preview it replaced (`MSG_PREVIEW_REQ` 0x0A / `MSG_WAVE_CHUNK` 0x11, retired in protocol 3; values not reused) was prone to. `sample_id` 0 = most recently loaded; `columns` clamped to `MAX_ENVELOPE_COLUMNS` (1280) |
 | MSG_CV_CAL_SET | 0x40 | E→D | `CvCalMessage{group, persist, 7×float}` | apply one group's CV calibration; `persist=1` also writes the table to SD; Daisy replies with MSG_CV_CAL_RESP |
@@ -109,7 +109,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SEQ_FILE_OP | 0x5A | E→D | SeqFileOpMessage | read retained status or save-copy/load/new a named pattern |
 | MSG_SEQ_FILE_STATUS | 0x5B | D→E | SeqFileStatusMessage | active job, retained completion/error and last successful file name |
 | MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **per-clock delta** (batch mean when timestamps coincide; never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
-| MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel}` | forwarded MIDI control change; Daisy owns the CC→mod-source map (`param-locks-and-modulation.md` §6) |
+| MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel, reserved}` (4 B) | Raw CC; channel 0–15, cc/value 0–127, reserved zero. CC1 drives Track Mod Wheel; CC121 resets supported expression. |
+| MSG_MIDI_PRESSURE | 0x8D | E→D | `MidiPressureMessage{value, channel}` (2 B) | Channel pressure 0–127, channel 0–15; drives Track Pressure. |
 | MSG_SEQ_CLOCK_OUT | 0x57 | D→E | `SeqClockOutMessage{event, tick_seq, spp_beats16}` | Daisy audio-time Clock/transport to ESP32 DIN/USB output queues; physical timing gate open |
 | MSG_INST_OP | 0x60 | E→D | InstOpMessage | SFZ/WXI probe/load, modulation slot update, new drum Instrument, name, new-copy save, pad assignment/choke, and pad-map readback request; see Instrument editor below |
 | MSG_INST_STATUS | 0x61 | D→E | `InstStatusMessage{request_id, slot, op, state, flags, error, zone/sample counts, byte totals/progress, current_name[48]}` | preflight result plus total/current-WAV load progress; flags report missing/invalid WAVs and insufficient resident memory |
@@ -117,6 +118,10 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
 | MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
+| MSG_SAMPLE_FILE_OP | 0x89 | E→D | `SampleFileOpMessage` (56 B) | correlated GET/SAVE/COPY for a resident sample; COPY names a new basename in the source directory |
+| MSG_SAMPLE_FILE_STATUS | 0x8A | D→E | `SampleFileStatusMessage` (274 B) | busy/active ID, retained completed ID/op/error, progress and completed destination path |
+| MSG_SAMPLE_SEAM_REQ | 0x8B | E→D | `SampleSeamRequest` | correlated check/snap with expected edit and content generation; foreground-only, native stereo policy |
+| MSG_SAMPLE_SEAM_STATUS | 0x8C | D→E | `SampleSeamStatus` | applied frame, moved/error, separate native-channel raw and effective seam jumps |
 | MSG_BANK_OP | 0x82 | E→D | `BankOpMessage` | named create/open/save-copy, store/clear-copy, confirmed Track recall and explicit sample preload |
 | MSG_MIDI_PROGRAM | 0x84 | E→D | `MidiProgramMessage` | raw channel/program; Daisy resolves enabled matching Tracks against the active Bank |
 | MSG_BANK_SLOT_OP | 0x85 | E→D | `BankSlotOpMessage` | copy/move an explicit source slot into a destination in a new named Bank |
@@ -144,12 +149,12 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, 0x86–0x87 for allocation policy, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, 0x86–0x87 for allocation policy, 0x89–0x8A for standalone sample files, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
-- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live. `INST_OP_SET_MOD_SLOT` (also on 0x60) is now live end to end (ESP32 `inter_mcu_send_mod_slot()` → Daisy `SfzLoader::SetModSlot()`, instrument-scoped storage on `Instrument::mod_slots`) — no UI sends it yet (`param-locks-and-modulation.md` §7/§9 stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` still read 0: `MSG_MIDI_CC` reaches the Daisy but nothing feeds it into the mod matrix's `ModSources`, and the ESP32 MIDI task still drops incoming CC/aftertouch rather than forwarding it (§9 stage 4, second half).
+- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live. `INST_OP_SET_MOD_SLOT` (also on 0x60) is now live end to end (ESP32 `inter_mcu_send_mod_slot()` → Daisy `SfzLoader::SetModSlot()`, instrument-scoped storage on `Instrument::mod_slots`) — no UI sends it yet (`param-locks-and-modulation.md` §7/§9 stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` now receive Track-routed CC1/channel pressure through complete foreground-to-callback snapshots; DIN and USB share the forwarding path. See `param-locks-and-modulation.md` §6 for reset/lifetime semantics.
 - **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
 - **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.
@@ -238,7 +243,7 @@ firmware/shared/spi_protocol/protocol.h.
 ## Instrument editor (protocol 5)
 
 InstOpMessage appends explicit pad_index, pad_choke and pad_sample_id fields.
-Both images must use the current protocol version (6). Existing probe/load/modulation fields retain
+Both images must use the current `PROTOCOL_VERSION` in `protocol.h`. Existing probe/load/modulation fields retain
 their meanings. The central enums and packed structs in protocol.h define
 the wire layout.
 
@@ -675,3 +680,51 @@ automatically replaying a lost edit. Definitions/sizes remain in `protocol.h`.
 The existing transport modes now drive callback-owned step/live capture and
 held-pitch erase. See [melodic sequencing](melodic-sequencing.md) for gate and
 capture ownership; audio recording remains a separate subsystem.
+
+## Standalone sample files (as-built)
+
+Sample file requests validate exact payload size, nonzero request ID, operation,
+sample identity for mutations, reserved zero and bounded strings. The backend
+retains one active and one completed request ID; repeated IDs do not replay a
+mutation. GET is available during a job. The frontend polls at 300 ms, disables
+mutations when status is older than 1.5 seconds and never automatically resends
+a mutation after a timeout/reconnect. Backend reboot loses retained results;
+a pending UI save then remains unconfirmed until the user leaves and reopens
+the page and checks the destination before explicitly retrying.
+
+SAVE snapshots the current Pool metadata into a sidecar; COPY snapshots it and
+copies the complete source WAV. Storage admission excludes other file jobs,
+card operations and Pool edits. The job uses foreground chunked copying; it
+stops audition but does not replace Track bindings or callback PCM. Errors
+identify busy, missing sample, invalid name, existing destination, insufficient
+space, I/O failure or changed geometry/sidecar. See the
+[save model](offline-sample-editing.md#standalone-edits-as-built) for ownership
+and recovery semantics.
+
+## Sample seam requests (protocol 8)
+
+`protocol.h` owns the packed layouts and limits. Protocol 7 assigns the former
+reserved byte in the 26-byte edit and 90-byte metadata to `loop_crossfade_ms`
+(0–20, default zero). Flash both MCUs together. Existing zero-valued commands
+remain crossfade-off; this is not firmware release versioning.
+
+Protocol 8 appends `channel_mode` to the edit (now 27 bytes) and its embedded
+seam expectation (request now 37 bytes). Valid modes are As Recorded, Left,
+Right and Mono Sum; malformed modes are refused. Metadata `generation` is a
+waveform revision: it also advances when channel mapping changes, invalidating
+old envelope cache entries without replacing PCM. Both MCUs must match.
+
+The seam request carries a nonzero request ID, waveform generation,
+source-frame search radius, action, marker and complete expected edit. Check
+and Snap use the same optimistic comparison, because content generation alone
+does not change when markers move. Requests with malformed enums, lengths or
+bounds are dropped. A valid stale request returns STALE and current metadata;
+a missing sample or storage conflict is not an invitation to edit another ID.
+
+The 30-byte reply identifies the request/sample/generation and reports its
+error, whether the marker moved, the applied frame and signed PCM16 differences
+for raw and effective L/R loop boundaries. These are amplitude diagnostics,
+not an audible-quality verdict. A missing shared stereo crossing is an
+explicit result, with unchanged markers. There is no automatic retry of Snap.
+Frontend reception publishes one locked snapshot; only UI service touches LVGL.
+See [the stereo policy and crossfade semantics](offline-sample-editing.md#stereo-markers-seam-checks-and-playback-crossfade).

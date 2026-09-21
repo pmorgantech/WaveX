@@ -10,11 +10,14 @@
 #include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
+#include "ui/ui_sample_file_page.h"
 #include "ui/ui_sample_manager_page.h"
 #include "ui_theme.h"
 
+#include "audio/sample_loop.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace wavex_ui {
@@ -148,8 +151,10 @@ void formatFrames(char* out, size_t n, uint32_t frames, uint32_t rate) {
 
 void UISampleEditPage::onEnter(lv_obj_t* parent) {
     edit_due_ms_ = 0;
+    marker_drag_mask_ = 0;
     params_dirty_ = false;
     wave_status_shown_ = false;
+    seam_result_ = {};
     root_ = lv_obj_create(parent);
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
@@ -230,7 +235,7 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     // Name the view. A splice looks like an ordinary waveform with an
     // unexplained line down it unless it says otherwise, and the whole point
     // of this page's channel labelling was not to leave that ambiguous.
-    splice_label_ = label(panel, 8, 4, "LOOP SEAM   end |  start", UI_FONT_MICRO, kColDim);
+    splice_label_ = label(panel, 8, 4, "RAW LOOP SEAM   end | start", UI_FONT_MICRO, kColDim);
 
     for (lv_obj_t* o: {splice_left_->root(), splice_right_->root(), splice_seam_, splice_label_}) {
         lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -260,16 +265,27 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     // and the thing you can hit is larger than the thing you can see.
     for (lv_obj_t* handle: {marker_s_, marker_e_, marker_ls_, marker_le_}) {
         lv_obj_add_flag(handle, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(handle, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(handle, LV_OBJ_FLAG_SCROLL_CHAIN);
         lv_obj_set_ext_click_area(handle, 12);
+        lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_PRESSED, this);
         lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_PRESSING, this);
         lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_RELEASED, this);
+        lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_PRESS_LOST, this);
     }
 }
 
 void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
-    static const char* titles[PARAM_COUNT] = {
-        "START", "END", "LOOP START", "LOOP END", "GAIN", "FADE IN", "FADE OUT"};
-    // Seven parameters, four card slots. The strip shows a window onto the
+    static const char* titles[PARAM_COUNT] = {"START",
+                                              "END",
+                                              "LOOP START",
+                                              "LOOP END",
+                                              "GAIN",
+                                              "FADE IN",
+                                              "FADE OUT",
+                                              "CROSSFADE",
+                                              "CHANNEL"};
+    // Nine parameters, four card slots. The strip shows a window onto the
     // parameter list so the design's 305px card pitch survives; < Param /
     // Param > scroll it. Cramming them into the same width would shrink every
     // card below the readable-from-a-metre size the layout is built around.
@@ -278,6 +294,22 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
         // private near-copy - label, mono value, track, fill and handle built
         // by hand - which is exactly how two "identical" cards drift apart.
         cards_[i] = valueTileCreate(parent, kMargin, kStripY, kCardW, kCardH, titles[i], nullptr);
+        lv_obj_add_event_cb(
+            cards_[i].card,
+            [](lv_event_t* event) {
+                auto* self = static_cast<UISampleEditPage*>(lv_event_get_user_data(event));
+                if (self->seam_pending_)
+                    return;
+                for (uint8_t p = 0; p < PARAM_COUNT; ++p) {
+                    if (self->cards_[p].card == lv_event_get_current_target(event)) {
+                        self->focus_ = p;
+                        self->refreshFocusRing();
+                        break;
+                    }
+                }
+            },
+            LV_EVENT_PRESSED,
+            this);
         const int idx = i;
         valueTileSetOnAdjust(cards_[i], [this, idx](int steps) {
             focus_ = static_cast<uint8_t>(idx);
@@ -290,15 +322,18 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
 
 // Places the visible window of cards so the focused one is always on screen.
 void UISampleEditPage::layoutParamStrip() {
-    int first = focus_ - (kVisibleCards - 1);
-    if (first < 0) {
-        first = 0;
-    }
+    // Keep a visible tile under the finger when it takes focus. Only page
+    // the strip when focus actually leaves its current visible window.
+    int first = 0;
+    while (first < PARAM_COUNT && lv_obj_has_flag(cards_[first].card, LV_OBJ_FLAG_HIDDEN))
+        ++first;
     if (first > PARAM_COUNT - kVisibleCards) {
         first = PARAM_COUNT - kVisibleCards;
     }
     if (focus_ < first) {
         first = focus_;
+    } else if (focus_ >= first + kVisibleCards) {
+        first = focus_ - (kVisibleCards - 1);
     }
     for (int i = 0; i < PARAM_COUNT; i++) {
         const int slot = i - first;
@@ -324,6 +359,10 @@ void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::onExit() {
+    seam_pending_ = 0;
+    marker_drag_mask_ = 0;
+    edit_wait_until_ = 0;
+    seam_text_[0] = 0;
     // Publish the final coalesced drag for the old sample before a picker can
     // change the shared selection. Never carry it into the next page entry.
     if (edit_due_ms_) {
@@ -371,6 +410,10 @@ void UISampleEditPage::onInput(const InputEvent& evt) {
         case InputType::EncoderDown:
             adjustFocused(evt.steps());
             break;
+        case InputType::ButtonPress:
+            if (evt.key() != PanelKey::NavAPush && evt.key() != PanelKey::NavBPush)
+                break;
+            [[fallthrough]];
         case InputType::EncoderClick:
             focus_ = static_cast<uint8_t>((focus_ + 1) % PARAM_COUNT);
             refreshFocusRing();
@@ -386,7 +429,10 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getSoftkeys() {
     // Toggles to Stop while playing, matching the sample browser. Two keys for
     // one mutually-exclusive action would waste a slot on a row that is
     // already short.
-    keys[1] = {auditioning_ ? "Stop" : "Audition", [this]() { toggleAudition(); }};
+    keys[1] = {auditioning_ ? "Stop" : "Audition",
+               [this]() { toggleAudition(); },
+               has_sample_ && (auditioning_ || !seam_pending_),
+               "Waiting for sample seam"};
     keys[2] = {"Zoom -", [this]() { setZoom(-1); }};
     keys[3] = {"Zoom +", [this]() { setZoom(1); }};
     keys[4] = {"< Param", [this]() {
@@ -400,34 +446,60 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getSoftkeys() {
     return keys;
 }
 
-// Shifted row: sample selection and parameter operations. Standalone file
-// saves remain disabled until marker persistence is implemented.
+// Shifted row: sample selection, parameter operations and standalone file saves.
 std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Select", []() { UINavigator::instance().push(createSamplePickerPage()); }};
     keys[1] = {loop_enabled_ ? "Loop Off" : "Loop On", [this]() {
+                   if (!has_sample_ || seam_pending_)
+                       return;
                    loop_enabled_ = !loop_enabled_;
                    params_dirty_ = true;
                    sendEdit();
                    UINavigator::instance().refreshSoftkeys();
                }};
-    keys[2] = {"Gain 0dB", [this]() {
-                   gain_db_x10_ = 0;
-                   params_dirty_ = true;
-                   sendEdit();
-               }};
-    keys[3] = {"Save", nullptr, false, "needs marker persistence"};
-    keys[4] = {"Save As", nullptr, false, "needs filename entry"};
+    keys[2] = {
+        focus_ <= PARAM_LOOP_END ? "Snap" : (focus_ == PARAM_GAIN ? "Gain 0dB" : "Check Seam"),
+        [this]() {
+            if (!has_sample_ || seam_pending_)
+                return;
+            if (focus_ != PARAM_GAIN) {
+                requestSeam(focus_ <= PARAM_LOOP_END);
+                return;
+            }
+            gain_db_x10_ = 0;
+            params_dirty_ = true;
+            sendEdit();
+        }};
+    keys[3] = {
+        "Save",
+        [this] { UINavigator::instance().push(createSampleFilePage(currentSampleId(), false)); },
+        has_sample_,
+        "Select a sample"};
+    keys[4] = {
+        "Save As",
+        [this] { UINavigator::instance().push(createSampleFilePage(currentSampleId(), true)); },
+        has_sample_,
+        "Select a sample"};
     keys[5] = {"Reset", [this]() {
+                   if (!has_sample_ || seam_pending_)
+                       return;
                    start_frame_ = 0;
                    end_frame_ = total_frames_;
                    loop_start_ = 0;
                    loop_end_ = total_frames_;
                    gain_db_x10_ = 0;
+                   crossfade_ms_ = 0;
                    zoomToFit();
                    params_dirty_ = true;
                    sendEdit();
                }};
+    for (size_t i = 1; i < keys.size(); ++i) {
+        if (!has_sample_ || seam_pending_) {
+            keys[i].enabled = false;
+            keys[i].why = "Waiting for sample";
+        }
+    }
     return keys;
 }
 
@@ -447,6 +519,8 @@ void UISampleEditPage::toggleAudition() {
             refreshStatus("Stop request failed");
         }
     } else {
+        if (seam_pending_)
+            return;
         // The Pool owns the sample and its edits. Audition streams its card
         // file through the dedicated preview path; it never claims a Track.
         sendEdit();
@@ -473,7 +547,7 @@ void UISampleEditPage::clampMarkers() {
     if (start_frame_ >= end_frame_) {
         start_frame_ = end_frame_ > 0 ? end_frame_ - 1 : 0;
     }
-    if (loop_end_ > end_frame_) {
+    if (loop_end_ <= start_frame_ || loop_end_ > end_frame_) {
         loop_end_ = end_frame_;
     }
     if (loop_start_ < start_frame_) {
@@ -485,7 +559,19 @@ void UISampleEditPage::clampMarkers() {
 }
 
 void UISampleEditPage::adjustFocused(int steps) {
-    if (!has_sample_ || total_frames_ == 0) {
+    if (!has_sample_ || total_frames_ == 0 || seam_pending_)
+        return;
+    if (focus_ == PARAM_CHANNEL) {
+        channel_mode_ = static_cast<uint8_t>(std::clamp(int(channel_mode_) + steps, 0, 3));
+        params_dirty_ = true;
+        sendEdit();
+        return;
+    }
+    if (focus_ == PARAM_CROSSFADE) {
+        crossfade_ms_ = static_cast<uint8_t>(
+            std::clamp(int(crossfade_ms_) + steps, 0, int(WaveX::Protocol::kMaxLoopCrossfadeMs)));
+        params_dirty_ = true;
+        sendEdit();
         return;
     }
     if (focus_ == PARAM_FADE_IN || focus_ == PARAM_FADE_OUT) {
@@ -634,6 +720,13 @@ void UISampleEditPage::applyMeta(const WaveX::Protocol::SampleMetadata& m) {
     gain_db_x10_ = m.gain_db_x10;
     fade_in_ms_ = m.fade_in_ms;
     fade_out_ms_ = m.fade_out_ms;
+    crossfade_ms_ = m.loop_crossfade_ms;
+    channel_mode_ = m.channel_mode;
+    source_channels_ = m.channels;
+    const uint8_t label_mode = source_channels_ == 1 ? 0 : channel_mode_;
+    waveform_->setMonoLabel(label_mode);
+    splice_left_->setMonoLabel(label_mode);
+    splice_right_->setMonoLabel(label_mode);
     if (view_frames_ == 0 || view_frames_ > total_frames_) {
         zoomToFit();
     }
@@ -647,6 +740,19 @@ void UISampleEditPage::sendEdit() {
     // end_frame/loop_end are sent verbatim rather than as the 0 sentinel: we
     // know the real length here, so let the backend clamp against the file
     // rather than guessing what "to the end" meant.
+    seam_text_[0] = 0;
+    sent_edit_ = WaveX::Protocol::SampleEditMessage(currentSampleId(),
+                                                    loop_enabled_,
+                                                    gain_db_x10_,
+                                                    start_frame_,
+                                                    end_frame_,
+                                                    loop_start_,
+                                                    loop_end_,
+                                                    fade_in_ms_,
+                                                    fade_out_ms_);
+    sent_edit_.loop_crossfade_ms = crossfade_ms_;
+    sent_edit_.channel_mode = channel_mode_;
+    edit_wait_until_ = static_cast<uint32_t>(esp_timer_get_time() / 1000) + 500;
     inter_mcu_send_sample_edit(currentSampleId(),
                                loop_enabled_,
                                gain_db_x10_,
@@ -655,7 +761,9 @@ void UISampleEditPage::sendEdit() {
                                loop_start_,
                                loop_end_,
                                fade_in_ms_,
-                               fade_out_ms_);
+                               fade_out_ms_,
+                               crossfade_ms_,
+                               channel_mode_);
 }
 
 void UISampleEditPage::refreshParams() {
@@ -722,6 +830,12 @@ void UISampleEditPage::refreshParams() {
         valueTileSetTone(cards_[p], ms <= 5 ? TileTone::Positive : TileTone::Neutral);
     }
 
+    snprintf(buf, sizeof(buf), "%u ms", unsigned(crossfade_ms_));
+    valueTileSetValue(cards_[PARAM_CROSSFADE], crossfade_ms_ ? buf : "off");
+    valueTileSetFill(cards_[PARAM_CROSSFADE], crossfade_ms_ / 20.f);
+    static const char* const modes[] = {"Recorded", "Left", "Right", "Mono Sum"};
+    valueTileSetValue(cards_[PARAM_CHANNEL], modes[channel_mode_ <= 3 ? channel_mode_ : 0]);
+    valueTileSetFill(cards_[PARAM_CHANNEL], channel_mode_ / 3.f);
     layoutParamStrip();
 
     // Turning Loop off while a loop marker is focused has to drop the seam
@@ -765,15 +879,20 @@ void UISampleEditPage::refreshParams() {
         formatFrames(win, sizeof(win), view_frames_, sample_rate_);
         formatFrames(tot, sizeof(tot), total_frames_, sample_rate_);
         char line[220];
-        snprintf(line,
-                 sizeof(line),
-                 "selection %s of %s  -  %lu Hz  -  window %s (1:%lu)  -  loop %s",
-                 sel,
-                 tot,
-                 (unsigned long)sample_rate_,
-                 win,
-                 (unsigned long)(view_frames_ ? total_frames_ / view_frames_ : 1),
-                 loop_enabled_ ? "ON" : "off");
+        snprintf(
+            line,
+            sizeof(line),
+            "selection %s of %s  -  %lu Hz  -  window %s (1:%lu)  -  loop %s  -  overlap %lu fr",
+            sel,
+            tot,
+            (unsigned long)sample_rate_,
+            win,
+            (unsigned long)(view_frames_ ? total_frames_ / view_frames_ : 1),
+            loop_enabled_ ? "ON" : "off",
+            (unsigned long)(loop_enabled_
+                                ? WaveX::SampleLoop::CrossfadeFrames(
+                                      crossfade_ms_, sample_rate_, loop_end_ - loop_start_)
+                                : 0));
         lv_label_set_text(info_label_, line);
     }
 }
@@ -781,13 +900,23 @@ void UISampleEditPage::refreshParams() {
 // Touch events for the four handles. UI task, like every LVGL callback here.
 void UISampleEditPage::handleEventCb(lv_event_t* e) {
     auto* self = static_cast<UISampleEditPage*>(lv_event_get_user_data(e));
-    if (!self) {
+    if (!self || self->seam_pending_) {
         return;
     }
     // current_target, not target: the handles carry a label child, and an
     // event bubbling up from it would otherwise match none of the four.
     auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
-    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+    const uint8_t bit = target == self->marker_s_    ? 1
+                        : target == self->marker_e_  ? 2
+                        : target == self->marker_ls_ ? 4
+                                                     : 8;
+    const auto code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+        self->marker_drag_mask_ |= bit;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        self->marker_drag_mask_ &= ~bit;
         // Commit the final position immediately rather than waiting out the
         // coalescing window: letting go is an explicit "this is where I want
         // it", and an edit that lands 80 ms later feels like a bug.
@@ -800,6 +929,7 @@ void UISampleEditPage::handleEventCb(lv_event_t* e) {
             self->edit_due_ms_ = 0;
             self->sendEdit();
         }
+        self->refreshFocusRing();
         return;
     }
     self->onHandleDrag(e, target);
@@ -921,6 +1051,7 @@ void UISampleEditPage::onHandleDrag(lv_event_t* e, lv_obj_t* target) {
 }
 
 void UISampleEditPage::refreshFocusRing() {
+    UINavigator::instance().refreshSoftkeys();
     // Focus decides whether the seam is on screen, and every focus change
     // comes through here - the encoder, the < Param / Param > keys and a
     // handle drag all call it.
@@ -952,17 +1083,55 @@ void UISampleEditPage::uiTimerCb(lv_timer_t* t) {
 void UISampleEditPage::serviceUi() {
     const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    // Adopt any newer record. The backend clamps, so this is how a refused
-    // short loop or a narrowed region becomes visible instead of the UI
-    // continuing to display a request the engine did not honour.
-    if (has_sample_) {
+    if (seam_pending_) {
+        WaveX::Protocol::SampleSeamStatus reply;
+        if (inter_mcu_get_sample_seam_status(&reply) && reply.request_id == seam_pending_ &&
+            reply.sample_id == currentSampleId()) {
+            seam_pending_ = 0;
+            seam_result_ = reply;
+            inter_mcu_request_sample_meta(currentSampleId());
+            const char* result =
+                reply.error == WaveX::Protocol::SAMPLE_SEAM_NO_CROSSING ? "No shared zero crossing"
+                : reply.error == WaveX::Protocol::SAMPLE_SEAM_STALE ? "Markers changed; try again"
+                : reply.error                                       ? "Seam request unavailable"
+                : reply.moved                                       ? "Snapped"
+                                                                    : "Seam checked";
+            const auto pct = [](int32_t value) {
+                return WaveX::SampleLoop::Abs(value) * 1000 / 32768;
+            };
+            const int l = pct(reply.left), r = pct(reply.right);
+            snprintf(seam_text_,
+                     sizeof(seam_text_),
+                     "%s | source seam jump L %d.%d%%  R %d.%d%%",
+                     result,
+                     l / 10,
+                     l % 10,
+                     r / 10,
+                     r % 10);
+            refreshStatus(seam_text_);
+            UINavigator::instance().refreshSoftkeys();
+        } else if (static_cast<int32_t>(now - seam_deadline_) >= 0) {
+            seam_pending_ = 0;
+            refreshStatus("Seam reply timed out; inspect markers before trying again");
+            UINavigator::instance().refreshSoftkeys();
+        }
+    }
+    if (has_sample_ && !edit_due_ms_) {
         WaveX::Protocol::SampleMetadata m;
-        if (inter_mcu_get_sample_meta(currentSampleId(), &m) && m.total_frames > 0 &&
-            (m.start_frame != start_frame_ || m.end_frame != end_frame_ ||
-             m.loop_start != loop_start_ || m.loop_end != loop_end_ ||
-             (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_ ||
-             m.fade_in_ms != fade_in_ms_ || m.fade_out_ms != fade_out_ms_)) {
-            applyMeta(m);
+        if (inter_mcu_get_sample_meta(currentSampleId(), &m) && m.total_frames > 0) {
+            const auto edit = WaveX::SampleLoop::Edit(m);
+            const bool confirmed = std::memcmp(&edit, &sent_edit_, sizeof(edit)) == 0;
+            if (!edit_wait_until_ || confirmed ||
+                static_cast<int32_t>(now - edit_wait_until_) >= 0) {
+                edit_wait_until_ = 0;
+                if (m.start_frame != start_frame_ || m.end_frame != end_frame_ ||
+                    m.loop_start != loop_start_ || m.loop_end != loop_end_ ||
+                    (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_ ||
+                    m.fade_in_ms != fade_in_ms_ || m.fade_out_ms != fade_out_ms_ ||
+                    m.loop_crossfade_ms != crossfade_ms_ || m.channel_mode != channel_mode_ ||
+                    m.generation != generation_)
+                    applyMeta(m);
+            }
         }
     }
     if (params_dirty_) {
@@ -985,7 +1154,7 @@ void UISampleEditPage::serviceUi() {
                 wave_status_shown_ = false;
                 WaveX::Protocol::SampleMetadata m;
                 if (inter_mcu_get_sample_meta(currentSampleId(), &m)) {
-                    refreshStatus(m.name);
+                    refreshStatus(seam_text_[0] ? seam_text_ : m.name);
                 }
             }
             break;
@@ -1053,7 +1222,10 @@ bool UISampleEditPage::spliceActive() const {
     // parameter rather than a softkey. Both softkey rows are full, and a mode
     // you have to remember to turn on is a mode that does not get used; this
     // way focusing LS or LE is the gesture.
-    return has_sample_ && loop_enabled_ && (focus_ == PARAM_LOOP_START || focus_ == PARAM_LOOP_END);
+    // A loop handle still owns its pointer until release. Changing focus
+    // during that drag must not replace its coordinate system or hide it.
+    return has_sample_ && loop_enabled_ && marker_drag_mask_ == 0 &&
+           (focus_ == PARAM_LOOP_START || focus_ == PARAM_LOOP_END || focus_ == PARAM_CROSSFADE);
 }
 
 uint32_t UISampleEditPage::spliceHalfSpan() const {
@@ -1109,6 +1281,78 @@ void UISampleEditPage::updateWaveformMode() {
     // the pair that just appeared, which the panel redraws from the cache at
     // once and requests through its settle - so flicking across the loop
     // params does not queue a request per step.
+}
+
+void UISampleEditPage::requestSeam(bool snap) {
+    using namespace WaveX::Protocol;
+    if (!has_sample_ || seam_pending_)
+        return;
+    if (edit_due_ms_) {
+        edit_due_ms_ = 0;
+        sendEdit();
+    }
+    SampleSeamRequest request;
+    static uint32_t next = 0;
+    if (!++next)
+        ++next;
+    request.request_id = next;
+    request.generation = generation_;
+    request.action = snap ? SAMPLE_SEAM_SNAP : SAMPLE_SEAM_CHECK;
+    request.marker = focus_ <= PARAM_LOOP_END ? focus_ : SAMPLE_MARK_LOOP_END;
+    request.expected = SampleEditMessage(currentSampleId(),
+                                         loop_enabled_,
+                                         gain_db_x10_,
+                                         start_frame_,
+                                         end_frame_,
+                                         loop_start_,
+                                         loop_end_,
+                                         fade_in_ms_,
+                                         fade_out_ms_);
+    request.expected.loop_crossfade_ms = crossfade_ms_;
+    request.expected.channel_mode = channel_mode_;
+    if (inter_mcu_send_sample_seam_request(request) != ESP_OK) {
+        refreshStatus("Seam request failed");
+        return;
+    }
+    seam_pending_ = request.request_id;
+    seam_deadline_ = static_cast<uint32_t>(esp_timer_get_time() / 1000) + 2000;
+    refreshStatus("Checking native L/R seam...");
+    UINavigator::instance().refreshSoftkeys();
+}
+size_t UISampleEditPage::consoleState(char* out, size_t size, size_t len) {
+    if (len >= size)
+        return len;
+    const int n = snprintf(out + len,
+                           size > len ? size - len : 0,
+                           " editid=%u focus=%u xf=%u channelmode=%u wavegen=%u seampending=%lu "
+                           "start=%lu end=%lu ls=%lu "
+                           "le=%lu seamresult=%lu seamerror=%u seammoved=%u",
+                           currentSampleId(),
+                           focus_,
+                           crossfade_ms_,
+                           channel_mode_,
+                           generation_,
+                           (unsigned long)seam_pending_,
+                           (unsigned long)start_frame_,
+                           (unsigned long)end_frame_,
+                           (unsigned long)loop_start_,
+                           (unsigned long)loop_end_,
+                           (unsigned long)seam_result_.request_id,
+                           seam_result_.error,
+                           seam_result_.moved);
+    return n > 0 ? std::min(size - 1, len + static_cast<size_t>(n)) : len;
+}
+bool UISampleEditPage::consoleCommand(const char* args, char*, size_t) {
+    if (std::strncmp(args, "FOCUS ", 6) != 0)
+        return false;
+    args += 6;
+    unsigned value = 0;
+    char tail;
+    if (std::sscanf(args, "%u %c", &value, &tail) != 1 || value >= PARAM_COUNT)
+        return false;
+    focus_ = static_cast<uint8_t>(value);
+    refreshFocusRing();
+    return true;
 }
 
 void UISampleEditPage::refreshStatus(const char* text) {

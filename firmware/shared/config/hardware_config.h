@@ -297,11 +297,12 @@
 #endif
 
 // SD Card bus width (Daisy only) - 1 for 1-bit mode, 4 for 4-bit mode.
-// The 2026-09-18 card-format bench failed writes in 4-bit mode even at
-// 12.5 MHz. Use the verified 1-bit fallback until the card/wiring path passes
-// a 4-bit write soak; read-only mount negotiation cannot prove write stability.
+// Keep the bus at 4 bits during clock negotiation. The temporary 1-bit
+// workaround for the 2026-09-18 write failures reduced large-sample loading
+// throughput from about 9.5 MB/s to 1.5 MB/s. Clock fallback must not narrow
+// the bus; read-only mount negotiation does not prove write stability.
 #ifndef WAVEX_DAISY_SD_CARD_BUS_WIDTH
-#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 1
+#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 4
 #endif
 
 /**
@@ -323,29 +324,27 @@
  * - 4: VERY_FAST    ClockDiv 1   ->   100 MHz  (SDR50, overclocked)
  *
  * At 4-bit width the theoretical ceiling is SDMMC_CK x 4 bits, so STANDARD
- * is 12.5 MB/s. Measured throughput is far below that (~2.8 MB/s for an 8 KiB
- * f_read) because most of a read is command and card-state polling overhead,
- * not transfer - see the busy-wait loops in libDaisy's sd_diskio.c SD_read().
- * Raising this setting only shrinks the transfer portion, so expect roughly a
- * 10% improvement from STANDARD to FAST, not 2x.
+ * is 12.5 MB/s. The September 16 resident loader measured about 9.5 MB/s
+ * with 32 KiB reads. Card, transfer size and filesystem overhead also affect
+ * throughput; measure the complete load rather than inferring it from clock.
  *
  * This is the STARTING point, not a fixed setting. SdSdio::InitAndMount()
  * negotiates down from here until the card mounts and reads, and a data CRC
  * failure under load steps it down again at runtime
  * (SdSdio::DowngradeSpeed()).
  *
- * Default to 1 (MEDIUM_SLOW), with the 1-bit bus fallback above: the
- * 2026-09-18 format/folder-creation bench failed at 25 MHz and 12.5 MHz in
- * 4-bit mode, then passed at 12.5 MHz in 1-bit mode. Repeated Pattern saves
- * and reboot/reload also passed. Streaming throughput/soak must be remeasured;
- * faster/wider settings require read AND write soak validation.
+ * Start at 2 (STANDARD), falling back to MEDIUM_SLOW while keeping 4-bit
+ * width. The existing SLOW clock remains a last-resort recovery rate.
+ * Boot and reinsertion retry from this starting point. The September 18
+ * write failures remain a read/write validation concern, not a reason to
+ * pin every card to the temporary narrow-bus workaround.
  * Watch for "SD: negotiated DOWN" (fell back at boot)
  * or "SD: downgrading" (fell back later, under load) - either means the card
  * or wiring is not holding the configured rate, and the line names the rate
  * it settled on.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
-#define WAVEX_DAISY_SD_CARD_SPEED 1
+#define WAVEX_DAISY_SD_CARD_SPEED 2
 #endif
 
 // External Flash (Daisy only)

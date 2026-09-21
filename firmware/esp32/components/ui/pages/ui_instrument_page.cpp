@@ -56,7 +56,7 @@ constexpr const char* filterSlopes[] = {"12 dB", "24 dB"};
 constexpr int kFilterSlopeMax = WaveX::Protocol::INST_FILTER_SLOPE_24;
 constexpr const char* envelopeFields[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
 constexpr const char* slotFields[] = {"SOURCE", "DEST", "DEPTH", "CURVE", "POLARITY"};
-constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7};
+constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7, 12, 13};
 const char* sourceName(int source) {
     switch (source) {
         case 0:
@@ -79,6 +79,10 @@ const char* sourceName(int source) {
             return "G LFO";
         case 7:
             return "Random";
+        case 12:
+            return "Mod Wheel";
+        case 13:
+            return "Pressure";
         default:
             return "Pending";
     }

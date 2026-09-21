@@ -223,6 +223,11 @@ def main():
     )
     parser.add_argument("--layers", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument(
+        "--midi-expression",
+        action="store_true",
+        help="Exercise CC1 and channel pressure through ESP32 forwarding",
+    )
+    parser.add_argument(
         "--midi-bursts",
         action="store_true",
         help="Also inject a simultaneous MIDI-channel hit every control pass",
@@ -254,12 +259,21 @@ def main():
         action="store_true",
         help="Four-lane chords with overlapping 96-tick gates on every active Track",  # noqa: E501
     )
+    parser.add_argument(
+        "--crossfade-ms",
+        type=int,
+        choices=range(21),
+        default=0,
+    )
+    parser.add_argument("--loop-frames", type=int, default=0)
     parser.add_argument("--sample", default="/03 Lips of Ashes.wav")
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument(
         "--commit", required=True, help="Source commit used to build --image"
     )
     args = parser.parse_args()
+    if args.loop_frames and args.loop_frames < 256:
+        parser.error("--loop-frames must be zero or at least 256")
     if args.melodic and (
         args.mono_keys or args.cycle_mixes or args.stereo not in (0, 4)
     ):
@@ -272,6 +286,8 @@ def main():
         parser.error("--mix-seconds must be positive")
     if args.cycle_mixes and args.stereo != 0:
         parser.error("--cycle-mixes requires --stereo 0")
+    if args.midi_expression:
+        ROUTES[0:2] = [(12, 1), (13, 6)]
     has_bursts = args.layers > 1 or args.burst_tracks or args.midi_bursts
     if has_bursts and args.cycle_mixes:
         parser.error("layer/trigger bursts run separately from --cycle-mixes")
@@ -297,8 +313,11 @@ def main():
         "voices": voices,
         "channels": 8,
         "layers": args.layers,
+        "crossfade_ms": args.crossfade_ms,
+        "loop_frames": args.loop_frames,
         "active_tracks": active_tracks,
         "midi_bursts": 0,
+        "midi_expression": args.midi_expression,
         "mono_keys": args.mono_keys,
         "melodic": args.melodic,
         "mix_interval_seconds": args.mix_seconds if args.cycle_mixes else None,
@@ -372,18 +391,9 @@ def main():
         send(d, 0x78, "<BBH", 5, 0, 0)
         send(d, 0x78, "<BBH", 8, 0, 0)
         e.track(0)
-        e.open_menu("Sample")
-        e.page("TAB", "Browse")
-        # The bench card's remembered directory may be paginated after a
-        # recovery test. Finish that automatic listing before navigating.
-        initial = e.wait_state(tab="Browse")
-        fixture_counts = {"/": 10, "/Drums/Kicks": 51, "/Drums/Loops": 28}
-        if initial["dir"] in fixture_counts:
-            e.wait_state(entries=fixture_counts[initial["dir"]], timeout=15)
-        e.page("DIR", str(Path(args.sample).parent))
-        e.wait_state(entries=lambda n: int(n) > 1)
-        e.page("SEL", Path(args.sample).name)
-        e.wait_state(sel=Path(args.sample).name.replace(" ", "_"))
+        from test_load_to_track import _open_browser
+
+        _open_browser(e, args.sample)
         e.softkey("Load")
         loaded = e.wait_state(
             status=lambda v: "loaded_onto_Track" in v,
@@ -396,20 +406,20 @@ def main():
         send(
             d,
             0x3C,
-            "<HBBhIIIIHH",
+            "<HBBhIIIIHHx",
             sid,
             1,
-            0,
+            args.crossfade_ms,
             0,
             rate * 10,
-            rate * 11,
+            rate * 10 + (args.loop_frames or rate),
             rate * 10,
-            rate * 11,
+            rate * 10 + (args.loop_frames or rate),
             0,
             0,
         )
         data["instruments"] = []
-        if args.midi_bursts:
+        if args.midi_bursts or args.midi_expression:
             for track in range(16):
                 d.set_midi_in(track, 1 if track < active_tracks else 255)
         for track in range(active_tracks):
@@ -564,6 +574,9 @@ def main():
                 else:
                     d.midi_note(1, 60, 100)
                     data["midi_bursts"] += 1
+            if args.midi_expression:
+                e.cmd("MIDICC", 1, 1, (tick * 17) % 128)
+                e.cmd("MIDIPRESSURE", 1, (tick * 29) % 128)
             filter_edit(
                 d,
                 tick % active_tracks,
@@ -572,6 +585,10 @@ def main():
             )
             elapsed = time.monotonic() - start
             if elapsed >= next_file:
+                # Idle navigation may return to the root between file cycles.
+                if e.state().get("page") != "Sequencer":
+                    e.open_menu("Sequencer")
+                    e.wait_state(seqready=1)
                 pattern_files(e)
                 # Pattern names have 23 usable characters. Keep date and time.
                 compact_stamp = stamp[2:].replace("-", "")

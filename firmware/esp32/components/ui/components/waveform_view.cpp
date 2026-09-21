@@ -352,7 +352,7 @@ void WaveformView::drawSpans(lv_event_t* e) const {
     // its S/E and LS/LE handles along the panel's top and bottom edges, and
     // with start at 0 the S handle sat exactly over an "L" drawn in the
     // corner. The middle band is the one place an overlay never covers.
-    if (stereo) {
+    {
         lv_draw_label_dsc_t label_dsc;
         lv_draw_label_dsc_init(&label_dsc);
         label_dsc.color = UI_COLOR_DIM;
@@ -362,14 +362,35 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         static const char* const kNames[kMaxChannels] = {"L", "R"};
         for (uint8_t ch = 0; ch < channels_; ++ch) {
             const lv_area_t lane = laneArea(area, ch);
-            label_dsc.text = kNames[ch];
-            const int32_t y1 = (ch == 0) ? lane.y2 - 20 : lane.y1 + 2;
-            lv_area_t at = {lane.x1 + 4, y1, lane.x1 + 24, y1 + 18};
+            static const char* const mono_names[] = {"Mono", "L", "R", "(L+R)/2"};
+            label_dsc.text = stereo ? kNames[ch] : mono_names[mono_label_];
+            const int32_t y1 = !stereo     ? (lane.y1 + lane.y2) / 2 + 2
+                               : (ch == 0) ? lane.y2 - 20
+                                           : lane.y1 + 2;
+            lv_area_t at = {lane.x1 + 4, y1, lane.x1 + 96, y1 + 18};
             if (touches(at, clip)) {
+                if (!stereo) {
+                    // Keep the channel name legible over a dense PCM trace.
+                    at.x2 = at.x1 + (mono_label_ == 3 ? 64 : mono_label_ == 0 ? 40 : 16);
+                    lv_draw_fill_dsc_t background = dsc;
+                    background.color = UI_COLOR_CARD;
+                    background.opa = LV_OPA_COVER;
+                    fillClipped(layer, background, at, clip);
+                    label_dsc.color = UI_COLOR_TEXT;
+                }
                 lv_draw_label(layer, &label_dsc, &at);
             }
         }
     }
+}
+
+void WaveformView::setMonoLabel(uint8_t mode) {
+    mode = mode <= 3 ? mode : 0;
+    if (mode == mono_label_)
+        return;
+    mono_label_ = mode;
+    if (obj_)
+        lv_obj_invalidate(obj_);
 }
 
 }  // namespace wavex_ui

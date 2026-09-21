@@ -258,6 +258,7 @@ void AddSample(Sequencer::Project& p) {
     s.loop_end = 20000;
     s.gain_db_x10 = -123;
     s.fade_in_ms = 7;
+    s.loop_crossfade_ms = 17;
     s.fade_out_ms = 23;
     s.loop_enabled = true;
     s.channel_mode = Protocol::SAMPLE_CH_MONO_SUM;
@@ -280,6 +281,7 @@ TEST(ProjectFile, SampleEditsRoundTripWithBoundedTransfersAndNoRuntimeIdentity) 
     EXPECT_EQ(s.gain_db_x10, -123);
     EXPECT_EQ(s.fade_in_ms, 7);
     EXPECT_EQ(s.fade_out_ms, 23);
+    EXPECT_EQ(s.loop_crossfade_ms, 17);
     EXPECT_EQ(s.channels, 2);
     EXPECT_EQ(s.bits_per_sample, 16);
     EXPECT_TRUE(s.loop_enabled);
@@ -365,4 +367,19 @@ TEST(ProjectFile, MelodicLanesRoundTripAndOldProjectPatternsClearThem) {
     ASSERT_EQ(Decode(old, *restored), Result::Done);
     EXPECT_FALSE(restored->patterns[127].pattern.tracks[15].melodic);
     EXPECT_EQ(restored->patterns[127].pattern.tracks[15].steps[63].notes[3].velocity, 0);
+}
+
+TEST(ProjectFile, LegacySampleChunkDefaultsCrossfadeOffAndRejectsReservedBits) {
+    auto p = Example();
+    AddSample(*p);
+    p->samples[0].loop_crossfade_ms = 0;
+    auto file = Encode(*p);
+    WaveX::Wxcf::detail::WriteU16LE(file.bytes.data() + 6, 0x0103);
+    const auto sample_chunk = file.bytes.size() - WaveX::ProjectFile::kSampleBytes - 8;
+    WaveX::Wxcf::detail::WriteU16LE(file.bytes.data() + sample_chunk + 2, 0x0103);
+    auto out = std::make_unique<WaveX::Sequencer::Project>();
+    ASSERT_EQ(Decode(file, *out), Result::Done);
+    EXPECT_EQ(out->samples[0].loop_crossfade_ms, 0);
+    file.bytes[file.bytes.size() - 2] = 1;
+    EXPECT_EQ(Decode(file, *out), Result::Invalid);
 }

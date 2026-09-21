@@ -1187,6 +1187,7 @@ TEST_F(MessageTypeTest, SampleEditMessage) {
     // The id is a Pool id (>= 1024), and the field it replaced was one byte:
     // anything below 256 here would pass with the old layout too.
     SampleEditMessage original(1026, 1, -35, 44100, 396900, 88200, 352800, 5, 120);
+    original.channel_mode = SAMPLE_CH_RIGHT;
 
     size_t created =
         ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), original);
@@ -1207,6 +1208,7 @@ TEST_F(MessageTypeTest, SampleEditMessage) {
     EXPECT_EQ(parsed.loop_end, original.loop_end);
     EXPECT_EQ(parsed.fade_in_ms, 5);
     EXPECT_EQ(parsed.fade_out_ms, 120);
+    EXPECT_EQ(parsed.channel_mode, SAMPLE_CH_RIGHT);
 }
 
 // De-click is the DEFAULT, not an opt-in: a region that starts mid-waveform

@@ -34,6 +34,8 @@ typedef void (*wavex_cv_cal_cb_t)(const WaveX::Protocol::CvCalMessage& cal, void
 void inter_mcu_set_cv_cal_listener(wavex_cv_cal_cb_t cb, void* user_data);
 void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal);
 
+esp_err_t inter_mcu_send_midi_cc(const WaveX::Protocol::MidiCcMessage& message);
+esp_err_t inter_mcu_send_midi_pressure(const WaveX::Protocol::MidiPressureMessage& message);
 esp_err_t inter_mcu_send_midi_program(const WaveX::Protocol::MidiProgramMessage& message);
 esp_err_t inter_mcu_send_midi_clock(const WaveX::Protocol::MidiClockEventMessage& message);
 
@@ -106,7 +108,9 @@ esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      uint32_t loop_start,
                                      uint32_t loop_end,
                                      uint16_t fade_in_ms,
-                                     uint16_t fade_out_ms);
+                                     uint16_t fade_out_ms,
+                                     uint8_t loop_crossfade_ms = 0,
+                                     uint8_t channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED);
 
 // Per-sample metadata cache (MSG_SAMPLE_META). The Daisy is authoritative and
 // pushes on every change; the frontend never derives these values.
@@ -407,6 +411,9 @@ esp_err_t inter_mcu_send_seq_slot_op(const WaveX::Protocol::SeqSlotOpMessage&);
 void inter_mcu_store_seq_slot_status(const WaveX::Protocol::SeqSlotStatusMessage&);
 bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage*);
 void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage&);
+esp_err_t inter_mcu_send_sample_file_op(const WaveX::Protocol::SampleFileOpMessage&);
+void inter_mcu_store_sample_file_status(const WaveX::Protocol::SampleFileStatusMessage&);
+bool inter_mcu_get_sample_file_status(WaveX::Protocol::SampleFileStatusMessage*);
 bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);
 
 esp_err_t inter_mcu_send_seq_song_op(const WaveX::Protocol::SeqSongOpMessage& request);
@@ -428,3 +435,7 @@ bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);
 esp_err_t inter_mcu_request_seq_notes(const WaveX::Protocol::SeqPatternRequestMessage&);
 void inter_mcu_store_seq_notes(const WaveX::Protocol::SeqNotesMessage&);
 bool inter_mcu_get_seq_notes(WaveX::Protocol::SeqNotesMessage*);
+
+esp_err_t inter_mcu_send_sample_seam_request(const WaveX::Protocol::SampleSeamRequest&);
+void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus&);
+bool inter_mcu_get_sample_seam_status(WaveX::Protocol::SampleSeamStatus*);

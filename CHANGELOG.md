@@ -13,6 +13,28 @@ versioning and release process.
 
 ### Added
 
+- Instrument modulation now accepts MIDI CC1 (Mod Wheel) and channel pressure from DIN/USB, routed per Track with CC121 reset and coalesced callback snapshots. Both sources are selectable on the Mod tab.
+
+- Sample-save failure logs now preserve the failing phase, copied bytes, FatFS file errors and original SD peripheral error before cleanup.
+
+- Sample Edit CHANNEL selection now applies Recorded, Left, Right or Mono Sum consistently to audition, new resident notes and waveform views, with labelled mono traces and waveform cache invalidation.
+
+- Sample Edit stereo-linked zero-crossing Snap and correlated seam checks,
+  plus a 0–20 ms playback loop crossfade shared by resident voices and streamed
+  audition. The overlap shortens the loop period; raw waveforms stay unchanged.
+  Standalone sidecar 1.1 and Project 1.4 persist the setting and read older
+  crossfade-off files. Editing an audition clears old queued PCM before replay.
+  Protocol 7 requires matching firmware on both boards; physical listening
+  and full phase acceptance remain tracked in HV-026.
+
+- Sample Edit now offers standalone Save and Save As: validated WXCF sidecars
+  retain trim/loop/gain/fades and channel metadata; Save As cooperatively copies
+  the complete WAV to a new name without overwriting sources. Fresh standalone
+  loads, Instrument imports and stream opens restore saved defaults, while
+  Project snapshots retain their own edits. Backup recovery and correlated
+  save status are covered by host tests and short/multi-minute two-board
+  save/recall checks; physical recovery, listening and capacity remain open.
+
 - Added melodic rows with four note lanes, musical tick gates including
   explicit holds, callback-clock step/live capture with Off, step and
   half-step quantization, held-pitch erase and Stop cleanup. The confirmed
@@ -556,6 +578,19 @@ versioning and release process.
 
 ### Fixed
 
+- Sample-save SD bus errors now attempt a lower clock after closing job files, retaining 4-bit mode and the failed result for explicit retry. Fixed-clock bench copies fail with a data-CRC error at 25 MHz and pass at 12.5 MHz; remount after the write fault still fails on the bench card (HV-025). No save is automatically replayed.
+
+- Mono sample audition now feeds both stereo outputs instead of only the left output.
+
+- Restore four-bit SD operation starting at 25 MHz, with the existing
+  automatic clock fallback to 12.5 MHz. Negotiation keeps the bus width fixed
+  instead of starting every card on the temporary slow one-bit configuration.
+
+- Sample Edit touch drags now reach the value tile through its fill and knob;
+  touching a tile selects it without moving the strip. Loop-marker drags keep
+  the continuous waveform until release instead of hiding the held handle.
+  Navigation encoder pushes now advance the focused parameter.
+
 - Queue live MIDI/Track presses once per input instead of once per resolved
   layer, and batch routed admission through the prepared voice map. FIFO key
   identities preserve repeated-key, stolen-note and routing-change releases;
@@ -712,6 +747,10 @@ versioning and release process.
   below.
 
 ### Changed
+
+- Keep the roadmap focused on open work and require closing updates to highlight remaining roadmap/backlog tasks; retain completed work in the changelog and validation evidence in the hardware checklist.
+
+- Removed file-backed editing from the roadmap: oversized samples remain available for streamed browser audition; editing requires the complete sample in RAM.
 
 - Place sequencer start/step preparation and transport hot paths in ITCM.
   The eight-Mono profiling capture reduced average callback cost by about 4.3%

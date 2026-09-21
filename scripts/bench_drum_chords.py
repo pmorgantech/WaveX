@@ -167,7 +167,7 @@ def setup(daisy, esp):
         end = min(int(original["frames"]), wanted)
         if chord:
             assert end == wanted, (path, original, wanted)
-        msg(0x3C, "<HBBhIIIIHH", sid, 0, 0, 0, 0, end, 0, end, 1, 5)
+        msg(0x3C, "<HBBhIIIIHHx", sid, 0, 0, 0, 0, end, 0, end, 1, 5)
         applied = daisy.cmd("SAMPLE", sid)
         assert applied["loop"] == "0" and int(applied["end"]) == end, applied
         instrument_op(track, 9 if chord else 4, name)

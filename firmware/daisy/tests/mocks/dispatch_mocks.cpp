@@ -122,7 +122,9 @@ void SetEditParams(uint16_t sample_id,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame,
                    uint16_t fade_in_ms,
-                   uint16_t fade_out_ms) {
+                   uint16_t fade_out_ms,
+                   uint8_t loop_crossfade_ms,
+                   uint8_t channel_mode) {
     WaveX::Test::GetDispatchRecord().sample_edits.push_back(
         WaveX::Protocol::SampleEditMessage(sample_id,
                                            loop_enabled ? 1 : 0,
@@ -133,6 +135,8 @@ void SetEditParams(uint16_t sample_id,
                                            loop_end_frame,
                                            fade_in_ms,
                                            fade_out_ms));
+    WaveX::Test::GetDispatchRecord().sample_edits.back().loop_crossfade_ms = loop_crossfade_ms;
+    WaveX::Test::GetDispatchRecord().sample_edits.back().channel_mode = channel_mode;
 }
 
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m) {
@@ -201,6 +205,15 @@ void OnBankOp(const WaveX::Protocol::BankOpMessage& m) {
 bool ProjectBusy() {
     return WaveX::Test::GetDispatchRecord().project_busy;
 }
+bool SampleFileBusy() {
+    return WaveX::Test::GetDispatchRecord().sample_file_busy;
+}
+void OnSampleSeam(const WaveX::Protocol::SampleSeamRequest& request) {
+    WaveX::Test::GetDispatchRecord().sample_seams.push_back(request);
+}
+void OnSampleFileOp(const WaveX::Protocol::SampleFileOpMessage& request) {
+    WaveX::Test::GetDispatchRecord().sample_file_ops.push_back(request);
+}
 void OnSamplePlayheadRequest(const Protocol::SamplePlayheadRequest& m) {
     WaveX::Test::GetDispatchRecord().playhead_requests.push_back(m);
 }
@@ -230,6 +243,10 @@ void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m) {
 
 void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m) {
     WaveX::Test::GetDispatchRecord().midi_clock_events.push_back(m);
+}
+
+void OnMidiPressure(const WaveX::Protocol::MidiPressureMessage& m) {
+    WaveX::Test::GetDispatchRecord().midi_pressures.push_back(m);
 }
 
 void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {

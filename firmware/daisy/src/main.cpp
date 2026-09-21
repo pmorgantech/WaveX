@@ -434,7 +434,10 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             len = AppendKvInt(reply, sizeof(reply), len, "ls", meta.loop_start);
             len = AppendKvInt(reply, sizeof(reply), len, "le", meta.loop_end);
             len = AppendKvInt(reply, sizeof(reply), len, "fi", meta.fade_in_ms);
-            AppendKvInt(reply, sizeof(reply), len, "fo", meta.fade_out_ms);
+            len = AppendKvInt(reply, sizeof(reply), len, "fo", meta.fade_out_ms);
+            len = AppendKvInt(reply, sizeof(reply), len, "xf", meta.loop_crossfade_ms);
+            len = AppendKvInt(reply, sizeof(reply), len, "channelmode", meta.channel_mode);
+            AppendKvInt(reply, sizeof(reply), len, "wavegen", meta.generation);
         }
     } else if (std::strcmp(c.verb, "SAMPLES") == 0) {
         // n=<count> ids=<comma list> - the WAV registry (MSG_SAMPLE_LOAD ids).
@@ -959,6 +962,7 @@ int main(void) {
         // It follows the deadline-driven streaming refill; a LOAD closes the
         // audition first, while a lightweight PROBE yields between files.
         WaveX::AudioEngine::PumpProjectSession();
+        WaveX::AudioEngine::PumpSampleFile();
         WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
         WaveX::AudioEngine::PumpTrackBinding();

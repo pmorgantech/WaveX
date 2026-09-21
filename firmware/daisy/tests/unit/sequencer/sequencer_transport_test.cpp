@@ -420,18 +420,6 @@ TEST(SequencerTransportTest, MidiStopHaltsScheduler) {
     EXPECT_FALSE(t.IsPlaying());
 }
 
-// ---- MIDI CC forwarding ----
-
-TEST(SequencerTransportTest, MidiCcIsRecorded) {
-    auto t = MakeTransport();
-    EXPECT_EQ(t.CcCount(), 0u);
-    t.OnMidiCc(MidiCcMessage(1 /*modwheel*/, 77, 3));
-    EXPECT_EQ(t.CcCount(), 1u);
-    EXPECT_EQ(t.LastCc(), 1);
-    EXPECT_EQ(t.LastCcValue(), 77);
-    EXPECT_EQ(t.LastCcChannel(), 3);
-}
-
 // ---- Mode fields ----
 
 TEST(SequencerTransportTest, InputModeStoredFromTransport) {

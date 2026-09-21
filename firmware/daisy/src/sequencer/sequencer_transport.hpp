@@ -525,17 +525,6 @@ class SequencerTransport {
         }
     }
 
-    // ---- MIDI CC (MSG_MIDI_CC) ----
-    // Hook for the modulation layer (param-locks-and-modulation.md §6). No
-    // mod matrix exists yet; record the latest value per CC so a future
-    // consumer (and tests) can observe forwarding works end to end.
-    void OnMidiCc(const Protocol::MidiCcMessage& m) {
-        last_cc_ = m.cc;
-        last_cc_value_ = m.value;
-        last_cc_channel_ = m.channel;
-        ++cc_count_;
-    }
-
     // Advance exactly one control tick. In MIDI mode, first advances the
     // follower and syncs the scheduler tempo to its servo-corrected rate.
     // Returns trigger events for this block (see SequencerScheduler::Process).
@@ -718,10 +707,6 @@ class SequencerTransport {
     uint8_t InputMode() const { return input_mode_; }
 
     // MIDI-CC observation (for the not-yet-built mod layer / tests).
-    uint32_t CcCount() const { return cc_count_; }
-    uint8_t LastCc() const { return last_cc_; }
-    uint8_t LastCcValue() const { return last_cc_value_; }
-    uint8_t LastCcChannel() const { return last_cc_channel_; }
 
     // Direct core access for tests that want to assert on the underlying
     // scheduler/follower state.
@@ -918,11 +903,6 @@ class SequencerTransport {
     bool armed_ = false;  // MIDI mode: armed or externally paused
     uint8_t input_mode_ = 0;
     uint8_t quantize_ = 0;
-
-    uint32_t cc_count_ = 0;
-    uint8_t last_cc_ = 0;
-    uint8_t last_cc_value_ = 0;
-    uint8_t last_cc_channel_ = 0;
 };
 
 }  // namespace Sequencer

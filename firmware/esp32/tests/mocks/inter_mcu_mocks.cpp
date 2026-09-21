@@ -96,6 +96,11 @@ void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage&
     ++cap.project_status_calls;
     cap.project_status = status;
 }
+void inter_mcu_store_sample_file_status(const WaveX::Protocol::SampleFileStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.sample_file_status_calls;
+    cap.sample_file_status = status;
+}
 void inter_mcu_store_card_state(const WaveX::Protocol::CardStateMessage&) {}
 
 void inter_mcu_store_mix_state(const WaveX::Protocol::MixStateMessage&) {}
@@ -106,12 +111,12 @@ void inter_mcu_store_track_state(const WaveX::Protocol::TrackStateMessage& state
     cap.track_state = state;
 }
 void inter_mcu_store_key_map(const WaveX::Protocol::InstKeyMapSyncMessage& state) {
-    auto& cap = WaveX::Test::GetInterMcuCapture();
+    auto& cap = GetInterMcuCapture();
     ++cap.key_map_calls;
     cap.key_map = state;
 }
 void inter_mcu_store_pad_sound(const WaveX::Protocol::InstPadSoundSyncMessage& state) {
-    auto& cap = WaveX::Test::GetInterMcuCapture();
+    auto& cap = GetInterMcuCapture();
     ++cap.pad_sound_calls;
     cap.pad_sound = state;
 }
@@ -182,4 +187,10 @@ void inter_mcu_store_seq_notes(const WaveX::Protocol::SeqNotesMessage& m) {
     auto& c = GetInterMcuCapture();
     ++c.seq_notes_calls;
     c.seq_notes = m;
+}
+
+void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.sample_seam_status_calls;
+    cap.sample_seam_status = status;
 }

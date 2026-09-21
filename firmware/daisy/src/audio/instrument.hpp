@@ -220,6 +220,8 @@ struct SampleRef {
     uint32_t loop_end = 0;  // exclusive; 0 => end_frame
     uint16_t fade_in_ms = 0;
     uint16_t fade_out_ms = 0;
+    uint8_t loop_crossfade_ms = 0;
+    uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
     float gain_mul = 1.0f;  // linear; composes with the zone's gain
     bool valid() const { return data != nullptr && frames >= 2; }
 };
@@ -309,6 +311,8 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.loop_end = zone.loop_end ? zone.loop_end : ref.loop_end;
     p.fade_in_ms = ref.fade_in_ms;
     p.fade_out_ms = ref.fade_out_ms;
+    p.loop_crossfade_ms = ref.loop_crossfade_ms;
+    p.channel_mode = ref.channel_mode;
 
     for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i) {
         const auto& lfo = ins.lfo[i];

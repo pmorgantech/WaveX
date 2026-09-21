@@ -80,6 +80,8 @@ class WaveformView : public EnvelopeSink {
                      uint16_t count,
                      uint8_t channels) override;
     void clear() override;
+    // UI task; names a single trace after the selected source channel mapping.
+    void setMonoLabel(uint8_t mode);
     void setPlaybackPosition(bool playing, uint32_t frame, uint32_t start, uint32_t end) override;
 
    private:
@@ -122,6 +124,7 @@ class WaveformView : public EnvelopeSink {
     int16_t colMin(uint8_t ch, uint16_t i) const { return col_min_[ch * columns_ + i]; }
     int16_t colMax(uint8_t ch, uint16_t i) const { return col_max_[ch * columns_ + i]; }
 
+    uint8_t mono_label_ = 0;
     lv_obj_t* obj_ = nullptr;
     lv_obj_t* playhead_ = nullptr;
     uint16_t columns_ = kFallbackColumns;

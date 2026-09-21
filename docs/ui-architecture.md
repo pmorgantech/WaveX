@@ -109,6 +109,20 @@ then Select; Cancel leaves the current sample unchanged. Selection changes only
 the shared editor sample, never a Track binding. The editor publishes pending
 marker edits and stops its audition before leaving, then recreates the waveform
 for the selected sample on return. Physical checks are HV-017.
+Shift → Save/Save As opens the correlated standalone save page. Save As uses
+an on-screen basename keyboard and copies the complete WAV plus edits to the
+source folder; Save only publishes the sidecar. Polling continues independently
+of copy length, stale status disables writes, and reconnects never replay a
+mutation. See [the save model](features/offline-sample-editing.md#standalone-edits-as-built)
+and HV-025 for recovery and remaining hardware checks.
+
+Sample Edit has eight paged controls, including a 0–20 ms Crossfade card.
+Shift's third key is Snap for a focused marker, Gain 0dB for gain, and Check
+Seam for fade/crossfade controls. Snap/check replies are correlated value
+snapshots, never LVGL callbacks from the receive task. Pending snap operations
+hold further edits and time out without replay. The seam view is explicitly
+raw L/R; the numeric readback accounts for playback crossfade. See
+[the edit policy](features/offline-sample-editing.md#stereo-markers-seam-checks-and-playback-crossfade).
 
 The header status strip owns its LVGL timer and reads meter snapshots from
 `inter_mcu_get_meter_data()`. There is no second `UITask` meter timer.

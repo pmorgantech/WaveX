@@ -171,6 +171,20 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 WaveX::Protocol::IsValidBankStatus(message))
                 inter_mcu_store_bank_status(message);
         } break;
+        case WaveX::Protocol::MSG_SAMPLE_SEAM_STATUS: {
+            WaveX::Protocol::SampleSeamStatus message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SAMPLE_SEAM_STATUS") &&
+                WaveX::Protocol::IsValidSampleSeamStatus(message))
+                inter_mcu_store_sample_seam_status(message);
+        } break;
+        case WaveX::Protocol::MSG_SAMPLE_FILE_STATUS: {
+            WaveX::Protocol::SampleFileStatusMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SAMPLE_FILE_STATUS") &&
+                WaveX::Protocol::IsValidSampleFileStatus(message))
+                inter_mcu_store_sample_file_status(message);
+        } break;
         case WaveX::Protocol::MSG_PROJECT_STATUS: {
             WaveX::Protocol::ProjectStatusMessage message;
             if (payload_len == sizeof(message) &&

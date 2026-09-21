@@ -64,6 +64,7 @@ static void HandleSeqPatternRequestMessage(const uint8_t* payload, size_t payloa
 static void HandleSeqPatternOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size);
+static void HandleMidiPressureMessage(const uint8_t* payload, size_t payload_size);
 static void HandleInstrumentOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 
@@ -172,6 +173,28 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 #endif
         return;
     }
+    if (msg_type == MSG_SAMPLE_SEAM_REQ) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SampleSeamRequest request;
+        if (payload && payload_size == sizeof(request)) {
+            memcpy(&request, payload, sizeof(request));
+            if (IsValidSampleSeamRequest(request))
+                WaveX::AudioEngine::OnSampleSeam(request);
+        }
+#endif
+        return;
+    }
+    if (msg_type == MSG_SAMPLE_FILE_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SampleFileOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSampleFileOp(request))
+                AudioEngine::OnSampleFileOp(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_PROJECT_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         ProjectOpMessage request;
@@ -190,10 +213,15 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         std::memcpy(&transport, payload, sizeof(transport));
         project_stop = transport.command == SEQ_TRANSPORT_STOP;
     }
+    // Sample saves leave resident voices sounding and do not change routing.
+    // Keep expression/reset delivery live so a released wheel cannot stick.
+    const bool sample_expression = !AudioEngine::ProjectBusy() && !AudioEngine::BankBusy() &&
+                                   (msg_type == MSG_MIDI_CC || msg_type == MSG_MIDI_PRESSURE);
     // Project/Bank ownership freezes edits, notes and competing SD operations.
     // Releases and readback remain available; polling cannot replay a job.
-    if ((AudioEngine::ProjectBusy() || AudioEngine::BankBusy()) && !project_stop &&
-        msg_type != MSG_HEARTBEAT && msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
+    if ((AudioEngine::ProjectBusy() || AudioEngine::BankBusy() || AudioEngine::SampleFileBusy()) &&
+        !project_stop && !sample_expression && msg_type != MSG_HEARTBEAT &&
+        msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
         msg_type != MSG_MIX_STATE_REQ && msg_type != MSG_TRACK_STATE_REQ &&
         msg_type != MSG_SEQ_PATTERN_SYNC && msg_type != MSG_TRACK_BINDING_REQ &&
         msg_type != MSG_MIDI_CLOCK_EVENT)
@@ -377,6 +405,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_MIDI_CLOCK_EVENT:
             HandleMidiClockEventMessage(payload, payload_size);
+            break;
+        case MSG_MIDI_PRESSURE:
+            HandleMidiPressureMessage(payload, payload_size);
             break;
         case MSG_MIDI_CC:
             HandleMidiCcMessage(payload, payload_size);
@@ -684,7 +715,9 @@ static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size)
                                       msg.loop_start,
                                       msg.loop_end,
                                       msg.fade_in_ms,
-                                      msg.fade_out_ms);
+                                      msg.fade_out_ms,
+                                      msg.loop_crossfade_ms,
+                                      msg.channel_mode);
 }
 
 static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size) {
@@ -915,6 +948,16 @@ static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_s
 #endif
 }
 
+static void HandleMidiPressureMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::MidiPressureMessage))
+        return;
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::MidiPressureMessage*>(payload);
+    if (WaveX::Protocol::IsValidMidiPressure(*msg))
+        WaveX::AudioEngine::OnMidiPressure(*msg);
+#endif
+}
+
 static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::MidiCcMessage)) {
         UART_LOGE("daisy_msg", "MIDI_CC payload too small (%d)", (int)payload_size);
@@ -922,7 +965,8 @@ static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size) {
     }
 #if WAVEX_AUDIO_ENGINE_ENABLED
     const auto* msg = reinterpret_cast<const WaveX::Protocol::MidiCcMessage*>(payload);
-    WaveX::AudioEngine::OnMidiCc(*msg);
+    if (WaveX::Protocol::IsValidMidiCc(*msg))
+        WaveX::AudioEngine::OnMidiCc(*msg);
 #endif
 }
 

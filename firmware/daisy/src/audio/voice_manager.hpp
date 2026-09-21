@@ -1,4 +1,7 @@
 #pragma once
+
+#include "audio/sample_loop.hpp"
+#include "midi_modulation.hpp"
 #include "voice_lfo.hpp"
 
 // Polyphonic RAM sample player with a configured mono render-channel budget.
@@ -104,6 +107,7 @@ struct VoiceAmpParams {
 struct VoiceSampleState {
     const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
     uint32_t sample_frames = 0;
+    uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
     uint8_t src_channels = 1;  // native PCM interleave stride
     bool stereo = false;       // preserve both source channels for this note
     PlaybackPhase phase;       // exact frame + fractional playback position
@@ -127,6 +131,7 @@ struct VoiceSampleState {
     // marker move change the envelope, or an envelope change move the de-click.
     uint32_t fade_in_frames = 0;
     uint32_t fade_out_frames = 0;
+    uint32_t crossfade_frames = 0, crossfade_step = 0;
 
     void SetIncrement(float rate) {
         increment = rate;
@@ -249,11 +254,13 @@ struct VoiceSampleParams {
     float dry_pitch_ratio = 1.0f, dry_level = 1.0f;
     uint8_t oscillator = 0xFF, key_note = 60;
     bool keytrack = true, drum = false;
-    bool mono = false;  // force (L+R)/2; false preserves native stereo
+    bool mono = false;  // downmix after the sample channel selection
+    uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
     uint32_t start_frame = 0, end_frame = 0;
     bool loop = false;
     uint32_t loop_start = 0, loop_end = 0;
     uint16_t fade_in_ms = 0, fade_out_ms = 0;
+    uint8_t loop_crossfade_ms = 0;
 };
 struct VoiceTriggerParams : VoiceSampleParams {
     double sequence_gate_tick = 0;
@@ -1147,8 +1154,8 @@ class VoiceManager {
      * (§3), so two voices from different slots can be modulated completely
      * differently in the same tick.
      *
-     * `global` carries this tick's engine-wide sources (LFO1/2, macros,
-     * modwheel/aftertouch) shared by every voice. Per-trigger sources
+     * `global` carries this tick's engine-wide sources (global LFO, macros)
+     * shared by every voice. MIDI expression is Track-scoped. Per-trigger sources
      * (velocity/note/random) were already sampled into the voice at
      * Trigger() and are substituted in here, not read from `global`.
      * SRC_ENV_FILTER is likewise per-voice: `block_size` advances each
@@ -1168,12 +1175,17 @@ class VoiceManager {
     WAVEX_ITCM_CODE_NAMED("voice.TickModulation")
     void TickModulation(const ModSlotResolver& resolver,
                         const ModSources& global,
-                        uint32_t block_size) {
+                        uint32_t block_size,
+                        const MidiModulationSnapshot* midi = nullptr) {
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
             const ModSlot* slots = resolver.Get(v.track);
             ModSources sources = global;
+            if (midi && v.track < midi->size()) {
+                sources.modwheel = (*midi)[v.track].wheel;
+                sources.aftertouch = (*midi)[v.track].pressure;
+            }
             sources.velocity = v.mod_velocity;
             sources.note = v.mod_note;
             sources.random = v.mod_random;
@@ -1206,6 +1218,8 @@ class VoiceManager {
         v.sample_frames = params.sample_frames;
         v.src_channels = (params.channels == 2) ? 2 : 1;
         v.stereo = SourceChannels(params) == 2;
+        v.channel_mode =
+            params.channels == 2 ? params.channel_mode : Protocol::SAMPLE_CH_AS_RECORDED;
         v.source_level = params.source_level;
         v.dry_level = params.dry_level;
         v.oscillator = params.oscillator;
@@ -1234,7 +1248,17 @@ class VoiceManager {
         // before the region boundary it exists to cover.
         const uint32_t src_rate = params.sample_rate_hz ? params.sample_rate_hz : sample_rate_;
         v.fade_in_frames = FadeFrames(params.fade_in_ms, src_rate);
-        v.fade_out_frames = FadeFrames(params.fade_out_ms, src_rate);
+        v.crossfade_frames =
+            v.loop ? SampleLoop::CrossfadeFrames(
+                         params.loop_crossfade_ms, src_rate, v.loop_end - v.loop_start)
+                   : 0;
+        v.crossfade_step = SampleLoop::RampStep(v.crossfade_frames);
+        if (v.crossfade_frames) {
+            const uint32_t resume = v.loop_start + v.crossfade_frames;
+            v.fade_in_frames =
+                std::min(v.fade_in_frames, resume > v.start_frame ? resume - v.start_frame : 0u);
+        }
+        v.fade_out_frames = v.crossfade_frames ? 0 : FadeFrames(params.fade_out_ms, src_rate);
 
         // Pitch: 12-TET ratio relative to the sample's recorded root note,
         // times native-rate/engine-rate compensation (a 44.1kHz sample on a
@@ -1258,19 +1282,20 @@ class VoiceManager {
                                                                 uint32_t& frame,
                                                                 bool& ended) {
         const uint32_t last_valid_frame = v.end_frame - 1;
-        const uint32_t loop_len = v.loop_end - v.loop_start;
+        const uint32_t loop_resume = v.loop_start + v.crossfade_frames;
+        const uint32_t loop_len = v.loop_end - loop_resume;
         bool holding_release_tail = false;
         if (v.loop && v.phase.Frame() >= v.loop_end) {
             // Wrap by the loop length so the fractional phase (and
             // with it the exact loop period/pitch) is preserved. The
-            // window is [loop_start, loop_end): its final frame does
-            // get rendered, interpolating toward loop_start below.
+            // repeating window is [loop_resume, loop_end): its final
+            // frame interpolates toward the head after the overlap.
             v.phase.SubtractFrames(loop_len);
-            if (v.phase.Frame() >= v.loop_end || v.phase.Frame() < v.loop_start) {
+            if (v.phase.Frame() >= v.loop_end || v.phase.Frame() < loop_resume) {
                 // Phase far outside the window (start_frame beyond
                 // loop_end, or increment > loop length): snap rather
                 // than loop an unbounded number of subtractions here.
-                v.phase.SetFrame(v.loop_start);
+                v.phase.SetFrame(loop_resume);
             }
         } else if (!v.loop && v.phase.Frame() >= last_valid_frame) {
             // Reached the end of a non-looping sample: start the
@@ -1301,11 +1326,11 @@ class VoiceManager {
             idx0 = v.phase.Frame();
             if (v.loop && idx0 + 1 >= v.loop_end && idx0 >= v.loop_start) {
                 // Circular seam: the loop window's final frame
-                // interpolates toward loop_start, not toward the
+                // interpolates toward loop_resume, not toward the
                 // frame after the window (which may be trimmed-off
                 // audio, or out of bounds when loop_end ==
                 // sample_frames).
-                idx1 = v.loop_start;
+                idx1 = loop_resume;
             } else {
                 if (idx0 >= v.sample_frames - 1)
                     idx0 = v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
@@ -1315,6 +1340,38 @@ class VoiceManager {
         }
         frame = idx0;
         ended = holding_release_tail;
+        const bool picked = v.channel_mode == Protocol::SAMPLE_CH_LEFT ||
+                            v.channel_mode == Protocol::SAMPLE_CH_RIGHT;
+        const uint8_t pick = v.channel_mode == Protocol::SAMPLE_CH_RIGHT ? 1 : 0;
+        if (v.crossfade_frames && (idx0 + 1 >= v.loop_end - v.crossfade_frames)) {
+            const auto read = [&](uint32_t at, uint8_t channel) {
+                const int16_t tail = v.sample[at * v.src_channels + channel];
+                if (at < v.loop_end - v.crossfade_frames)
+                    return tail;
+                const uint32_t offset = at - (v.loop_end - v.crossfade_frames);
+                const int16_t head = v.sample[(v.loop_start + offset) * v.src_channels + channel];
+                return SampleLoop::Mix(
+                    tail, head, SampleLoop::Weight(offset, v.crossfade_frames, v.crossfade_step));
+            };
+            const float l0 = read(idx0, pick) * (1.f / 32768.f);
+            const float l1 = read(idx1, pick) * (1.f / 32768.f);
+            const float left = l0 + (l1 - l0) * frac;
+            if (v.src_channels == 1 || picked)
+                return {left, left};
+            const float r0 = read(idx0, 1) * (1.f / 32768.f);
+            const float r1 = read(idx1, 1) * (1.f / 32768.f);
+            const float right = r0 + (r1 - r0) * frac;
+            if (v.stereo)
+                return {left, right};
+            const float mono = (left + right) * .5f;
+            return {mono, mono};
+        }
+        if (picked) {
+            const float s0 = v.sample[idx0 * 2 + pick] * (1.f / 32768.f);
+            const float s1 = v.sample[idx1 * 2 + pick] * (1.f / 32768.f);
+            const float mono = s0 + (s1 - s0) * frac;
+            return {mono, mono};
+        }
         if (v.src_channels == 2) {
             const float l0 = static_cast<float>(v.sample[idx0 * 2]) / 32768.f;
             const float r0 = static_cast<float>(v.sample[idx0 * 2 + 1]) / 32768.f;
@@ -1339,7 +1396,8 @@ class VoiceManager {
         return SourceChannels(params) == 2 || SourceChannels(params.secondary) == 2 ? 2 : 1;
     }
     static uint8_t SourceChannels(const VoiceSampleParams& source) {
-        return source.sample && source.sample_frames >= 2 && source.channels == 2 && !source.mono
+        return source.sample && source.sample_frames >= 2 && source.channels == 2 && !source.mono &&
+                       source.channel_mode == Protocol::SAMPLE_CH_AS_RECORDED
                    ? 2
                    : 1;
     }

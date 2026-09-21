@@ -26,6 +26,7 @@ struct ProjectSample {
     uint8_t channels = 0, bits_per_sample = 0;
     bool loop_enabled = false;
     uint8_t channel_mode = Protocol::SAMPLE_CH_AS_RECORDED;
+    uint8_t loop_crossfade_ms = 0;
 };
 struct ProjectTrack {
     Allocation::Override allocation;

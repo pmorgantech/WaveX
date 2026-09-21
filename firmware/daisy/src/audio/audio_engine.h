@@ -80,6 +80,7 @@ void GetMeters(BlockMeters& out);
 // item 3): a region that starts mid-waveform starts on a step, and a step is a
 // click. Clamped to the region length here, since only the backend knows what
 // the region ended up being after its own clamping.
+void OnSampleSeam(const WaveX::Protocol::SampleSeamRequest& request);
 void SetEditParams(uint16_t sample_id,
                    bool loop_enabled,
                    int16_t gain_db_x10,
@@ -88,7 +89,9 @@ void SetEditParams(uint16_t sample_id,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame,
                    uint16_t fade_in_ms,
-                   uint16_t fade_out_ms);
+                   uint16_t fade_out_ms,
+                   uint8_t loop_crossfade_ms = 0,
+                   uint8_t channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED);
 
 // Read position of the streaming audition within its region, in frames.
 // Runs ahead of the audible position by the ring + filled SD slots (~42 ms):
@@ -211,6 +214,9 @@ void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 // Load the persisted calibration table (call once at boot, after SD mount).
 void LoadCvCalFromSd();
 bool StorageJobBusy();
+bool SampleFileBusy();
+void OnSampleFileOp(const WaveX::Protocol::SampleFileOpMessage& request);
+void PumpSampleFile();
 bool ProjectBusy();
 bool BankBusy();
 #if WAVEX_DEBUG_HARNESS_ENABLED
@@ -248,6 +254,7 @@ void OnSeqFileOp(const WaveX::Protocol::SeqFileOpMessage& request);
 void OnSeqPatternRequest(const WaveX::Protocol::SeqPatternRequestMessage& request);
 void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);
 void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m);
+void OnMidiPressure(const WaveX::Protocol::MidiPressureMessage& m);
 void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
 
 #if WAVEX_DEBUG_HARNESS_ENABLED

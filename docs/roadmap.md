@@ -1,18 +1,17 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-20.
+**Last updated:** 2026-09-21.
 
 This document tracks remaining implementation, open decisions and phase gates.
 Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-**Next software work:** The remaining Phase 2.5 tasks below, while panel wiring
-is pending. MIDI admission identity, saved polyphony/held-key controls and
-melodic implementation are complete; their remaining physical checks stay in
-the validation checklist. Callback capacity remains open, including the new
-melodic pressure results below.
+**Next software work:** resolve SD write-error recovery, then continue the
+remaining Phase 2.5 tasks below while panel wiring is pending. Keep the
+[UI capture fixes](#ui-capture-follow-up) in the frontend backlog. Callback
+capacity and physical acceptance remain open; follow the checkpoint below.
 
 ## Contents
 
@@ -28,15 +27,23 @@ melodic pressure results below.
 
 ## Phase 1.5 — Sample editing
 
-1. Persist standalone marker/gain edits with the WXCF sidecar model; settle
-   Save As naming and sidecar versus render-to-new-file behavior.
-2. Define partial-load behavior for samples too large for resident RAM.
-3. Finish marker interaction: loop seam verification, zero-crossing snap
-   protocol/policy for stereo, and playback-time loop crossfade.
-4. Reconcile streaming/RAM channel behavior and expose `channel_mode` in the
-   editor, including a label for one-channel views.
+1. Resolve SD recovery after a 25 MHz write CRC and verify explicit retry.
+   Complete standalone WXCF Save/Save As physical recovery, listening and
+   loaded-audio checks ([HV-025](hardware-validation.md#hv-025--standalone-sample-saves)).
+   Destructive rendering remains Phase 4.
+2. Complete stereo snap/seam and playback-crossfade physical acceptance,
+   including listening and full callback/soak checks
+   ([HV-026](hardware-validation.md#hv-026--stereo-snap-seams-and-crossfade)).
+3. Complete Recorded/Left/Right/Mono Sum physical acceptance: measure
+   streaming/resident parity, listen and soak
+   ([HV-027](hardware-validation.md#hv-027--sample-playback-channel-selection)).
 
-**Gate:** edit and audition a multi-minute WAV, save, reboot, reload, and hear
+File-backed editing was removed from scope by user decision on 2026-09-21.
+[Resident admission remains all-or-nothing](features/offline-sample-editing.md#oversized-samples):
+oversized files can stream for browser audition, but editing requires the
+complete sample in RAM.
+
+**Gate:** edit and audition a resident multi-minute WAV, save, reboot, reload, and hear
 that region without a UI freeze.
 
 ## Phase 2 — Groovebox core: sequencer and pads
@@ -48,19 +55,12 @@ that region without a UI freeze.
 3. Complete panel integration and MIDI synchronization below.
 4. Complete the callback capacity and one-hour soak requirements below.
 
-Melodic notes and live recording are implemented; Phase 2.5 retains their
-remaining hardware acceptance checks.
-
 ### 2.C — Callback capacity checkpoint
 
 Use [callback-performance-log.md](callback-performance-log.md) for measured
-images and workloads. Same-frame admission now avoids work for layers stolen
-before rendering. The 16-Track/four-layer pressure preset passes 605.86 seconds
-and ten Pattern cycles at 66.0025% peak (66.8390% including setup), with zero
-stream underruns. The earlier 74.5896% mixed-channel transition remains
-unresolved; a ten-minute rapid mix rotation peaked at 59.9650% with zero stream
-underruns and did not reproduce it. Repeat the complete
-mixed-channel one-hour soak on the final image and retain HV-019 as partial.
+images and workloads. Investigate the unresolved 74.5896% mixed-channel
+transition and repeat the complete mixed-channel one-hour soak on the final
+image. Keep HV-019 partial; shorter passing runs do not close this gate.
 
 **Continuation decision, 2026-09-20:** the user authorized proceeding after this
 measured capacity pass while retaining unresolved findings here. Continue the
@@ -104,29 +104,22 @@ panel; remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 Continue from the [Track/Instrument/Bank model](features/track-and-patch-model.md),
 subject to the callback checkpoint:
 
-1. **Polyphony validation (HV-019).** Saved Instrument/Kit policy, Track
-   inheritance/overrides, old-file defaults, Apply/Revert, controls and Mono
-   held-key fallback are implemented. Complete audible-steal/retrigger,
-   physical MIDI latency and extended final-image pressure checks. Short saved-policy
-   screens pass at 66.3496% Poly / 69.5417% Mono-fallback peaks; the latter leaves
-   little room before the current continuation threshold. Compact MIDI
-   admission removed the reproduced 540 queue refusals in the matched short
-   screen; arbitrary overload remains bounded, not guaranteed lossless.
-   Per-pad policy refinements remain proposed. See the
+1. **Polyphony validation (HV-019).** Complete audible-steal/retrigger,
+   physical MIDI latency and extended final-image pressure checks. The short
+   Mono-fallback screen reached 69.5417%, leaving little room below the
+   continuation threshold. Per-pad policy refinements remain proposed; see the
    [allocation model](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy).
-2. **Melodic validation (HV-024).** Four lanes, musical gate lengths/holds,
-   step/live recording, erase, editor and versioned persistence are implemented.
-   Complete the [melodic hardware gate](hardware-validation.md#hv-024--melodic-sequencing),
+2. **Melodic validation (HV-024).** Complete the
+   [melodic hardware gate](hardware-validation.md#hv-024--melodic-sequencing),
    including physical MIDI, listening and the recorded progression soak.
-   **Capacity deferred:** short dual-oscillator/ladder/stream/file screens reached
-   77.1698% peak for eight melodic notes on the final source (44.1541% average),
-   and an earlier 94.6304% peak for 32-note overload.
-   Both exceed the current continuation threshold; zero sampled stream
-   underruns does not close this callback gate. See the
+   **Capacity deferred:** investigate the 77.1698% eight-note peak and earlier
+   94.6304% 32-note overload peak. Both exceed the continuation threshold;
+   zero sampled stream underruns does not close this callback gate. See the
    [DWT evidence](callback-performance-log.md#melodic-chord-pressure--2026-09-20).
-3. **Remaining modulation.** Add MIDI CC/channel-pressure forwarding,
-   additional destinations/UI and live lock recording. Analog/group lock
-   lifetimes need a separate ownership design.
+3. **Remaining modulation.** Complete physical CC1/channel-pressure acceptance
+   ([HV-028](hardware-validation.md#hv-028--midi-expression)). Add further
+   destinations/UI and live lock recording. Analog/group lock lifetimes need
+   a separate ownership design.
 4. **Sampling/recording v1 and arpeggiator.** Rebuild recording against the
    voice/streaming architecture with fixed allocations outside the callback.
    Add admission-controlled concurrent streamed voices; the current SD/ring
@@ -171,7 +164,7 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–023. Keep partial/deferred checks open
+image identities and results for HV-001–028. Keep partial/deferred checks open
 until all acceptance criteria pass. Complete the following validation work:
 
 | Area | Remaining verification |
@@ -220,6 +213,17 @@ Use HV-001–010 for storage, audio and composition checks; Scenes remain Phase 
 
 These follow-ups retain their phase dependencies. Unscheduled ideas are not
 accepted designs or permission to expand the current audio workload.
+
+### UI capture follow-up
+
+The 2026-09-21 framebuffer review found weak contrast in Pad Map sample-picking
+and Save copy/Rename overlays (default bright controls and dark explanatory
+text), plus clipping of the Songs “Play from here” softkey. Apply the shared
+theme and fit the label, then recapture these views. Diagnostics / MIDI also
+still describes the sequencer as unimplemented; update that stale hint. The
+Main Menu list also disables scrolling, leaving its bottom entries off screen
+at eight items; retain visible touch/encoder access to every entry. Evidence is in
+`logs/ui-pages-20260921/index.html`; physical panel appearance remains unverified.
 
 ### Sampler and synth architecture references
 
@@ -314,9 +318,8 @@ Use [SPI notes](spi-notes.md#verification-and-remaining-gates) for evidence and
 
 Bound SD CRC recovery so the foreground cannot stall beyond the audio ring's
 coverage: choose pause/recover, abort or additional prebuffer. Fault-inject the
-choice and measure ring low-water and service latency. The absolute retry cursor
-now preserves trimmed regions/loops; verify it under injected read failures at
-HV-023 before claiming recovery acceptance.
+choice and measure ring low-water and service latency. Verify the absolute retry cursor for trimmed regions/loops under injected
+read failures at HV-023 before claiming recovery acceptance.
 
 ### Memory and image size
 

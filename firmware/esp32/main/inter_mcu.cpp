@@ -548,7 +548,9 @@ esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      uint32_t loop_start,
                                      uint32_t loop_end,
                                      uint16_t fade_in_ms,
-                                     uint16_t fade_out_ms) {
+                                     uint16_t fade_out_ms,
+                                     uint8_t loop_crossfade_ms,
+                                     uint8_t channel_mode) {
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -561,6 +563,8 @@ esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                            loop_end,
                                            fade_in_ms,
                                            fade_out_ms);
+    msg.loop_crossfade_ms = loop_crossfade_ms;
+    msg.channel_mode = channel_mode;
     int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_EDIT_SET, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
@@ -1187,6 +1191,21 @@ esp_err_t inter_mcu_send_mix_op(uint8_t op, uint8_t track, uint16_t value) {
                : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_midi_cc(const WaveX::Protocol::MidiCcMessage& message) {
+    if (!WaveX::Protocol::IsValidMidiCc(message))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_MIDI_CC, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+esp_err_t inter_mcu_send_midi_pressure(const WaveX::Protocol::MidiPressureMessage& message) {
+    if (!WaveX::Protocol::IsValidMidiPressure(message))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_MIDI_PRESSURE, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_midi_program(const WaveX::Protocol::MidiProgramMessage& message) {
     if (!WaveX::Protocol::IsValidMidiProgram(message))
         return ESP_ERR_INVALID_ARG;
@@ -1670,6 +1689,12 @@ bool inter_mcu_get_track_state(WaveX::Protocol::TrackStateMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_sample_seam_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SampleSeamStatus s_sample_seam_status;
+bool s_sample_seam_valid = false;
+portMUX_TYPE s_sample_file_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SampleFileStatusMessage s_sample_file_status;
+bool s_sample_file_valid = false;
 portMUX_TYPE s_project_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::ProjectStatusMessage s_project_status;
 bool s_project_valid = false;
@@ -1681,6 +1706,56 @@ esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage& req
     return send_link_message(WaveX::Protocol::MSG_PROJECT_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
+}
+esp_err_t inter_mcu_send_sample_seam_request(const WaveX::Protocol::SampleSeamRequest& request) {
+    if (!WaveX::Protocol::IsValidSampleSeamRequest(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SAMPLE_SEAM_REQ, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus& status) {
+    if (!WaveX::Protocol::IsValidSampleSeamStatus(status))
+        return;
+    taskENTER_CRITICAL(&s_sample_seam_lock);
+    s_sample_seam_status = status;
+    s_sample_seam_valid = true;
+    taskEXIT_CRITICAL(&s_sample_seam_lock);
+}
+bool inter_mcu_get_sample_seam_status(WaveX::Protocol::SampleSeamStatus* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_sample_seam_lock);
+    const bool valid = s_sample_seam_valid;
+    if (valid)
+        *out = s_sample_seam_status;
+    taskEXIT_CRITICAL(&s_sample_seam_lock);
+    return valid;
+}
+esp_err_t inter_mcu_send_sample_file_op(const WaveX::Protocol::SampleFileOpMessage& request) {
+    if (!WaveX::Protocol::IsValidSampleFileOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SAMPLE_FILE_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_sample_file_status(const WaveX::Protocol::SampleFileStatusMessage& status) {
+    if (!WaveX::Protocol::IsValidSampleFileStatus(status))
+        return;
+    taskENTER_CRITICAL(&s_sample_file_lock);
+    s_sample_file_status = status;
+    s_sample_file_valid = true;
+    taskEXIT_CRITICAL(&s_sample_file_lock);
+}
+bool inter_mcu_get_sample_file_status(WaveX::Protocol::SampleFileStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_sample_file_lock);
+    const bool valid = s_sample_file_valid;
+    if (valid)
+        *out = s_sample_file_status;
+    taskEXIT_CRITICAL(&s_sample_file_lock);
+    return valid;
 }
 void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage& status) {
     using namespace WaveX::Protocol;

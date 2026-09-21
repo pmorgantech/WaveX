@@ -56,6 +56,7 @@ set(COMPONENT_SRCS
     "pages/ui_cv_cal_page.cpp"
     "pages/ui_storage_page.cpp"
     "pages/ui_sample_edit_page.cpp"
+    "pages/ui_sample_file_page.cpp"
     "styles/ui_theme.cpp"
     "fonts/wavex_mono_14.c"
     "fonts/wavex_mono_18.c"

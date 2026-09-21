@@ -216,3 +216,13 @@ the schema 1.2 encoding. The file-size limit is 8 MiB; full-capacity Project
 round trips and per-Advance I/O bounds are host-tested. Two live transaction
 buffers can consume about 10.6 MiB of the shared SDRAM arena; allocation failure
 must preserve the current session rather than evicting its dependencies.
+
+### Sample loop crossfade (schema 1.4)
+
+Project 1.4 retains each sample's bounded playback `loop_crossfade_ms` in the
+versioned sample-edit record. Earlier sample chunks must have the former
+reserved bytes zero and restore crossfade off. Runtime IDs and PCM remain
+outside the edit record. Recall applies the captured setting before preparing
+voice snapshots and does not adopt a newer external sidecar. See
+[stereo sample editing](offline-sample-editing.md#stereo-markers-seam-checks-and-playback-crossfade)
+for overlap and loop-period semantics.

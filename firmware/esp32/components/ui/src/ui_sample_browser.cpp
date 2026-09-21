@@ -833,6 +833,7 @@ void UISampleBrowser::serviceWaveform() {
     if (sample_id != shown_sample_id_ || meta.generation != shown_generation_) {
         shown_sample_id_ = sample_id;
         shown_generation_ = meta.generation;
+        waveform_->setMonoLabel(meta.channels == 1 ? 0 : meta.channel_mode);
         envelope_panel_.setWindow(0, 0, meta.total_frames);
         envelope_panel_.setSample(sample_id, meta.generation, meta.total_frames);
     }
@@ -1614,9 +1615,8 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         // A refusal, not an operation: show() would spin over it and then,
         // when its timeout fired, rewrite it as "No response from backend".
         BusyOverlay::notice("Sample will not fit", warn);
-        // Partial load would need a length field on MSG_SAMPLE_LOAD and a
-        // truncating reader on the Daisy - roadmap Phase 1.5.5. Refusing with
-        // the numbers on screen beats a failed load with no explanation.
+        // Editing requires the complete resident sample. Never truncate or
+        // evict another Track implicitly to make this load fit.
         updateStatus("Error: sample too large for free sample RAM");
         return false;
     }

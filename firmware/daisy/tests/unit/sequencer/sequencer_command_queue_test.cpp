@@ -19,8 +19,8 @@ TEST(SequencerCommandQueueTest, PreservesCommandOrderAndPayload) {
     first.transport =
         SeqTransportMessage(SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12345, 0);
     SequencerCommand second;
-    second.type = SequencerCommandType::MidiCc;
-    second.midi_cc = WaveX::Protocol::MidiCcMessage(74, 99, 3);
+    second.type = SequencerCommandType::MidiClock;
+    second.midi_clock = WaveX::Protocol::MidiClockEventMessage(0, 1, 99, 100, 3);
 
     ASSERT_TRUE(queue.Push(first));
     ASSERT_TRUE(queue.Push(second));
@@ -30,10 +30,10 @@ TEST(SequencerCommandQueueTest, PreservesCommandOrderAndPayload) {
     EXPECT_EQ(received.type, SequencerCommandType::Transport);
     EXPECT_EQ(received.transport.tempo_bpm_x100, 12345);
     ASSERT_TRUE(queue.Pop(received));
-    EXPECT_EQ(received.type, SequencerCommandType::MidiCc);
-    EXPECT_EQ(received.midi_cc.cc, 74);
-    EXPECT_EQ(received.midi_cc.value, 99);
-    EXPECT_EQ(received.midi_cc.channel, 3);
+    EXPECT_EQ(received.type, SequencerCommandType::MidiClock);
+    EXPECT_EQ(received.midi_clock.event, 0);
+    EXPECT_EQ(received.midi_clock.tick_seq, 99u);
+    EXPECT_EQ(received.midi_clock.spp_beats16, 3);
     EXPECT_FALSE(queue.Pop(received));
 }
 
@@ -42,12 +42,12 @@ TEST(SequencerCommandQueueTest, RejectsNewCommandWhenFullWithoutOverwritingOldes
     queue.Init();
 
     SequencerCommand command;
-    command.type = SequencerCommandType::MidiCc;
-    command.midi_cc = WaveX::Protocol::MidiCcMessage(1, 2, 3);
+    command.type = SequencerCommandType::MidiClock;
+    command.midi_clock = WaveX::Protocol::MidiClockEventMessage(1, 0, 2, 3, 0);
     ASSERT_TRUE(queue.Push(command));
     EXPECT_FALSE(queue.Push(command));
 
     SequencerCommand received;
     ASSERT_TRUE(queue.Pop(received));
-    EXPECT_EQ(received.midi_cc.cc, 1);
+    EXPECT_EQ(received.midi_clock.event, 1);
 }

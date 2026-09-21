@@ -6,9 +6,11 @@ Needs a card with the WAVs `--hil-sample` / `--hil-sample2` point at
 """
 
 import os
+import time
 from pathlib import Path
 
 import pytest
+from wavex_target import TargetError
 
 MSG_SAMPLE_LOAD = 0x04
 
@@ -36,14 +38,28 @@ def _open_browser(esp, path):
         esp.page("TAB", "Browse")
         esp.wait_state(tab="Browse")
     d, f = _split(path)
-    esp.page("DIR", d)
+    # Opening Browse already starts a listing. Let that transaction settle
+    # before changing directories: browse replies have no request ID.
+    time.sleep(1.0)
+    if esp.state().get("dir") != d.replace(" ", "_"):
+        esp.page("DIR", d)
     # STATE reports text with spaces as underscores (one flat line).
     esp.wait_state(
         timeout=8.0,
         dir=d.replace(" ", "_"),
         entries=lambda n: int(n) > 1,
     )
-    esp.page("SEL", f)
+    # A multi-packet listing can have entries before this filename arrives.
+    # Retry selection, never the directory request (which would overlap reads).
+    deadline = time.monotonic() + 8.0
+    while True:
+        try:
+            esp.page("SEL", f)
+            break
+        except TargetError as exc:
+            if "ERR noentry" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
     return esp.wait_state(sel=f.replace(" ", "_"), picker="0", sk2="Load")
 
 

@@ -1308,3 +1308,68 @@ locally as `logs/perf-itcm-workload.py` under its baseline SHA256 above.
 | 2026-09-20 | dbd1ebf+ | One four-layer stereo note, sequencer plus repeated MIDI fan-out, two oscillators, ladder, modulation, locks, streaming, live edits, ten Pattern cycles | 4 | 48000/48 | 480 MHz | qspi `-O2` | 605.5s (121 windows) | 480000 | 121146 (25.2%) | 208760 (43.4917%) | 56.5083% | 0 | yes | COMFORTABLE | HV-019: 505 injected MIDI bursts; Daisy bbb29c9e, ESP32 82fbc618; no physical MIDI/listening claim |
 | 2026-09-20 | dbd1ebf+ | 16 Tracks x 4 Mono layers, same-frame batch, dual osc, ladder, modulation, locks, stream and Pattern files | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.9s (121 windows) | 480000 | 169698 (35.4%) | 316812 (66.0025%) | 33.9975% | 0 | yes | STAY | ac4f254f candidate; 10 Pattern cycles, zero stream underruns; mixed-channel final-image soak pending |
 | 2026-09-20 | dbd1ebf+ | Rapid full-channel stereo/Mono rotation every ten seconds, two oscillators, ladder, modulation, locks, streaming, live edits and ten Pattern cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 145494 (30.3%) | 287832 (59.9650%) | 40.0350% | 0 | yes | COMFORTABLE | Batched admission candidate ac4f254f, ESP32 82fbc618; rapid transitions only, final-image one-hour soak remains open |
+| 2026-09-21 | 7fbee5ed+ | Sample edit baseline: 4 stereo, 2 oscillators, ladder/modulation/locks, 16-Track bursts, SD audition and Pattern I/O; 1s loop, crossfade absent | 4 | 48000/48 | 480 MHz | qspi `-O2` | 606.2s (121 windows) | 480000 | 138670 (28.9%) | 320513 (66.7735%) | 33.2265% | 0 | yes | STAY | Pre-crossfade baseline only. SHA256 4adb9f177a1048ccbc66ac9d0c3f22ca995ffe2ba05b0f84b2724f2f820d1ab4; HV-026 candidate comparison remains open. |
+
+## Sample channel selection — diagnostic screen, 2026-09-21
+
+Two isolated 40-second screens exercised eight render channels (four stereo
+voices), both oscillators, ladder filtering, eight modulation routes, four
+locks, sequencing, 16-Track/four-layer note bursts and SD audition. The source
+was `/03 Lips of Ashes.wav`, with a 512-frame loop and 20 ms crossfade setting
+(effective overlap 256 frames). Both images used QSPI, `-O2`, 480 MHz,
+48 kHz / 48-frame blocks and ordinary DWT profiling without callback-detail
+instrumentation.
+
+| Image | DWT windows | Average cycles / budget | Peak cycles / budget | Sampled underruns / drops |
+|---|---:|---:|---:|---:|
+| Before channel selection, `a4b9981c1d14f86d36053731e00c9cecca311ba022bd06edf91056a7e3f08ea0` | 8 | 191,779.87 / 39.9541% | 293,980 / 61.2458% | 0 / 0 |
+| Channel selection candidate, `081cbdb317abba2740fe2d8a28dc7609245bac4577763f702a9d0cd7e59d9be0` | 8 | 206,115.88 / 42.9408% | 291,641 / 60.7585% | 0 / 0 |
+
+Evidence: `logs/stereo-4-ladder-20260921-044100.{log,json}` and
+`logs/stereo-4-ladder-20260921-044740.{log,json}`. The baseline used the prior
+narrow-bus SD settings; the candidate used the restored wider/faster settings.
+This limits attribution of the difference. Average cost increased; no
+optimization claim is made. These runs ended before the first 60-second file
+cycle, and are **not capacity or soak passes**. HV-001's current write failure
+blocks a clean file-inclusive acceptance run; HV-019, HV-026d and HV-027d remain
+open. Selected-channel functional checks are recorded in HV-027.
+
+The first candidate attempt stopped during setup on a pre-existing cumulative
+dropped-event count of one after the functional tests
+(`logs/stereo-4-ladder-20260921-044528.json`). It is excluded. A fresh reset
+preceded the isolated candidate run; two initial harness starts before USB tty
+re-enumeration produced no timing evidence. Normal firmware is restored after
+measurement.
+
+## MIDI expression — diagnostic screen, 2026-09-21
+
+Eight render channels / four stereo groups, 16 Tracks × four prepared layers,
+both oscillators, full-drive 24 dB ladder, three envelopes, two voice LFOs,
+eight routes, four locks, 512-frame loop / 20 ms requested crossfade, streamed
+49 MB source and live filter edits. The same script/40-second measurement
+window follows each setup; no file cycle is reached before 60 seconds.
+SD starts at 25 MHz / 4-bit in both images. This is a per-change continuation
+screen, not a full workload/one-hour phase gate.
+
+| Image / scenario | Mean callback cycles | Peak cycles | Peak block budget | Evidence |
+|---|---:|---:|---:|---|
+| Before MIDI expression | 205,971.68 | 289,092 | 60.2275% | `logs/stereo-4-ladder-20260921-100224.{log,json}` |
+| Candidate, matched unchanged routes | 205,436.07 | 296,349 | 61.7394% | `logs/stereo-4-ladder-20260921-100631.{log,json}` |
+| Candidate, varying CC1/pressure | 203,845.60 | 295,378 | 61.5371% | `logs/stereo-4-ladder-20260921-100917.{log,json}` |
+
+Eight reporting windows in each run, mean weighted by callback count, zero
+sampled stream underruns and dropped replies. The active-expression run
+replaces two routes with Mod Wheel → Cutoff and Pressure → OSC1 pitch and
+injects both through the ESP32 parser/forwarder. Its different signal path is
+functional stress evidence, not an optimization comparison.
+
+Baseline Daisy SHA256:
+`081cbdb317abba2740fe2d8a28dc7609245bac4577763f702a9d0cd7e59d9be0`;
+candidate profiling Daisy:
+`97d33a08cc185b30afe28cc8b2372d7e63a28fa1b1a87b847d010a600cfa59a8`.
+Baseline ESP32 `36aa058a2cfbe77da5a922e93de1902766a51706ed7f94a711976319b4a6f93c`;
+candidate ESP32 `e647e9145cdd0c52dc6e4979bbb31588cb6d9ce729b52c45600358acb1cfc98b`.
+Sources are the working tree over `7fbee5ed21d189ae0e762f27db5b86de6630712f`;
+image hashes identify the measured builds. Profiling is disabled in the final
+functional image. Physical MIDI, listening, file-inclusive load and full soak
+acceptance remain in HV-028 and the existing callback gate.

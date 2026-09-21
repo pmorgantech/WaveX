@@ -144,6 +144,8 @@ correction) before adding logic on top. Do not paper over a bad shape with more 
 
 ## General discipline
 
+- Finish every final response by highlighting the open roadmap and backlog tasks most relevant to the current work.
+- Keep `docs/roadmap.md` focused on remaining work: remove completed implementation tasks and completion recaps, retain their record in `CHANGELOG.md` and feature docs, and keep unrun or partial hardware acceptance open in `docs/hardware-validation.md`.
 - Prefer small, reviewable changes. Don't bundle unrelated refactors with feature work.
 - Don't duplicate pin tables, wire-format tables, or architecture diagrams into new docs or comments — link to the single source of truth (`pin_config.h`, `hardware_config.h`, `protocol.h`, `architecture.md`) instead.
 - If you find contradictory information between an archived doc and `architecture.md`/`roadmap.md`/code, trust the canonical doc or code, and flag the discrepancy rather than silently picking one.

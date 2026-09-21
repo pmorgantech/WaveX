@@ -429,6 +429,23 @@ void dispatch(const Command& c) {
         touch_enqueue(static_cast<int16_t>(x), static_cast<int16_t>(y), pressed)
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
+    } else if (!strcmp(c.verb, "MIDICC") || !strcmp(c.verb, "MIDIPRESSURE")) {
+        const bool pressure = !strcmp(c.verb, "MIDIPRESSURE");
+        long channel, cc = 0, value;
+        if (!NextInt(&p, &channel) || (!pressure && !NextInt(&p, &cc)) || !NextInt(&p, &value) ||
+            channel < 1 || channel > 16 || cc < 0 || cc > 127 || value < 0 || value > 127 ||
+            *detail::SkipSpaces(p)) {
+            reply_err(seq, "badarg");
+            return;
+        }
+        WaveX::Midi::StreamParser parser;
+        WaveX::Midi::Event event;
+        parser.Feed(static_cast<uint8_t>((pressure ? 0xD0 : 0xB0) | (channel - 1)), event);
+        if (!pressure)
+            parser.Feed(static_cast<uint8_t>(cc), event);
+        if (parser.Feed(static_cast<uint8_t>(value), event))
+            midi_forward_event(event);
+        reply_ok(seq);
     } else if (!strcmp(c.verb, "MIDIPROGRAM")) {
         long channel, program;
         if (!NextInt(&p, &channel) || !NextInt(&p, &program) || channel < 1 || channel > 16 ||

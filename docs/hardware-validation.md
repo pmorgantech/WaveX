@@ -34,6 +34,10 @@ this document owns the runnable checks and their validation status.
 - [HV-022 — Peer restart and browse delivery](#hv-022--peer-restart-and-browse-delivery)
 - [HV-023 — Stream read recovery cursor](#hv-023--stream-read-recovery-cursor)
 - [HV-024 — Melodic sequencing](#hv-024--melodic-sequencing)
+- [HV-025 — Standalone sample saves](#hv-025--standalone-sample-saves)
+- [HV-026 — Stereo snap, seams and crossfade](#hv-026--stereo-snap-seams-and-crossfade)
+- [HV-027 — Sample playback channel selection](#hv-027--sample-playback-channel-selection)
+- [HV-028 — MIDI expression](#hv-028--midi-expression)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -99,6 +103,10 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-022 | Peer restart and browse delivery | Passed (listed cases) | Six isolated restarts, full listings, and early-selection/load regression pass; uncorrelated overlapping browse requests remain outside this check |
 | HV-023 | Stream read recovery cursor | Pending | Absolute retry-position fix implemented; injected SD read failure and latency checks unrun |
 | HV-024 | Melodic lanes, gates and recording | Partial pass | Lane/record/Pattern HIL and rendering checks pass; physical MIDI, audio capture and extended capacity remain open |
+| HV-025 | Standalone Sample Edit Save/Save As | Partial | Short/long WAV save-copy and recall HIL, plus software-restart streaming recall pass; physical recovery, listening and capacity remain open |
+| HV-026 | Stereo snap/seams and playback crossfade | Partial | Host policy/PCM/persistence checks pass; candidate callback comparison, listening and power-cycle checks remain open |
+| HV-027 | Sample playback channel selection | Partial | Automated channel/control/budget checks pass; listening, write recovery and full timing/soak remain open |
+| HV-028 | MIDI expression routing and reset | Partial | Host and console-injected board checks pass; physical MIDI, listening and full soak remain open |
 
 ## HV-001 — SD card formatting
 
@@ -131,7 +139,7 @@ Only the Daisy was flashed; the frontend boot log identifies ESP32 app ELF
 |---|---|---|
 | `dcf33e4abd9bf2d491008c66517487802833e6a147f99034d5d0f6c4aa7c8e65` | Original bus configuration | `mkfs` failed immediately: FatFs 1, HAL `0x6` (data CRC + command timeout); remount then failed with HAL `0x2000`. |
 | `98a101984e39c3adddfb9796bd0e925b2d3797b30a343c24d7e7a046c71cdfac` | Lower clock, original bus width | `mkfs` passed in 1,316 ms and remounted, but creating `/wavex/projects` failed with FatFs 1 / HAL `0x6`. |
-| `a80f62a90625e95ccd6b6ee8d20f5027c4baac6bddb2354a0e2ec02001514b5f` | Conservative clock and narrow bus, now the defaults in `hardware_config.h` | `mkfs` passed in 981 ms, remount passed, all WaveX folders were created and the UI showed success. |
+| `a80f62a90625e95ccd6b6ee8d20f5027c4baac6bddb2354a0e2ec02001514b5f` | Conservative clock and narrow bus, adopted as defaults at that time | `mkfs` passed in 981 ms, remount passed, all WaveX folders were created and the UI showed success. |
 
 Twelve consecutive named Pattern saves then passed. Loading `SD check 12`
 restored Track 1 / step 1 enabled with note 73; after an ST-Link reset, the card
@@ -147,9 +155,35 @@ pass. Evidence: `logs/sd-format-daisy-20260918.log`,
 Final pre-commit checks passed both firmware builds and all shared, ESP32 and
 Daisy host suites; transcript: `logs/sd-format-precommit-20260918.log`.
 
-**Remaining:** isolate card/socket/wiring integrity before restoring a wider
-bus; successful reads alone do not prove write stability. Measure sustained
-WAV streaming and write soak with the fallback defaults. Cancellation,
+**2026-09-21 clock-negotiation follow-up:** restored the configured four-bit
+starting point and existing clock-only fallback at the user's request. The
+inserted card reports **60,906 MiB**, unlike the 7,497 MiB card above. It mounts
+at **STANDARD/25 MHz, 4-bit** in 42 ms. Loading `/03 Lips of Ashes.wav` reads
+49,250,304 PCM bytes in **5.162 s / 9540 KB/s**; Load-to-ready takes **5.580 s**,
+down from 33.365 s on the previous narrow-bus image. Switching to Edit takes
+0.223 s.
+
+The unique-copy Save As check **failed** with `SAMPLE_FILE_IO` (`fileerror=6`)
+at 1% progress. The test was interrupted after observing terminal failure,
+rather than waiting its 600-second success timeout. This is not a write pass:
+mount negotiation exercises reads and does not automatically retry failed
+file jobs at a lower clock. The 12.5 MHz/four-bit write comparison and forced
+clock-fallback checks remain unrun; roadmap work resumed at the user's request.
+No format was attempted, and no one-bit fallback was restored.
+
+Both firmware builds and all 1,669 host tests pass. Flashed Daisy SHA-256:
+`bc3222812411df9d93c843be5b30927e3b5519d8f92d8b8ac9bb8bf5f7cd2c96`;
+unchanged ESP32 SHA-256:
+`a4dbb2b269ad490660609799098dc9e2935ff5a50bf06e68696ebb66b78b644b`.
+Evidence: `logs/sd-auto-clock-{checks,flash,daisy,load,load-transcript,save}.log`
+and `logs/hil-20260921-042630.log`. Recheck using the same timed Load and
+`test_standalone_save_copy_then_save_survives_pool_reload` with
+`--hil-sample2 "/03 Lips of Ashes.wav"`; require successful unique-copy Save As,
+sidecar Save and unloaded-pool reload before calling writes validated.
+
+**Remaining:** isolate card/socket/wiring integrity and the reproduced wider-bus
+write failure; successful reads alone do not prove write stability. Measure
+sustained WAV streaming and write soak with negotiated clocks. Cancellation,
 replacement, interruption, active-playback formatting and WAV/Instrument
 reboot recovery remain unrun; the full HV-001/phase gate stays open.
 
@@ -1107,6 +1141,19 @@ Local evidence: `logs/display-rgb565-build.log`,
 `logs/display-rgb565-working-20260918.png`. The original RGB888 image is retained
 in `logs/display-rgb888-baseline/` for a controlled future comparison.
 
+### UI framebuffer inventory, 2026-09-21
+
+Captured and visually reviewed **59 native 1280 × 800 screenshots**, covering
+all current UI pages/tabs plus mapping, persistence and confirmation views.
+Gallery: `logs/ui-pages-20260921/index.html`; portable bundle:
+`logs/ui-pages-20260921.zip`. Manifest records the UI state for each image;
+`capture-info.json` records normal, profiling-disabled images matching HV-028.
+Serial image transfers with missing data were retried; final PNG dimensions
+and manifest references validate. Existing contrast, clipping, stale text and
+Main Menu scrolling issues are retained in the roadmap UI follow-up.
+This confirms framebuffer contents only; physical panel/touch/encoder checks
+and the phase gate remain open. No files were saved during capture.
+
 ## HV-019 — Note-group allocation policy
 
 **Introduced:** Whole-note admission foundation, 2026-09-18.
@@ -1764,6 +1811,380 @@ drops, and profiling disabled. Final readback: `logs/melodic-final-state.json`.
 Source WAVs and existing saved assets were preserved; tests used unique save
 copies. The final-source physical recording/audio and extended capacity gates
 remain open; the earlier musical soak is not silently reassigned to new images.
+
+## HV-025 — Standalone sample saves
+
+**Status:** partial; automated two-board save/recall checks passed. Listening,
+power-loss recovery and loaded audio timing remain open.
+**Scope:** [Phase 1.5](roadmap.md#phase-15--sample-editing) and the
+[standalone save model](features/offline-sample-editing.md#standalone-edits-as-built).
+
+**Setup:** both updated boards, serial logs, audio monitoring, a disposable or
+backed-up FAT card with a multi-minute PCM16 WAV that fits available resident
+RAM and short mono/stereo fixtures. Record both image hashes. Use unique copy
+names; recovery tests require a disposable copy, never the only source asset.
+
+- [ ] **025a — Save/reboot/reload:** load the long WAV, edit start/end/loop/gain
+  and fades, Shift → Save → Save edits. Confirm completion, reboot both boards,
+  reload and audition. Metadata and audible region match; UI remains responsive.
+- [ ] **025b — Save As:** save a unique new basename. During the copy navigate
+  and query status. Confirm unchanged source WAV hash and byte-identical copied
+  WAV, independent sidecar, unchanged Track bindings and no automatic reload.
+  Reusing the name fails without changing either file.
+- [ ] **025c — Ownership:** compare fresh Instrument dependency import and
+  standalone audition with saved defaults. Save a Project, alter the standalone
+  sidecar, recall the Project and verify its captured edits still win.
+- [ ] **025d — Failure/recovery:** use a disposable card/copy to interrupt each
+  publish stage and simulate full/removal cases. Reboot and verify valid old/new
+  edits or an explicit failure; no false success, source loss or silent reset.
+  Record orphan files and recovery steps; FAT power-loss behavior remains open
+  until this passes on the tested card/filesystem.
+- [ ] **025e — Link loss and audio:** drop/restart each peer during Save As,
+  restore the link and verify no duplicate copy request. An unknown outcome
+  stays unconfirmed. Under resident playback verify responsive Stop/note-off,
+  no added stream underruns and the current callback timing limits.
+
+**2026-09-20 bench result (UTC logs dated 2026-09-21):** final normal QSPI
+images pass all five Sample Edit HIL tests in **64.84 s** and the standalone
+save/copy/reload test using `/03 Lips of Ashes.wav` in **202.41 s**. This is
+12,312,576 stereo frames at 44.1 kHz (4 min 39 s, 49,250,304 PCM bytes).
+The long-file test copies the entire WAV under a unique name, rejects a second
+copy to that name, reloads the saved markers/gain, changes them, saves the
+sidecar and verifies a second fresh Pool load. It checks unchanged Track
+bindings during Save As and continuously polls UI state during the copy.
+Source WAVs and existing sidecars are preserved; unique `HIL Edit ...` copies
+remain on the card. Physical byte hashes were not measured; byte-for-byte copy
+is covered by the host storage test.
+
+A separate software restart of both images restores
+`/HIL Edit 20260921 015309.wav` through **nonresident streaming** with start/end
+256/4096, loop 512/2048, gain Q15 11626 (−9 dB), zero Pool records and repeated
+loop rewinds. The stream reports zero underruns. This verifies persisted
+standalone defaults without a surviving RAM record; it does not simulate a
+power cut or certify audio quality. The final long-file test's copy is
+`/HIL Edit 20260921 020049.wav`.
+
+Evidence: `logs/sample-edit-hil.log/.xml`,
+`logs/sample-edit-long-hil.log/.xml`, `logs/sample-save-reboot-result.json`,
+`logs/sample-save-reboot-console.log`, and the real-LVGL layout capture
+`logs/sample-save-as.png`. Early bench attempts exposed test setup races:
+overlapping browse requests, too-short resident-load timeouts, stale retained
+save completion and setup cleanup. The HIL helpers now serialize browsing,
+wait for a changed completion ID and clean up after setup failure. Those
+attempts are not counted as passing firmware checks.
+
+Final images from base `7fbee5ed21d189ae0e762f27db5b86de6630712f` plus this
+uncommitted sample-save change:
+
+- Daisy SHA256 `d80648569de03caf65e041182aab3727cb953c183aeba6183a565e39478db0f9`.
+- ESP32 SHA256 `11b082ec034abd8b166b53e854f44333471eb1498adf82acda4c8bb6646f7ab1`.
+
+All pre-commit checks pass, including both firmware builds and **462 shared,
+815 Daisy and 371 ESP32 tests** (`logs/sample-edit-approved-checks.log`).
+The audio callback was not changed; this run adds no DWT capacity result and
+does not close any existing soak/callback gate. Project sidecar precedence,
+short writes, close/rename failures and backup fallback were host-tested;
+physical fault injection and listening remain unrun, so the full boxes above
+stay open.
+
+**Remaining Phase 1.5 blockers:** stereo snap/seam and crossfade acceptance
+(now tracked in HV-026), and complete
+stream/RAM channel and gain parity. These are not covered by a sidecar pass.
+File-backed editing was removed from scope on 2026-09-21; editing requires a
+complete resident sample.
+
+### SD write-clock comparison, 2026-09-21
+
+The inserted 60,906 MiB card reads the 49,250,304-byte PCM payload in
+`/03 Lips of Ashes.wav` at about five seconds at 25 MHz / 4-bit, but a unique
+Save As failed after **1,155,072 copied bytes**, FatFS output error 1 and
+HAL SD error `0x00000002` (data CRC). A matched 12.5 MHz / 4-bit image passed
+the complete unique-copy Save As, pool unload/reload, sidecar edit-save and
+second reload check in **82.47 seconds**. Original WAV and sidecar untouched;
+no formatting was performed. Evidence: `logs/sample-save-125-hil.log`,
+`logs/sample-save-25-hil.log`, their flash/build logs and the `SAMPLE_FILE`
+line in `logs/daisy.log`.
+
+- Diagnostic 12.5 MHz Daisy SHA256:
+  `90611c3214c0b1b6b792bd5baf7bd7c25976616dbb266d3aa42c90fd448b68f8`.
+- Diagnostic 25 MHz Daisy SHA256:
+  `9ea7c9bed4a954448144da74ea58dfb95b3bfac762eb0e8fb76b55de4b19385e`.
+- ESP32 SHA256: `36aa058a2cfbe77da5a922e93de1902766a51706ed7f94a711976319b4a6f93c`.
+
+The implementation now downshifts after a sample-file job reports an SD
+peripheral I/O failure and has closed its handles. It retains 4-bit mode and
+the failed operation result; retry is an explicit user action. Boot/insertion
+still starts at 25 MHz. A read-only mount does not certify write reliability.
+The final-image retry test failed: a 25 MHz write CRC after 4,923,392 copied
+bytes triggered the 12.5 MHz attempt, but `HAL_SD_Init` returned command timeout
+`0x00000004`; subsequent browse was unavailable, so explicit retry could not
+start. Read load immediately before this failure took **5.172 seconds**.
+Evidence: `logs/sample-save-auto-first.log`, `logs/sample-save-auto-retry.log`
+and `logs/daisy.log`. Images match HV-028 below. Automatic write recovery remains
+**failed/open**; a successful fixed-clock run does not establish recovery after
+a bus fault. Physical power-loss/listening and whole-phase acceptance remain open.
+
+## HV-026 — Stereo snap, seams and crossfade
+
+**Status:** Partial; software checks pass, physical acceptance remains open. **Source:**
+[Phase 1.5](roadmap.md#phase-15--sample-editing),
+[stereo edit semantics](features/offline-sample-editing.md#stereo-markers-seam-checks-and-playback-crossfade).
+
+**Setup:** matching protocol-7 images, stereo monitoring/capture, normal SD
+card, a stereo PCM16 source with independent L/R phase and an anti-phase/DC
+fixture; mono, 44.1/48 kHz and PCM24 fixtures for streaming. Use unique Save As
+copies. Keep profiling disabled in the final functional images.
+
+- [ ] **026a — Panel and snap:** Select each marker with touch and encoder,
+  invoke Shift → Snap, and inspect raw stacked L/R seam halves. Both native
+  channels must cross at the accepted frame; a no-crossing result leaves the
+  marker unchanged. Moves stay within the search radius, trim and loop bounds.
+  Move a marker while a deliberately delayed request is in flight; stale
+  expected edits must not overwrite newer state. Repeated entry/exit must not
+  replay requests or retain waveform listeners. Readout and action labels fit.
+- [ ] **026b — Audition and note audio:** On a copy, try crossfade off, 1 ms,
+  20 ms and a loop short enough to clamp the effective overlap. Capture repeated
+  streamed auditions and resident notes at unity and fractional pitches. Verify
+  linked L/R weights, no out-of-region reads, the documented shorter period,
+  matching transition shape and no unexplained click/dropout. Check opposite
+  phase and correlated material; check secondary oscillators and Mono mode.
+- [ ] **026c — Persistence:** Save and Save As, unload and reload; repeat after
+  software restart and power cycle. Nonresident streaming and Project recall
+  must retain crossfade, with Project snapshots overriding external sidecars.
+  Older sidecar 1.0/Project 1.3 files must load with overlap off.
+- [ ] **026d — Callback budget:** Capture before/after DWT with full channel
+  reservations, two oscillators, filters, modulation, locks, note bursts,
+  sequencing and SD audition. Include short loops with the maximum legal
+  overlap, mono and stereo. Each accepted workload needs at least ten minutes,
+  zero stream underruns and peak callback below 70%; 70–80% requires profiling
+  and >=80% requires backend-upgrade planning. Preserve binary hashes and logs.
+  The full mixed-channel one-hour gate remains HV-019.
+
+Listening, physical touch/encoder, PCM capture and power-cycle checks remain
+unrun until explicit evidence is recorded. Host and console tests do not
+replace these checks.
+
+**2026-09-21 UTC — software validation and interrupted timing comparison:**
+
+Base `7fbee5ed21d189ae0e762f27db5b86de6630712f` plus uncommitted sample-save
+and stereo seam/crossfade changes. Container builds pass for ESP32, normal
+Stage A Daisy and alternate Stage B Daisy. All **471 shared, 818 Daisy and
+375 ESP32 tests** pass. Coverage includes stereo zero-crossing rejection,
+bounded linked-channel mixing, fractional-pitch resident PCM against a baked
+reference, streaming chunk boundaries, region fades, stale request handling,
+real LVGL page lifecycle and old/new sidecar/Project formats.
+
+Before the callback change, the full eight-channel/four-stereo-voice workload
+ran 606.2 seconds (121 windows), with two oscillators, ladder filtering,
+modulation, locks, 16-Track note bursts, sequencing, SD audition and Pattern
+save/load. The one-second loop baseline averaged 28.9% and peaked at
+**320,513 cycles / 66.7735%**, with zero stream underruns. It passes only that
+baseline workload. Evidence: `logs/stereo-4-ladder-20260921-023156.log/.json`;
+see [callback performance log](callback-performance-log.md).
+
+The subsequent 512-frame stereo baseline stopped around 541 seconds after
+unexpected page navigation (`logs/stereo-4-ladder-20260921-024417.log/.json`).
+The Mono baseline failed setup after unsolicited marker and Stop/Play events
+changed the workload (`logs/stereo-0-ladder-20260921-025723.json`). Neither is
+a qualifying timing run. Controlled measurements were paused; their cause
+was not established. **No candidate DWT result or performance improvement is
+claimed, and 026d remains open.**
+
+Baseline profiling SHA256:
+`4adb9f177a1048ccbc66ac9d0c3f22ca995ffe2ba05b0f84b2724f2f820d1ab4`.
+Final candidate profiling binary, built but not measured:
+`a4b9981c1d14f86d36053731e00c9cecca311ba022bd06edf91056a7e3f08ea0`.
+
+Matching normal images were flashed with Daisy profiling disabled:
+
+- Daisy SHA256 `dede6386b1c5e710afefc1633d25f64bec49f9be8c49ecdfc44280120476f4bd`.
+- ESP32 SHA256 `3ffa6ffe93eba3fb4fbb54e3d37776b7ce8c80d9a972987ebdf8c79b4ca718a2`.
+
+All pre-commit checks pass (`logs/sample-seam-final-approved-checks.log`). On
+these images, the six short-fixture two-board Sample Edit tests pass in 73.58 s
+(`logs/sample-seam-hil.log`, `logs/hil-20260921-030802.log`). This includes
+crossfade Save As at 13 ms and subsequent Save at 5 ms with unload/reload,
+collision rejection, correlated seam/snap controls at 20 ms, audition rewinds,
+resident held-note playback, unchanged unrelated streams and repeated page
+exit during waveform traffic. The default kick fixtures are mono; this run
+does not establish native stereo audio quality.
+
+The Save/Save As and seam-control cases also pass with the 49,250,304-byte
+native-stereo `/03 Lips of Ashes.wav` fixture: **2 passed in 244.99 s**
+(`logs/sample-seam-stereo-hil.log`, `logs/hil-20260921-030929.log`). The copy
+is `/HIL Edit 20260921 031008.wav`; the source WAV was not modified. Reload
+restores 13 ms and subsequently 5 ms, while the control case checks 20 ms,
+bounded snapping, audition rewinds and resident note lifetime. The capture
+contains seven UART TX-queue pressure warnings; these passing functional
+checks do not certify transport capacity or audible stereo seam quality.
+
+Real-panel framebuffer captures on stereo `kickatb.wav` were inspected:
+`logs/sample-seam-panel.png` and `logs/sample-seam-panel-shift.png`. Stacked
+raw L/R seam halves, the 20 ms tile, effective 768-frame overlap, separate
+L/R source-jump readouts and shifted Check Seam action are visible without
+clipping. This verifies rendering, not physical finger/encoder behavior.
+
+**2026-09-21 UTC — 026a input regression follow-up:** The user's report of
+inert drags reproduced on the tile fill/knob: their decorative LVGL objects
+were separately clickable and intercepted pointer events. Loop-handle focus
+also hid the held handle by switching to the seam view. The page ignored the
+navigation encoder's `ButtonPress` event and did not select tiles on touch.
+Five new real-LVGL regressions cover these paths and stable tile positions.
+The fix makes decoration transparent to hit-testing, keeps the continuous
+view while any marker is held, selects touched tiles and accepts navigation
+encoder pushes. Physical encoder behavior remains deferred until the user's
+two-encoder protoboard wiring is ready; injected events do not validate wiring.
+
+The **380 ESP32 unit/widget tests** and **7 two-board Sample Edit tests** pass.
+The new board case touches each tile, drags every fill bar, moves each of the
+four held handles twice, verifies backend readback, and exercises encoder-push
+selection (`logs/sample-input-hil.log`, `logs/hil-20260921-034002.log`). The
+remaining sample-edit/persistence cases pass too; zero sampled stream
+underruns. The marker input case also passes on the multi-minute stereo WAV
+in **44.66 s**, including its load and all eight drag targets
+(`logs/sample-input-long-hil.log`, `logs/hil-20260921-034411.log`). This is
+eight passing board cases across the two fixture runs. All pre-commit checks
+pass (`logs/sample-input-approved-checks.log`). ESP32 SHA256 is now
+`a4dbb2b269ad490660609799098dc9e2935ff5a50bf06e68696ebb66b78b644b`;
+Daisy is unchanged from the normal image above. The new ESP32 image is flashed.
+
+The initial comparison used two captures already running the slow fallback:
+49,250,304 PCM bytes read in **32.966 s / 1493 KB/s**, versus **33.002 s /
+1492 KB/s** in the earlier pre-sample-save/crossfade
+`logs/polyphony-card-daisy.log`. Current end-to-end Load-to-ready was
+**33.365 s**, and switching to Edit took **0.224 s**; browsing from the prior
+directory to the selected root entry took **1.954 s**. Evidence:
+`logs/sample-load-timing-check.log` and
+`logs/sample-load-timing-transcript.log`. Both captures report the existing
+12.5 MHz, one-bit SD configuration; no storage clock or read path was changed.
+This comparison covers that fixture and setup, not every card/directory.
+**Correction after the user's five-second recollection:** seven September 16
+captures load the same 49,250,304 PCM bytes in **5.160–5.161 s**. For example,
+`logs/hil-20260916-052607.log` reports **9544 KB/s** and STANDARD/25 MHz.
+The previous wider bus was replaced by the narrow, slower defaults during the
+September 18 write-failure investigation documented in HV-001. Thus the load
+slowdown is real (about 6.4 times), and predates sample-save/crossfade; the
+initial conclusion that it did not reproduce missed that earlier baseline.
+The current boot starts at the conservative setting and mounts there, rather
+than trying the old faster setting first. Restore faster/wider operation only
+with read and write validation against the unresolved HV-001 failure.
+An initial timing script stopped at an occupied-Track replacement prompt; it
+was interrupted, corrected to use an empty Track, and excluded from timings.
+
+## HV-027 — Sample playback channel selection
+
+**Introduced:** 2026-09-21. **Gate:** [Phase 1.5](roadmap.md#phase-15--sample-editing).
+**Design:** [playback channels](features/offline-sample-editing.md#playback-channels).
+**Setup:** matching protocol-8 images; asymmetric stereo PCM16 sample and a mono
+sample; both serial loggers, panel/audio capture and Daisy DWT profiling.
+
+- [ ] **027a — Channel/control mapping:** Load stereo, open Edit and select
+  CHANNEL using touch and the navigation encoder. Cycle Recorded, Left, Right,
+  Mono Sum and back. Confirm matching metadata, waveform revision and lane
+  labels after each change; exit/re-enter and repeat while auditioning. Check
+  mono source audition on both outputs. **Pass:** channel identity agrees with
+  source PCM, labels and output; no stale waveform or stuck audition.
+- [ ] **027b — Resident ownership:** Trigger held stereo notes, change sample
+  mode, then retrigger. Check both oscillators, oscillator Mono, sequencer/live
+  admission and fractional-pitch crossfaded loops. **Pass:** old notes keep
+  their selection; new notes use the confirmed mode; channel reservations
+  match mono/stereo results without expanding the configured budget.
+- [ ] **027c — Persistence:** On write-validated media, Save As to a unique name,
+  Save changed modes, unload/reload, power-cycle and recall a Project override.
+  **Pass:** saved modes and Project authority survive; original PCM remains
+  intact. **Blocker:** current four-bit Save As failure recorded in HV-001.
+- [ ] **027d — Timing/soak:** Compare before/after DWT at full channel capacity
+  with both oscillators, filters, locks, modulation, streaming and file jobs.
+  Exercise local tile adjustments and idle redraws with UI profiling. Apply
+  HV-019/HV-026 thresholds; short diagnostic screens do not close the soak gate.
+
+**2026-09-21 automated results:** 473 shared, 819 Daisy and 381 ESP32 host
+checks pass (1,673 total), including channel polarity/sum limits, selected
+channel reservation counts, fractional-pitch crossfades, complete edit/seam
+wire snapshots, Project waveform-revision invalidation and real-LVGL controls.
+ESP32, normal Daisy and alternate Stage B builds pass.
+
+The new two-board stereo-channel case passes in **15.27 s** on Daisy profiling
+image `081cbdb317abba2740fe2d8a28dc7609245bac4577763f702a9d0cd7e59d9be0`
+and ESP32 `24cf4077f5a8e78db8aa60050340530a492d060910b6ba443b22f58e43dd0f66`.
+It cycles all modes through the editor's injected encoder event, confirms
+backend metadata/revision and stereo output meters, and verifies eight mono
+notes versus four stereo notes at the fixed channel budget. Evidence:
+`logs/sample-channel-hil.log` and `logs/hil-20260921-044437.log`. This does not
+validate physical encoder wiring or listening.
+
+The isolated 40-second [DWT screens](callback-performance-log.md#sample-channel-selection--diagnostic-screen-2026-09-21)
+show 61.2458% baseline / 60.7585% candidate peak, with zero sampled underruns
+or dropped events. Average cost increases from 39.9541% to 42.9408%. Different
+SD settings limit comparison; no performance improvement is claimed. Both
+screens stop before any file cycle, so neither closes the full timing gate.
+The initial candidate setup with a cumulative dropped count of one was
+excluded and followed by a fresh reset. Write recovery remains blocked by
+HV-001. Physical touch, listening, power-cycle recall, UI profiling and extended
+mixed-channel/file-operation soaks remain unrun.
+
+**Final normal-image checks:** six non-writing Sample Edit regressions pass
+in **70.35 s** (`logs/sample-channel-normal-hil.log`,
+`logs/hil-20260921-045030.log`). Standalone Save/Save As was deliberately
+excluded because HV-001 already records the current write failure. The final
+framebuffer capture `logs/sample-channel-mono-sum.png` shows the CHANNEL tile,
+a single summed waveform and a legible `(L+R)/2` label. The initial capture
+showed poor label contrast over PCM; a compact opaque label background fixes
+it, followed by another ESP32 build, all 381 frontend tests and recapture.
+This is framebuffer inspection, not physical-panel or touch-latency evidence.
+
+Final flashed normal images, profiling disabled:
+
+- Daisy SHA-256 `fddfee625d5bc294236cb7722bcf49f58b519a2fa5a647d53c4c1f94e6d9dd57`.
+- ESP32 SHA-256 `36aa058a2cfbe77da5a922e93de1902766a51706ed7f94a711976319b4a6f93c`.
+
+Build/host evidence: `logs/sample-channel-{host-tests,final-checks,stageb-build}.log`;
+formatting fixes rechecked in `logs/sample-channel-final-lint.log` and the
+final label change in `logs/sample-channel-label-checks.log`. Screenshot
+transcript: `logs/sample-channel-screen-final.log`. No firmware release bump
+or phase-gate closure is implied.
+
+## HV-028 — MIDI expression
+
+**Status:** Partial; host and console-injected checks pass, physical acceptance open. **Source:**
+[Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer),
+[MIDI modulation ownership](features/param-locks-and-modulation.md#midi-source-ownership-as-built).
+
+**Setup:** matching current debug images, resident mono/stereo loops, a DIN/USB
+controller with mod wheel and channel pressure, stereo monitoring/capture.
+Physical DIN wiring is still a prerequisite. Use a profiling image only for
+DWT capture; restore profiling-disabled images afterwards.
+
+- [ ] In Instrument Mod, choose Mod Wheel → Pan and Pressure → Cutoff. Change
+  each source on a held note and listen for the assigned change; zero returns
+  to the unmodulated base. Verify Apply/Revert and a uniquely named WXI recall.
+- [ ] Set separate Tracks to MIDI 1, MIDI 2, Omni and Off. Each physical port
+  reaches only matching/Omni Tracks; Off ignores expression. Held/releasing
+  and newly triggered notes use the same Track values. DIN/USB share channels.
+- [ ] Send CC121; both supported sources return to zero on matching Tracks.
+  Change routing or replace a Track's Instrument; its old expression clears.
+  Reboot starts at zero. A removed port does not invent a reset message.
+- [ ] Measure MIDI-to-audio latency and DWT under the full voice/modulation,
+  sequencer, streaming and file-operation workload, then complete the one-hour
+  zero-underrun soak. Controller floods must not block notes or clock output.
+
+**2026-09-21 software and board evidence:** 475 shared, 822 Daisy and 382 ESP32
+host tests pass; both MCU builds and Stage B compile. The two-board expression
+check passes in 9.35 seconds on normal images, exercising frontend byte parser,
+wire forwarding, UI source selection, matching/nonmatching channels, Omni,
+Off, CC121 and routing resets against codec-bound stereo meters. A first
+attempt used a drum one-shot that expired during observation; the passing
+fixture uses a sustained looping keyboard Instrument. These are digital meter
+observations, not external audio listening or physical port validation.
+
+Evidence: `logs/midi-expression-normal-hil.log`;
+[matched and active-expression DWT screens](callback-performance-log.md#midi-expression--diagnostic-screen-2026-09-21).
+Normal Daisy SHA256 `24c854d762624c341a9b6914d1202643fb8cc7590fb51de56bbc08656b991918`;
+ESP32 SHA256 `99240dc27371d6c099ea0013a7c12cb62620c6de30f203ce4468da963f4c92ac`.
+Profiling is disabled. No physical checkbox is closed by these checks.
+
+Host/parser/forwarder and console-injected checks are partial evidence only;
+they do not establish physical MIDI timing or listening acceptance.
 
 ## Recording a validation session
 

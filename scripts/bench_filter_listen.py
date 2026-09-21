@@ -77,7 +77,7 @@ def load_pluck(daisy, path, seconds):
     sid = added.pop()
     info = daisy.cmd("SAMPLE", sid)
     end = min(int(info["frames"]), int(int(info["rate"]) * seconds))
-    region = struct.pack("<HBBhIIIIHH", sid, 0, 0, 0, 0, end, 0, end, 1, 8)
+    region = struct.pack("<HBBhIIIIHHx", sid, 0, 0, 0, 0, end, 0, end, 1, 8)
     daisy.msg(0x3C, region)
     applied = daisy.cmd("SAMPLE", sid)
     assert applied["loop"] == "0" and int(applied["end"]) == end, applied

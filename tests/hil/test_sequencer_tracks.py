@@ -20,7 +20,7 @@ def _loop(daisy, sample_id, enabled=True, end=0):
     daisy.msg(
         0x3C,
         struct.pack(
-            "<HBBhIIIIHH", sample_id, enabled, 0, 0, 0, end, 0, end, 0, 0
+            "<HBBhIIIIHHx", sample_id, enabled, 0, 0, 0, end, 0, end, 0, 0
         ),  # noqa: E501
     )
 

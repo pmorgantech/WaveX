@@ -33,3 +33,25 @@ esp_err_t inter_mcu_send_sample_unload(uint16_t);
 esp_err_t inter_mcu_send_bank_slot_op(const WaveX::Protocol::BankSlotOpMessage&);
 esp_err_t inter_mcu_send_bank_op(const WaveX::Protocol::BankOpMessage&);
 bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage*);
+
+esp_err_t inter_mcu_send_sample_file_op(const WaveX::Protocol::SampleFileOpMessage&);
+bool inter_mcu_get_sample_file_status(WaveX::Protocol::SampleFileStatusMessage*);
+
+esp_err_t inter_mcu_send_sample_seam_request(const WaveX::Protocol::SampleSeamRequest&);
+void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus&);
+bool inter_mcu_get_sample_seam_status(WaveX::Protocol::SampleSeamStatus*);
+esp_err_t inter_mcu_send_sample_edit(uint16_t,
+                                     bool,
+                                     int16_t,
+                                     uint32_t,
+                                     uint32_t,
+                                     uint32_t,
+                                     uint32_t,
+                                     uint16_t,
+                                     uint16_t,
+                                     uint8_t = 0,
+                                     uint8_t = 0);
+esp_err_t inter_mcu_send_sample_audition(uint16_t);
+esp_err_t inter_mcu_send_sample_stop_req();
+
+esp_err_t inter_mcu_request_sample_meta(uint16_t);

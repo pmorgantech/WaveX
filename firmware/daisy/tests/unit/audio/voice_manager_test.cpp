@@ -2512,3 +2512,136 @@ TEST(MixMeterSubscriptionTest, ExpiresRenewsAndHandlesClockWrap) {
     lease.Unsubscribe();
     EXPECT_FALSE(lease.Enabled(2002));
 }
+
+TEST(VoiceChannels, CrossfadeMatchesPreparedPcmAtFractionalStereoSeams) {
+    // Compare live blending against an independently baked loop. A half-rate
+    // cursor crosses both blend boundaries and the exclusive end repeatedly.
+    constexpr uint32_t end = 1024, head = 128, overlap = 48;
+    std::vector<int16_t> pcm(end * 2), baked(end * 2);
+    for (uint32_t f = 0; f < end; ++f) {
+        pcm[f * 2] = static_cast<int16_t>((f * 127) % 24000 - 12000);
+        pcm[f * 2 + 1] = static_cast<int16_t>((f * 83) % 18000 - 9000);
+    }
+    baked = pcm;
+    for (uint32_t f = 0; f < overlap; ++f) {
+        const uint32_t w = f == overlap - 1 ? 32768 : (f * ((1u << 24) / (overlap - 1))) >> 9;
+        for (uint32_t c = 0; c < 2; ++c)
+            baked[(end - overlap + f) * 2 + c] = static_cast<int16_t>(
+                (int32_t(pcm[(end - overlap + f) * 2 + c]) * int32_t(32768 - w) +
+                 int32_t(pcm[(head + f) * 2 + c]) * int32_t(w)) >>
+                15);
+    }
+    for (uint8_t mode = 0; mode < 4; ++mode) {
+        for (bool mono: {false, true}) {
+            VoiceManager live, reference;
+            live.Init(48000);
+            reference.Init(48000);
+            auto p = FlatParams(pcm.data(), end, 60, 127, .5f);
+            p.channels = 2;
+            p.mono = mono;
+            p.channel_mode = mode;
+            p.loop = true;
+            p.loop_start = head;
+            p.loop_end = end;
+            p.start_frame = end - overlap - 2;
+            p.pitch_ratio_mul = .5f;
+            p.loop_crossfade_ms = 1;
+            live.Trigger(p);
+            EXPECT_EQ(live.GetVoice(0).crossfade_frames, overlap);
+            p.sample = baked.data();
+            p.loop_crossfade_ms = 0;
+            p.loop_start = head + overlap;
+            reference.Trigger(p);
+            for (unsigned block = 0; block < 90; ++block) {
+                float l[48], r[48], bl[48], br[48];
+                live.Render(l, r, 48);
+                reference.Render(bl, br, 48);
+                for (unsigned i = 0; i < 48; ++i) {
+                    EXPECT_FLOAT_EQ(l[i], bl[i]);
+                    EXPECT_FLOAT_EQ(r[i], br[i]);
+                }
+            }
+            EXPECT_EQ(live.GetVoice(0).render_channels, mono || mode != 0 ? 1 : 2);
+        }
+    }
+}
+
+TEST(VoiceChannels, CrossfadeKeepsRegionFadesOutOfTheRepeatingSeam) {
+    std::vector<int16_t> pcm(1024, 10000);
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(pcm.data(), 1024, 60, 127, .5f);
+    p.loop = true;
+    p.loop_start = 128;
+    p.loop_end = 1024;
+    p.loop_crossfade_ms = 1;
+    p.fade_in_ms = 20;
+    p.fade_out_ms = 20;
+    vm.Trigger(p);
+    EXPECT_EQ(vm.GetVoice(0).fade_in_frames, 176u);
+    EXPECT_EQ(vm.GetVoice(0).fade_out_frames, 0u);
+}
+
+TEST(VoiceChannels, SelectedChannelsUseOneReservationAndPreserveSelectionWithOscillatorMono) {
+    std::vector<int16_t> pcm(256);
+    for (size_t i = 0; i < pcm.size(); i += 2) {
+        pcm[i] = 8192;
+        pcm[i + 1] = -4096;
+    }
+    const float expected[] = {0, .125f, -.0625f, .03125f};
+    for (uint8_t mode = 1; mode <= 3; ++mode) {
+        for (bool mono: {false, true}) {
+            VoiceManager vm;
+            vm.Init(48000);
+            auto p = FlatParams(pcm.data(), 128, 60, 127, .5f);
+            p.channels = 2;
+            p.channel_mode = mode;
+            p.mono = mono;
+            vm.Trigger(p);
+            EXPECT_EQ(vm.ActiveChannelCount(), 1);
+            p.channel_mode = 0;  // held voice owns its immutable selection
+            float l[8], r[8];
+            vm.Render(l, r, 8);
+            for (int i = 0; i < 8; ++i) {
+                EXPECT_FLOAT_EQ(l[i], expected[mode]);
+                EXPECT_FLOAT_EQ(r[i], expected[mode]);
+            }
+        }
+    }
+}
+
+TEST(VoiceManagerModulationTest, MidiSourcesFollowTrackIncludingReleaseAndNextTrigger) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 2);
+    p.release_s = 1;
+    vm.Trigger(p);
+    p.track = 3;
+    p.note = 64;
+    vm.Trigger(p);
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_MODWHEEL, DEST_PITCH, 32767, CURVE_LINEAR, 0};
+    slots[1] = {SRC_AFTERTOUCH, DEST_PAN, 32767, CURVE_LINEAR, 0};
+    const ModSlotResolver resolver{slots, &SingleModSlotArray};
+    MidiModulation midi;
+    midi.Init();
+    midi.Wheel(1u << 2, 127);
+    midi.Pressure(1u << 3, 127);
+    vm.TickModulation(resolver, {}, 48, &midi.Acquire());
+    EXPECT_NEAR(vm.GetVoice(0).mod_pitch_mul, std::pow(2.f, 2.f / 12), 1e-6);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_pan_offset, 0);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).mod_pitch_mul, 1);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).mod_pan_offset, 1);
+    vm.ReleaseTrack(p.note, 3);
+    midi.Pressure(1u << 3, 0);
+    vm.TickModulation(resolver, {}, 48, &midi.Acquire());
+    EXPECT_TRUE(vm.GetVoice(1).envelope.IsReleasing());
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).mod_pan_offset, 0);
+    p.track = 2;
+    p.note = 67;
+    vm.Trigger(p);
+    vm.TickModulation(resolver, {}, 48, &midi.Acquire());
+    EXPECT_NEAR(vm.GetVoice(2).mod_pitch_mul, std::pow(2.f, 2.f / 12), 1e-6);
+}

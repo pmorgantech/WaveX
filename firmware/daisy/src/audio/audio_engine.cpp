@@ -4,6 +4,8 @@
 #include "audio/master_gain.hpp"
 #include "audio/mix_meter_window.hpp"
 #include "audio/parameter_locks.hpp"
+#include "audio/sample_channels.hpp"
+#include "audio/sample_loop.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
 #include <daisy.h>  // For CpuLoadMeter
@@ -61,6 +63,7 @@ using q15_t = int16_t;
 #include "storage/card_service.hpp"
 #include "storage/pattern_store.hpp"
 #include "storage/project_session.hpp"
+#include "storage/sample_file_job.hpp"
 #include "track_live_updates.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
@@ -180,6 +183,7 @@ static MixMeterSnapshot s_mix_meter_main;
 // callback alone applies them to sounding voices; different Tracks retain
 // independent pending updates.
 static TrackLiveUpdates s_track_live_updates;
+static MidiModulation s_midi_modulation;
 
 // Per-Track staging for the live values the Instrument does NOT own yet.
 // Filter and envelope moved onto Instrument in stage 4 and the filter
@@ -328,6 +332,7 @@ static LiveNoteRuntime s_live_notes WAVEX_DTCM_DATA;
 static CallbackStopFence s_voice_stop_fence;
 
 static bool StopTracksAndWait(uint16_t tracks) {
+    s_midi_modulation.Reset(tracks);
     const uint32_t generation = s_voice_stop_fence.RequestStop(tracks);
     const uint32_t started = System::GetNow();
     while (!s_voice_stop_fence.Complete(generation)) {
@@ -403,9 +408,6 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                     break;
                 case WaveX::Sequencer::SequencerCommandType::MidiClock:
                     s_seq_transport.OnMidiClock(command.midi_clock);
-                    break;
-                case WaveX::Sequencer::SequencerCommandType::MidiCc:
-                    s_seq_transport.OnMidiCc(command.midi_cc);
                     break;
             }
         }
@@ -581,6 +583,7 @@ struct WavState {
     uint32_t data_size;
     uint32_t bytes_remaining;
     uint16_t num_channels;
+    uint8_t channel_mode = SAMPLE_CH_AS_RECORDED;
     uint16_t bits_per_sample;
     uint32_t sample_rate;
     // Kept so a poisoned file object can be reopened in place. FatFS latches
@@ -611,8 +614,12 @@ struct WavState {
     uint32_t region_end_frame;
     uint32_t fade_in_frames;
     uint32_t fade_out_frames;
+    uint32_t crossfade_frames, crossfade_step;
 };
 static WavState s_wav = {};
+// Foreground converted loop head. No pointers into the Pool survive an unload,
+// and nonresident sidecar auditions use the same bounded cache. Never DMA here.
+WAVEX_BACKGROUND_DATA static q15_t s_loop_head[SampleLoop::kMaxCrossfadeFrames * kMaxMixChannels];
 
 // Loop gap (browser audition). Frames of silence still owed after a rewind.
 static uint32_t s_loop_gap_frames = 0;  // configured length
@@ -721,6 +728,10 @@ alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
 static SamplePool* s_pool = nullptr;
 static BssStatic<std::optional<Storage::ProjectSession>> s_project_session;
 static BssStatic<std::optional<Storage::BankSession>> s_bank_session;
+static BssStatic<Storage::SampleFileJob> s_sample_file_job;
+static SampleFileStatusMessage s_sample_file_status;
+static SampleFileOpMessage s_sample_file_request;
+static bool s_sample_file_send = false;
 static bool StopBankTrack(uint16_t mask);
 static bool StopProjectVoices();
 static void PublishProject();
@@ -793,6 +804,8 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     ref.loop_end = m.loop_end;
     ref.fade_in_ms = m.fade_in_ms;
     ref.fade_out_ms = m.fade_out_ms;
+    ref.loop_crossfade_ms = m.loop_crossfade_ms;
+    ref.channel_mode = m.channel_mode;
     // gain_mul is linear and multiplies the velocity gain, so the dB figure
     // has to be converted here rather than passed through.
     ref.gain_mul =
@@ -1310,6 +1323,45 @@ static inline q15_t ReadSample24(const uint8_t* src) {
     return static_cast<q15_t>(sample >> 8);
 }
 
+static uint32_t ConvertFramesToOutput(const uint8_t*, q15_t*, uint32_t, uint16_t, uint8_t);
+static bool PrepareWavCrossfade() {
+    const uint32_t n = s_wav.crossfade_frames;
+    if (!n)
+        return true;
+    const uint32_t bpf = s_wav.num_channels * (s_wav.bits_per_sample / 8u);
+    if (f_lseek(&s_wav.file, s_wav.loop_start) != FR_OK)
+        return false;
+    uint32_t copied = 0;
+    while (copied < n) {  // <=2 reads, independent of sample length
+        const uint32_t frames = std::min(n - copied, uint32_t(SD_BUFFER_SIZE / bpf));
+        UINT bytes = 0;
+        if (f_read(&s_wav.file, s_prebuffer_sd, frames * bpf, &bytes) != FR_OK ||
+            bytes != frames * bpf)
+            return false;
+        ConvertFramesToOutput(s_prebuffer_sd,
+                              s_loop_head + copied * s_output_channels,
+                              frames,
+                              s_wav.num_channels,
+                              static_cast<uint8_t>(s_wav.bits_per_sample));
+        copied += frames;
+    }
+    return true;
+}
+static void ApplyWavCrossfade(q15_t* buf, uint32_t frames, uint32_t first) {
+    if (!s_wav.crossfade_frames)
+        return;
+    const uint32_t bpf = s_wav.num_channels * (s_wav.bits_per_sample / 8u);
+    const uint32_t end = (s_wav.loop_end - s_wav.data_start) / bpf;
+    SampleLoop::ApplyBlock(buf,
+                           frames,
+                           first,
+                           s_loop_head,
+                           end,
+                           s_wav.crossfade_frames,
+                           s_output_channels,
+                           s_wav.crossfade_step);
+}
+
 // Playback gain, applied once on the converted block. Written out rather than
 // calling arm_scale_q15: CMSIS-DSP is not linked, and this is a two-line
 // multiply.
@@ -1398,11 +1450,9 @@ static uint32_t ConvertFramesToOutput(
             sample_vals[1] = sample_vals[0];
         }
 
+        SampleChannels::Map(sample_vals[0], sample_vals[1], src_channels, s_wav.channel_mode);
         for (uint32_t ch = 0; ch < s_output_channels; ++ch) {
-            q15_t value = 0;
-            if (ch < src_channels) {
-                value = sample_vals[ch];
-            }
+            q15_t value = ch < 2 ? sample_vals[ch] : 0;
             dst[i * s_output_channels + ch] = value;
         }
     }
@@ -1578,7 +1628,9 @@ static bool prebuffer_audio() {
                           frames_read,
                           s_wav.num_channels,
                           static_cast<uint8_t>(s_wav.bits_per_sample));
+    ApplyWavCrossfade(conversion_output, frames_read, source_first);
     ApplyWavGain(conversion_output, frames_read * s_output_channels);
+    ApplyWavFade(conversion_output, frames_read, source_first - s_wav.region_start_frame);
 
     q15_t* to_push = conversion_output;
     uint32_t output_frames = frames_read;
@@ -1700,7 +1752,9 @@ static bool refill_sd_buffer() {
             // rewind cost never appeared in I/O Stats either.
             // Owe the gap before the next pass starts.
             s_loop_gap_remaining = s_loop_gap_frames;
-            const uint32_t rewind_to = s_wav.loop_enabled ? s_wav.loop_start : s_wav.region_start;
+            const uint32_t rewind_to =
+                (s_wav.loop_enabled ? s_wav.loop_start + s_wav.crossfade_frames * file_bpf
+                                    : s_wav.region_start);
             const uint32_t seek_start = System::GetTick();
             if (f_lseek(&s_wav.file, rewind_to) == FR_OK) {
 #if WAVEX_DEBUG_HARNESS_ENABLED
@@ -1994,6 +2048,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // the type declares. Anything added to DTCM that has non-zero defaults
     // belongs in this block too.
     s_track_live_updates.Init();
+    s_midi_modulation.Init();
     for (auto& extras: s_track_live) {
         extras = TrackLiveExtras{};
     }
@@ -2222,6 +2277,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         s_mix_meter_window.Reset();
         s_callback_metering = metering;
     }
+    const auto& midi_sources = s_midi_modulation.Acquire();
     ModSources global_sources;
     global_sources.lfo1 = s_mod_lfo1.Tick();
     const ModSlotResolver resolver{nullptr, &ResolveModSlots};
@@ -2235,7 +2291,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         {
             PROFILE_SCOPE(voice_modulation);
             CALLBACK_DETAIL_SCOPE(Modulation);
-            s_voice_manager.TickModulation(resolver, global_sources, frames);
+            s_voice_manager.TickModulation(resolver, global_sources, frames, &midi_sources);
         }
         if (!s_voice_manager.ActiveVoiceCount() || size > Timebase::kBlockSize)
             return;
@@ -2413,6 +2469,8 @@ void OnTrackOp(const TrackOpMessage& m) {
     switch (m.op) {
         case TRACK_OP_SET_MIDI_IN:
             ok = SfzLoader::SetTrackMidiIn(m.track, static_cast<uint8_t>(m.value));
+            if (ok)
+                s_midi_modulation.Reset(static_cast<uint16_t>(1u << m.track));
             break;
         case TRACK_OP_SET_POLY_LIMIT:
             ok = SfzLoader::SetTrackPolyLimit(m.track, static_cast<uint8_t>(m.value));
@@ -2722,8 +2780,8 @@ void OnSongOp(const SeqSongOpMessage& request) {
         return;
     if (s_project_session.Get()) {
         if (s_project_session.Get()->RequestSong(request,
-                                                 BankBusy() || SfzLoader::Busy() ||
-                                                     PatternStore::Busy() ||
+                                                 BankBusy() || SampleFileBusy() ||
+                                                     SfzLoader::Busy() || PatternStore::Busy() ||
                                                      Storage::CardService::Busy()) &&
             request.op == SEQ_SONG_PLAY)
             PublishSequencerVoiceMap();
@@ -2742,8 +2800,8 @@ void OnPatternSlotOp(const SeqSlotOpMessage& request) {
         return;
     if (s_project_session.Get()) {
         s_project_session.Get()->RequestPattern(request,
-                                                BankBusy() || SfzLoader::Busy() ||
-                                                    PatternStore::Busy() ||
+                                                BankBusy() || SampleFileBusy() ||
+                                                    SfzLoader::Busy() || PatternStore::Busy() ||
                                                     Storage::CardService::Busy());
     } else {
         SeqSlotStatusMessage status;
@@ -2767,9 +2825,10 @@ void OnProjectOp(const ProjectOpMessage& request) {
         Comm::LinkSend(MSG_PROJECT_STATUS, &status, sizeof(status));
         return;
     }
-    const bool accepted = s_project_session.Get()->Request(
-        request,
-        BankBusy() || SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
+    const bool accepted =
+        s_project_session.Get()->Request(request,
+                                         SampleFileBusy() || BankBusy() || SfzLoader::Busy() ||
+                                             PatternStore::Busy() || Storage::CardService::Busy());
     if (accepted) {
         CancelEnvelopeJob();
         CloseWav();
@@ -2794,7 +2853,7 @@ bool BankBusy() {
 }
 static bool BankExternalBusy() {
     return (s_project_session.Get() && s_project_session.Get()->Busy()) || PatternStore::Busy() ||
-           Storage::CardService::Busy() || (!BankBusy() && SfzLoader::Busy());
+           SampleFileBusy() || Storage::CardService::Busy() || (!BankBusy() && SfzLoader::Busy());
 }
 static void BankAccepted() {
 #if WAVEX_DEBUG_HARNESS_ENABLED
@@ -2886,8 +2945,79 @@ void PumpProjectSession() {
         session->ReplySent();
 }
 bool StorageJobBusy() {
-    return BankBusy() || (s_project_session.Get() && s_project_session.Get()->Busy()) ||
-           SfzLoader::Busy() || WaveX::PatternStore::Busy();
+    return SampleFileBusy() || BankBusy() ||
+           (s_project_session.Get() && s_project_session.Get()->Busy()) || SfzLoader::Busy() ||
+           WaveX::PatternStore::Busy();
+}
+bool SampleFileBusy() {
+    return s_sample_file_job.Get().Busy();
+}
+void OnSampleFileOp(const SampleFileOpMessage& request) {
+    if (!IsValidSampleFileOp(request))
+        return;
+    auto& status = s_sample_file_status;
+    status.request_id = request.request_id;
+    s_sample_file_send = true;
+    if (request.op == SAMPLE_FILE_GET || request.request_id == status.active_request_id ||
+        request.request_id == status.completed_request_id)
+        return;
+    if (StorageJobBusy() || Storage::CardService::Busy()) {
+        // Do not replace the active operation or its eventual result.
+        status.completed_request_id = request.request_id;
+        status.completed_op = request.op;
+        status.error = SAMPLE_FILE_BUSY;
+        return;
+    }
+    const auto* info = find_loaded_sample(request.sample_id);
+    status.sample_id = request.sample_id;
+    status.progress = 0;
+    status.path[0] = 0;
+    if (!info) {
+        status.completed_request_id = request.request_id;
+        status.completed_op = request.op;
+        status.error = SAMPLE_FILE_BAD_SAMPLE;
+        return;
+    }
+    if (!s_sample_file_job.Get().Begin(request, info->path, info->meta)) {
+        status.completed_request_id = request.request_id;
+        status.completed_op = request.op;
+        status.error = s_sample_file_job.Get().Error();
+        return;
+    }
+    CloseWav();
+    CancelEnvelopeJob();
+    s_sample_file_request = request;
+    status.busy = 1;
+    status.active_request_id = request.request_id;
+}
+void PumpSampleFile() {
+    auto& job = s_sample_file_job.Get();
+    auto& status = s_sample_file_status;
+    if (job.Busy()) {
+        job.Pump();
+        status.progress = job.Progress();
+        if (!job.Busy()) {
+            // All job handles are closed and competing storage jobs were
+            // excluded at admission. A remount invalidates handles, so only
+            // now may a write-side bus error negotiate a lower clock. Keep
+            // the failed result: never replay a mutation automatically.
+#if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
+            if (job.CardIoFailed())
+                Storage::SdSdio::DowngradeSpeed();
+#endif
+            status.busy = 0;
+            status.active_request_id = 0;
+            status.completed_request_id = s_sample_file_request.request_id;
+            status.completed_op = s_sample_file_request.op;
+            status.sample_id = s_sample_file_request.sample_id;
+            status.error = job.Error();
+            status.progress = status.error == SAMPLE_FILE_OK ? 100 : status.progress;
+            Protocol::detail::CopyWireString(status.path, sizeof(status.path), job.Destination());
+            s_sample_file_send = true;
+        }
+    }
+    if (s_sample_file_send && Comm::LinkSend(MSG_SAMPLE_FILE_STATUS, &status, sizeof(status)) >= 0)
+        s_sample_file_send = false;
 }
 bool PrepareCardFormat() {
     if (StorageJobBusy())
@@ -3013,11 +3143,25 @@ void OnMidiClockEvent(const MidiClockEventMessage& m) {
     EnqueueSequencerCommand(command);
 }
 
+static uint16_t MidiDestinations(uint8_t channel) {
+    uint8_t tracks[kNumTracks];
+    const auto count = SfzLoader::TracksForMidiChannel(channel, tracks, kNumTracks);
+    uint16_t mask = 0;
+    for (uint8_t i = 0; i < count; ++i)
+        mask |= static_cast<uint16_t>(1u << tracks[i]);
+    return mask;
+}
 void OnMidiCc(const MidiCcMessage& m) {
-    WaveX::Sequencer::SequencerCommand command;
-    command.type = WaveX::Sequencer::SequencerCommandType::MidiCc;
-    command.midi_cc = m;
-    EnqueueSequencerCommand(command);
+    if (!IsValidMidiCc(m))
+        return;
+    if (m.cc == 1)
+        s_midi_modulation.Wheel(MidiDestinations(m.channel), m.value);
+    else if (m.cc == 121)
+        s_midi_modulation.Reset(MidiDestinations(m.channel));
+}
+void OnMidiPressure(const MidiPressureMessage& m) {
+    if (IsValidMidiPressure(m))
+        s_midi_modulation.Pressure(MidiDestinations(m.channel), m.value);
 }
 
 /**
@@ -3506,6 +3650,22 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     const uint32_t data_off = wav_info.data_offset;
     const uint32_t data_size = resident.data_size;
 
+    SampleFile::Document saved;
+    saved.file_bytes = f_size(&file);
+    saved.data_offset = data_off;
+    saved.sample.sample_rate = sample_rate;
+    saved.sample.total_frames = resident.total_frames;
+    saved.sample.channels = static_cast<uint8_t>(num_ch);
+    saved.sample.bits_per_sample = static_cast<uint8_t>(bits);
+    saved.sample.Resolve();
+    const auto sidecar = Storage::ReadSampleSidecar(sl.path, saved, saved.sample);
+    if (sidecar == Storage::SampleSidecarResult::Invalid ||
+        sidecar == Storage::SampleSidecarResult::IoError) {
+        f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
+        return;
+    }
+
     // Admission: an entry and the bytes, or a reason. Nothing is evicted to
     // make room - the user unloads; the engine never guesses (§4).
     SamplePool::Record* record = nullptr;
@@ -3613,6 +3773,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     CancelEnvelopeJob();
     FillLoadedSample(record->payload, sample_id, sl.path, resident, handle);
+    SampleFile::Apply(saved, record->payload.meta);
     // The user asked for it by name: only an explicit unload releases it.
     s_pool->SetPinned(sample_id, true);
     s_pool->NoteNewest(sample_id);
@@ -3925,8 +4086,29 @@ bool OpenWav(const char* path) {
     // Every open starts with this file's own metadata. Gain, fades and
     // markers from the previous file must never bleed into another audition.
     SamplePool::Record* record = s_pool ? s_pool->FindByPath(path) : nullptr;
-    ApplyMetaToStreaming(record ? &record->payload : nullptr);
-    if (f_lseek(&s_wav.file, s_wav.region_start) != FR_OK) {
+    LoadedSampleInfo standalone{};
+    if (!record) {
+        SampleFile::Document geometry;
+        geometry.file_bytes = f_size(&s_wav.file);
+        geometry.data_offset = wav_info.data_offset;
+        auto& meta = geometry.sample;
+        meta.sample_rate = wav_info.sample_rate;
+        meta.total_frames =
+            wav_info.data_size / (wav_info.num_channels * (wav_info.bits_per_sample / 8u));
+        meta.channels = static_cast<uint8_t>(wav_info.num_channels);
+        meta.bits_per_sample = static_cast<uint8_t>(wav_info.bits_per_sample);
+        meta.Resolve();
+        standalone.meta = meta;
+        std::strcpy(standalone.path, path);
+        const auto sidecar = Storage::ReadSampleSidecar(path, geometry, standalone.meta);
+        if (sidecar == Storage::SampleSidecarResult::Invalid ||
+            sidecar == Storage::SampleSidecarResult::IoError) {
+            CloseWav();
+            return false;
+        }
+    }
+    ApplyMetaToStreaming(record ? &record->payload : &standalone);
+    if (!PrepareWavCrossfade() || f_lseek(&s_wav.file, s_wav.region_start) != FR_OK) {
         CloseWav();
         return false;
     }
@@ -4304,6 +4486,9 @@ void PumpWavIO() {
                           frames_to_transfer,
                           s_wav.num_channels,
                           static_cast<uint8_t>(s_wav.bits_per_sample));
+    ApplyWavCrossfade(conversion_output,
+                      frames_to_transfer,
+                      (slot.file_offset - s_wav.data_start) / file_bpf + slot.consumed);
     ApplyWavGain(conversion_output, frames_to_transfer * s_output_channels);
     // Region-relative index of this block's first frame. slot.file_offset is
     // where the read started; consumed is how far into the slot we are.
@@ -4417,6 +4602,53 @@ static q15_t GainDbToQ15(int16_t db_x10) {
     return static_cast<q15_t>(scaled);
 }
 
+void OnSampleSeam(const SampleSeamRequest& request) {
+    if (!IsValidSampleSeamRequest(request))
+        return;
+    SampleSeamStatus reply;
+    reply.request_id = request.request_id;
+    reply.sample_id = request.expected.sample_id;
+    auto* info = find_loaded_sample(reply.sample_id);
+    const auto ref = ResolveLoadedSample(nullptr, reply.sample_id);
+    if (SampleFileBusy() || ProjectBusy() || BankBusy() || SfzLoader::Busy()) {
+        reply.error = SAMPLE_SEAM_BUSY;
+    } else if (!info || !ref.valid()) {
+        reply.error = SAMPLE_SEAM_MISSING;
+    } else {
+        auto& m = info->meta;
+        reply.generation = m.generation;
+        reply.frame = SampleLoop::Marker(m, request.marker);
+        if (!SampleLoop::Matches(m, request)) {
+            reply.error = SAMPLE_SEAM_STALE;
+        } else if (request.action == SAMPLE_SEAM_SNAP) {
+            uint32_t frame = reply.frame;
+            if (!SampleLoop::Snap(ref.data, m, request.marker, request.radius, frame)) {
+                reply.error = SAMPLE_SEAM_NO_CROSSING;
+            } else {
+                reply.moved = frame != reply.frame;
+                reply.frame = frame;
+                auto candidate = m;
+                SampleLoop::SetMarker(candidate, request.marker, frame);
+                SetEditParams(m.sample_id,
+                              candidate.loop_enabled,
+                              candidate.gain_db_x10,
+                              candidate.start_frame,
+                              candidate.end_frame,
+                              candidate.loop_start,
+                              candidate.loop_end,
+                              candidate.fade_in_ms,
+                              candidate.fade_out_ms,
+                              candidate.loop_crossfade_ms,
+                              candidate.channel_mode);
+            }
+        }
+        SampleLoop::Measure(ref.data, m, reply);
+        PushSampleMeta(*info);
+    }
+    // Losing this reply is a timeout, never permission to repeat the snap.
+    Comm::LinkSend(MSG_SAMPLE_SEAM_STATUS, &reply, sizeof(reply));
+}
+
 // Applies an edit to the sample's record, then pushes the result back. The
 // backend clamps and is the authority; the frontend is told what was applied
 // rather than assuming its request was taken verbatim.
@@ -4428,14 +4660,16 @@ void SetEditParams(uint16_t sample_id,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame,
                    uint16_t fade_in_ms,
-                   uint16_t fade_out_ms) {
+                   uint16_t fade_out_ms,
+                   uint8_t loop_crossfade_ms,
+                   uint8_t channel_mode) {
     // The Pool id, and only that. This used to fall back to the newest
     // sample for id 0, which hid the frontend truncating every id to one
     // byte: each edit "worked", on the wrong sample. An unknown id is a
     // frontend bug or a sample unloaded under it; either way, touching some
     // other record would be worse than doing nothing.
     LoadedSampleInfo* info = sample_id ? find_loaded_sample(sample_id) : nullptr;
-    if (!info) {
+    if (!info || channel_mode > SAMPLE_CH_MONO_SUM) {
         if (s_hw) {
             WaveX::Log::PrintLine("SAMPLE_EDIT: no sample for id=%u", (unsigned)sample_id);
         }
@@ -4448,6 +4682,11 @@ void SetEditParams(uint16_t sample_id,
     } else if (gain_db_x10 > 120) {
         gain_db_x10 = 120;
     }
+    if (m.channel_mode != channel_mode) {
+        m.channel_mode = channel_mode;
+        ++m.generation;  // channel mapping changes the cached waveform
+    }
+    m.loop_crossfade_ms = std::min(loop_crossfade_ms, kMaxLoopCrossfadeMs);
     m.gain_db_x10 = gain_db_x10;
     m.start_frame = start_frame;
     m.end_frame = end_frame;
@@ -4471,7 +4710,13 @@ void SetEditParams(uint16_t sample_id,
     m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
     PushSampleMeta(*info);
 
-    ApplyMetaToStreaming(info);
+    // Discard queued PCM made from the old markers/head before adopting edits.
+    // Re-open owns the complete stream transition and preserves resampler epoch.
+    if (s_wav.open && info->path[0] && std::strcmp(info->path, s_wav.path) == 0) {
+        char path[BROWSE_PATH_MAX];
+        std::strcpy(path, info->path);
+        OpenWav(path);
+    }
     PublishSequencerVoiceMap();
 }
 
@@ -4505,6 +4750,7 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
     s_wav.loop_end = s_wav.data_start + m.loop_end * file_bpf;
     s_wav.loop_enabled = m.loop_enabled != 0;
     s_wav.gain_q15 = GainDbToQ15(m.gain_db_x10);
+    s_wav.channel_mode = m.channel_mode;
     s_wav.region_start_frame = m.start_frame;
     s_wav.region_end_frame = m.end_frame;
     // Fades are specified against the FILE's rate, which is what m carries and
@@ -4515,7 +4761,16 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
     const uint32_t file_rate =
         s_wav.sample_rate ? s_wav.sample_rate : static_cast<uint32_t>(s_sample_rate);
     s_wav.fade_in_frames = WaveX::AudioEngine::FadeFrames(m.fade_in_ms, file_rate);
-    s_wav.fade_out_frames = WaveX::AudioEngine::FadeFrames(m.fade_out_ms, file_rate);
+    s_wav.crossfade_frames =
+        m.loop_enabled
+            ? SampleLoop::CrossfadeFrames(m.loop_crossfade_ms, file_rate, m.loop_end - m.loop_start)
+            : 0;
+    s_wav.crossfade_step = SampleLoop::RampStep(s_wav.crossfade_frames);
+    if (s_wav.crossfade_frames)
+        s_wav.fade_in_frames =
+            std::min(s_wav.fade_in_frames, m.loop_start + s_wav.crossfade_frames - m.start_frame);
+    s_wav.fade_out_frames =
+        s_wav.crossfade_frames ? 0 : WaveX::AudioEngine::FadeFrames(m.fade_out_ms, file_rate);
 
     WaveX::Log::PrintLine("WAV edit: region %lu..%lu loop %lu..%lu %s gain %d.%ddB fade %u/%u ms",
                           (unsigned long)m.start_frame,

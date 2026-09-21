@@ -505,8 +505,12 @@ void ProjectSession::Pump() {
                         m.end_frame = m.loop_end = m.total_frames;
                         m.gain_db_x10 = 0;
                         m.fade_in_ms = m.fade_out_ms = kDefaultDeclickMs;
+                        m.loop_crossfade_ms = 0;
                         m.loop_enabled = 0;
-                        m.channel_mode = SAMPLE_CH_AS_RECORDED;
+                        if (m.channel_mode != SAMPLE_CH_AS_RECORDED) {
+                            m.channel_mode = SAMPLE_CH_AS_RECORDED;
+                            ++m.generation;
+                        }
                     }
                 });
                 if (scratch_->sample_edits_present && referenced != scratch_->sample_count)

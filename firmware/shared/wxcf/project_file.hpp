@@ -12,7 +12,7 @@ namespace ProjectFile {
 using PatternFile::Result;
 using namespace Sequencer;
 constexpr uint16_t kFileType = 6;
-constexpr uint16_t kVersion = 0x0103;
+constexpr uint16_t kVersion = 0x0104;
 constexpr uint32_t kMaxFileBytes = 8 * 1024 * 1024;
 constexpr uint32_t kHeadBytes = 36, kTrackBytes = 272, kPatternPrefixBytes = 44;
 constexpr uint32_t kPatternBytes =
@@ -73,7 +73,8 @@ inline bool Sample(const ProjectSample& s) {
            (s.channels == 1 || s.channels == 2) && s.bits_per_sample == 16 && s.start_frame < end &&
            end <= s.total_frames && s.loop_start >= s.start_frame && s.loop_start < loop_end &&
            loop_end <= end && s.gain_db_x10 >= -240 && s.gain_db_x10 <= 120 &&
-           s.channel_mode <= Protocol::SAMPLE_CH_MONO_SUM;
+           s.channel_mode <= Protocol::SAMPLE_CH_MONO_SUM &&
+           s.loop_crossfade_ms <= Protocol::kMaxLoopCrossfadeMs;
 }
 inline bool UniqueSample(const Project& p, uint16_t index) {
     for (uint16_t i = 0; i < index; ++i)
@@ -95,8 +96,9 @@ inline void EncodeSampleEdits(uint8_t* b, const ProjectSample& s) {
     b[31] = s.bits_per_sample;
     b[32] = s.loop_enabled;
     b[33] = s.channel_mode;
+    b[34] = s.loop_crossfade_ms;
 }
-inline bool DecodeSampleEdits(const uint8_t* b, ProjectSample& s) {
+inline bool DecodeSampleEdits(const uint8_t* b, ProjectSample& s, bool crossfade = true) {
     s.sample_rate = Wxcf::detail::ReadU32LE(b);
     s.total_frames = Wxcf::detail::ReadU32LE(b + 4);
     s.start_frame = Wxcf::detail::ReadU32LE(b + 8);
@@ -111,7 +113,8 @@ inline bool DecodeSampleEdits(const uint8_t* b, ProjectSample& s) {
     s.bits_per_sample = b[31];
     s.loop_enabled = b[32] != 0;
     s.channel_mode = b[33];
-    return b[32] <= 1 && !b[34] && !b[35] && Sample(s);
+    s.loop_crossfade_ms = b[34];
+    return b[32] <= 1 && (crossfade || !b[34]) && !b[35] && Sample(s);
 }
 inline bool Links(const Project& p) {
     if (!p.patterns[p.active_pattern].used ||
@@ -336,7 +339,8 @@ class Decoder {
             auto& sample = p_.samples[samples_read_];
             if (!Read(b, kSampleEditBytes))
                 return result_;
-            if (!detail::DecodeSampleEdits(b, sample) || !detail::UniqueSample(p_, samples_read_))
+            if (!detail::DecodeSampleEdits(b, sample, sample_crossfade_) ||
+                !detail::UniqueSample(p_, samples_read_))
                 return Fail(Result::Invalid);
             ++samples_read_;
             sample_pending_ = false;
@@ -424,6 +428,7 @@ class Decoder {
                 return Fail(Result::Invalid);
             if (!Read(p_.samples[samples_read_].path, Protocol::BROWSE_PATH_MAX))
                 return result_;
+            sample_crossfade_ = h.chunk_version >= 0x0104;
             sample_pending_ = true;
         } else if (h.chunk_id >= 0x100 && h.chunk_id < 0x100 + kMaxTracks) {
             const uint8_t t = static_cast<uint8_t>(h.chunk_id - 0x100);
@@ -515,6 +520,7 @@ class Decoder {
     Project& p_;
     uint32_t consumed_ = 12, skip_ = 0;
     uint16_t tracks_ = 0, record_ = 0, samples_read_ = 0;
+    bool sample_crossfade_ = false;
     bool needs_samples_ = false, samples_head_ = false, sample_pending_ = false;
     uint8_t index_ = 0;
     bool melodic_format_ = false;

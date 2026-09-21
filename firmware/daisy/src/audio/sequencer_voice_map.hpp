@@ -75,7 +75,11 @@ struct SequencerVoiceMap {
             dest.zones[index] =
                 PrepareZoneTrigger(instrument, zone, sample, track, zone.root_note, 127, osc);
             const auto& trigger = dest.zones[index];
-            dest.keys[index].channels = trigger.channels == 2 && !trigger.mono ? 2 : 1;
+            dest.keys[index].channels =
+                trigger.channels == 2 && !trigger.mono &&
+                        trigger.channel_mode == Protocol::SAMPLE_CH_AS_RECORDED
+                    ? 2
+                    : 1;
             dest.keys[index].choke = trigger.choke_group;
         }
         // Derive only when every prepared zone owns one distinct note in a

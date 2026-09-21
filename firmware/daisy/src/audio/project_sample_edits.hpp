@@ -17,6 +17,7 @@ inline bool CaptureProjectSample(const LoadedSampleInfo& info, Sequencer::Projec
     out.gain_db_x10 = m.gain_db_x10;
     out.fade_in_ms = m.fade_in_ms;
     out.fade_out_ms = m.fade_out_ms;
+    out.loop_crossfade_ms = m.loop_crossfade_ms;
     out.channels = m.channels;
     out.bits_per_sample = m.bits_per_sample;
     out.loop_enabled = m.loop_enabled != 0;
@@ -29,7 +30,7 @@ inline bool ApplyProjectSample(const Sequencer::ProjectSample& saved, LoadedSamp
         saved.sample_rate != m.sample_rate || saved.total_frames != m.total_frames ||
         saved.channels != m.channels || saved.bits_per_sample != m.bits_per_sample)
         return false;
-    // Preserve the candidate's runtime id, generation, name and residency.
+    // Preserve runtime identity; changing the channel mapping advances waveform revision.
     m.start_frame = saved.start_frame;
     m.end_frame = saved.end_frame;
     m.loop_start = saved.loop_start;
@@ -37,8 +38,12 @@ inline bool ApplyProjectSample(const Sequencer::ProjectSample& saved, LoadedSamp
     m.gain_db_x10 = saved.gain_db_x10;
     m.fade_in_ms = saved.fade_in_ms;
     m.fade_out_ms = saved.fade_out_ms;
+    m.loop_crossfade_ms = saved.loop_crossfade_ms;
     m.loop_enabled = saved.loop_enabled;
-    m.channel_mode = saved.channel_mode;
+    if (m.channel_mode != saved.channel_mode) {
+        m.channel_mode = saved.channel_mode;
+        ++m.generation;
+    }
     m.Resolve();
     return true;
 }

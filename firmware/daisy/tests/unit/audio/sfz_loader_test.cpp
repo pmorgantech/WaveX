@@ -9,6 +9,7 @@
 #include "storage/bank_session.hpp"
 #include "storage/pattern_store.hpp"
 #include "storage/project_session.hpp"
+#include "storage/sample_file_job.hpp"
 #include "wxi/wxi.hpp"
 #include <array>
 #include <cstring>
@@ -1500,6 +1501,8 @@ TEST_F(SfzLoaderTest, ProjectSessionSaveNewRecallPreservesEditsMixAndHiddenSteps
     EXPECT_FALSE(transport.IsPlaying());
     EXPECT_EQ(pool_.Count(), 0u);
     EXPECT_EQ(mixer.Pending().solo_mask, 0);
+    // A Project owns its captured edits even if an external sidecar is corrupt.
+    MockFatFS::Instance().AddFile("/kits/a.wav.wxs", {1, 2, 3});
     ASSERT_TRUE(session.Request(ProjectRequest(1003, PROJECT_LOAD, "Night")));
     RunProject(session, exchange, transport);
     ASSERT_EQ(session.Status().error, PROJECT_OK);
@@ -2814,4 +2817,27 @@ TEST_F(SfzLoaderTest, AllocationInheritanceSoundUndoAndStaleEditProtection) {
     ASSERT_TRUE(SfzLoader::OnAllocationOp(op));
     EXPECT_EQ(SfzLoader::ReadAllocationState(0, ALLOC_SOUND).sound, Allocation::Policy{});
     EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
+}
+
+TEST_F(SfzLoaderTest, StandaloneSidecarRestoresImportedSampleDefaults) {
+    WaveX::SampleFile::Document geometry;
+    ASSERT_TRUE(WaveX::Storage::ProbeSampleFile("/kits/a.wav", geometry));
+    geometry.sample.start_frame = 1;
+    geometry.sample.loop_start = 1;
+    geometry.sample.gain_db_x10 = -60;
+    WaveX::Storage::SampleFileJob job;
+    SampleFileOpMessage request;
+    request.request_id = 1;
+    request.sample_id = 1024;
+    request.op = SAMPLE_FILE_SAVE;
+    ASSERT_TRUE(job.Begin(request, "/kits/a.wav", geometry.sample));
+    for (unsigned i = 0; i < 20 && job.Busy(); ++i)
+        job.Pump();
+    ASSERT_FALSE(job.Busy());
+    ASSERT_EQ(job.Error(), SAMPLE_FILE_OK);
+    ASSERT_TRUE(Load(0));
+    const auto* record = pool_.FindByPath("/kits/a.wav");
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->payload.meta.start_frame, 1u);
+    EXPECT_EQ(record->payload.meta.gain_db_x10, -60);
 }

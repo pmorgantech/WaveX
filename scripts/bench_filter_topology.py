@@ -51,7 +51,7 @@ def load_looped(daisy, path):
     # Full-file loop, as the earlier captures used.
     daisy.msg(
         0x3C,
-        struct.pack("<HBBhIIIIHH", sid, 1, 0, 0, 0, 0, 0, 0, 0, 0),
+        struct.pack("<HBBhIIIIHHx", sid, 1, 0, 0, 0, 0, 0, 0, 0, 0),
     )
     return sid
 

@@ -6,6 +6,7 @@
 
 #include "audio/lfo_config.hpp"
 #include "audio/note_policy.hpp"
+#include <cstring>
 
 namespace WaveX {
 namespace Protocol {
@@ -21,7 +22,9 @@ namespace Protocol {
 // MSG_PREVIEW_REQ (0x0A) / MSG_WAVE_CHUNK (0x11) retired.
 // 4: envelope payloads use signed 8-bit extrema and an explicit encoding tag.
 // 5: InstOpMessage appends explicit pad index, choke and Sample Pool id fields.
-static const uint32_t PROTOCOL_VERSION = 6;
+// 7: sample reserved bytes now carry loop_crossfade_ms (0..20); stereo seam requests.
+// 8: sample edit/seam requests append the playback channel mode.
+static const uint32_t PROTOCOL_VERSION = 8;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -196,6 +199,11 @@ enum MessageType : uint8_t {
     MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
     MSG_ALLOC_OP = 0x86,        // E->D: Instrument policy or Track override
     MSG_ALLOC_SYNC = 0x87,      // D->E: policy, inheritance and retained edit outcome
+    MSG_SAMPLE_FILE_OP = 0x89,  // E->D: standalone sample save/copy and retained status
+    MSG_SAMPLE_FILE_STATUS = 0x8A,
+    MSG_SAMPLE_SEAM_REQ = 0x8B,
+    MSG_SAMPLE_SEAM_STATUS = 0x8C,
+    MSG_MIDI_PRESSURE = 0x8D,  // E->D: channel pressure, independent of CC numbers
     MSG_ERROR = 0xFF
 };
 
@@ -856,10 +864,11 @@ enum SampleChannelMode : uint8_t {
 // else. 1 ms is long enough to turn a step into a slope and short enough to be
 // inaudible against a drum transient, whose rise time is 5-20 ms.
 static const uint16_t kDefaultDeclickMs = 1;
+static constexpr uint8_t kMaxLoopCrossfadeMs = 20;
 
 struct SampleMetadata {
     uint16_t sample_id;
-    uint16_t generation;  // bumps on content change, not on marker edits
+    uint16_t generation;  // waveform revision: PCM or channel mapping, not marker edits
     uint32_t sample_rate;
     uint32_t total_frames;
 
@@ -882,9 +891,9 @@ struct SampleMetadata {
     uint8_t channels;         // as stored: 1 or 2
     uint8_t bits_per_sample;  // 8 / 16 / 24
     uint8_t loop_enabled;
-    uint8_t channel_mode;  // SampleChannelMode
-    uint8_t flags;         // SampleMetaFlags
-    uint8_t reserved;
+    uint8_t channel_mode;       // SampleChannelMode
+    uint8_t flags;              // SampleMetaFlags
+    uint8_t loop_crossfade_ms;  // 0 = off; stereo-linked linear overlap
     // Which Tracks' Instruments reference this sample (bit t = Track t) -
     // the Sample Manager's "used by" column, and what decides whether an
     // unbind frees it. Filled by the Pool at send time; ignored on receive.
@@ -909,7 +918,7 @@ struct SampleMetadata {
           loop_enabled(0),
           channel_mode(SAMPLE_CH_AS_RECORDED),
           flags(0),
-          reserved(0),
+          loop_crossfade_ms(0),
           used_by(0) {
         name[0] = '\0';
     }
@@ -922,7 +931,7 @@ struct SampleMetadata {
         if (start_frame >= end_frame) {
             start_frame = 0;
         }
-        if (loop_end == 0 || loop_end > end_frame) {
+        if (loop_end <= start_frame || loop_end > end_frame) {
             loop_end = end_frame;
         }
         if (loop_start < start_frame || loop_start >= loop_end) {
@@ -935,6 +944,67 @@ enum SampleMetaFlags : uint8_t {
     SAMPLE_META_RESIDENT = 0x01,  // clear = the record is gone (an unload)
     SAMPLE_META_PINNED = 0x02,    // the user loaded it; only an unload frees it
 };
+
+enum SampleFileOp : uint8_t { SAMPLE_FILE_GET, SAMPLE_FILE_SAVE, SAMPLE_FILE_COPY };
+enum SampleFileError : uint8_t {
+    SAMPLE_FILE_OK,
+    SAMPLE_FILE_BUSY,
+    SAMPLE_FILE_BAD_SAMPLE,
+    SAMPLE_FILE_BAD_NAME,
+    SAMPLE_FILE_EXISTS,
+    SAMPLE_FILE_NO_SPACE,
+    SAMPLE_FILE_IO,
+    SAMPLE_FILE_CHANGED
+};
+struct SampleFileOpMessage {
+    uint32_t request_id = 0;
+    uint16_t sample_id = 0;
+    uint8_t op = SAMPLE_FILE_GET;
+    uint8_t reserved = 0;
+    char name[FILE_NAME_MAX]{};  // COPY: new basename in the source directory, no extension
+    SampleFileOpMessage() = default;
+    SampleFileOpMessage(uint32_t request, uint16_t sample, uint8_t operation, const char* basename)
+        : request_id(request), sample_id(sample), op(operation) {
+        if (basename)
+            std::strncpy(name, basename, sizeof(name) - 1);
+    }
+} __attribute__((packed));
+struct SampleFileStatusMessage {
+    uint32_t request_id = 0, active_request_id = 0, completed_request_id = 0;
+    uint16_t sample_id = 0;
+    uint8_t busy = 0, completed_op = SAMPLE_FILE_GET, error = SAMPLE_FILE_OK, progress = 0;
+    char path[BROWSE_PATH_MAX]{};  // completed destination; never a runtime binding
+    SampleFileStatusMessage() = default;
+    SampleFileStatusMessage(uint32_t request,
+                            uint32_t active,
+                            uint32_t completed,
+                            uint16_t sample,
+                            uint8_t in_progress,
+                            uint8_t operation,
+                            uint8_t failure,
+                            uint8_t percent,
+                            const char* destination)
+        : request_id(request),
+          active_request_id(active),
+          completed_request_id(completed),
+          sample_id(sample),
+          busy(in_progress),
+          completed_op(operation),
+          error(failure),
+          progress(percent) {
+        if (destination)
+            std::strncpy(path, destination, sizeof(path) - 1);
+    }
+} __attribute__((packed));
+inline bool IsValidSampleFileOp(const SampleFileOpMessage& m) {
+    return m.request_id && m.op <= SAMPLE_FILE_COPY && !m.reserved &&
+           (m.op == SAMPLE_FILE_GET || m.sample_id) && std::memchr(m.name, 0, sizeof(m.name));
+}
+inline bool IsValidSampleFileStatus(const SampleFileStatusMessage& m) {
+    return m.request_id && m.busy <= 1 && bool(m.busy) == bool(m.active_request_id) &&
+           m.completed_op <= SAMPLE_FILE_COPY && m.error <= SAMPLE_FILE_CHANGED &&
+           m.progress <= 100 && std::memchr(m.path, 0, sizeof(m.path));
+}
 
 // One window of the Sample Pool, in registry order. `first` counts resident
 // records (not registry slots); `count` is capped at MAX_SAMPLE_META_PAGE so
@@ -992,7 +1062,7 @@ struct SampleMetaReqMessage {
 struct SampleEditMessage {
     uint16_t sample_id;
     uint8_t loop_enabled;
-    uint8_t reserved;
+    uint8_t loop_crossfade_ms;
     int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
     uint32_t start_frame;
     uint32_t end_frame;  // 0 = end of file
@@ -1003,18 +1073,20 @@ struct SampleEditMessage {
     // preserves half its fields is how a UI and a backend drift apart.
     uint16_t fade_in_ms;
     uint16_t fade_out_ms;
+    uint8_t channel_mode;  // SampleChannelMode; complete edit snapshot
 
     SampleEditMessage()
         : sample_id(0),
           loop_enabled(0),
-          reserved(0),
+          loop_crossfade_ms(0),
           gain_db_x10(0),
           start_frame(0),
           end_frame(0),
           loop_start(0),
           loop_end(0),
           fade_in_ms(kDefaultDeclickMs),
-          fade_out_ms(kDefaultDeclickMs) {}
+          fade_out_ms(kDefaultDeclickMs),
+          channel_mode(SAMPLE_CH_AS_RECORDED) {}
     SampleEditMessage(uint16_t sample_id_,
                       uint8_t loop_enabled_,
                       int16_t gain_db_x10_,
@@ -1026,15 +1098,65 @@ struct SampleEditMessage {
                       uint16_t fade_out_ms_ = kDefaultDeclickMs)
         : sample_id(sample_id_),
           loop_enabled(loop_enabled_),
-          reserved(0),
+          loop_crossfade_ms(0),
           gain_db_x10(gain_db_x10_),
           start_frame(start_frame_),
           end_frame(end_frame_),
           loop_start(loop_start_),
           loop_end(loop_end_),
           fade_in_ms(fade_in_ms_),
-          fade_out_ms(fade_out_ms_) {}
+          fade_out_ms(fade_out_ms_),
+          channel_mode(SAMPLE_CH_AS_RECORDED) {}
 } __attribute__((packed));
+
+// Optimistic concurrency: compare the complete expected edit and content
+// generation before moving a marker. Never replay a mutation on timeout.
+enum SampleSeamAction : uint8_t { SAMPLE_SEAM_CHECK, SAMPLE_SEAM_SNAP };
+enum SampleMarker : uint8_t {
+    SAMPLE_MARK_START,
+    SAMPLE_MARK_END,
+    SAMPLE_MARK_LOOP_START,
+    SAMPLE_MARK_LOOP_END
+};
+enum SampleSeamError : uint8_t {
+    SAMPLE_SEAM_OK,
+    SAMPLE_SEAM_MISSING,
+    SAMPLE_SEAM_STALE,
+    SAMPLE_SEAM_NO_CROSSING,
+    SAMPLE_SEAM_BUSY
+};
+struct SampleSeamRequest {
+    uint32_t request_id = 0;
+    uint16_t generation = 0;
+    uint16_t radius = 512;  // source frames, bounded to 2048 either side
+    uint8_t action = SAMPLE_SEAM_CHECK;
+    uint8_t marker = SAMPLE_MARK_LOOP_END;
+    SampleEditMessage expected;
+} __attribute__((packed));
+struct SampleSeamStatus {
+    uint32_t request_id = 0;
+    uint16_t sample_id = 0, generation = 0;
+    uint8_t error = SAMPLE_SEAM_OK, moved = 0;
+    uint32_t frame = 0;
+    // Signed PCM16 jump (head minus tail), separate native channels. Raw
+    // markers and effective crossfade seam are both reported; not a click verdict.
+    int32_t raw_left = 0, raw_right = 0, left = 0, right = 0;
+} __attribute__((packed));
+inline bool IsValidSampleSeamRequest(const SampleSeamRequest& r) {
+    return r.request_id && r.expected.sample_id && r.radius <= 2048 &&
+           r.action <= SAMPLE_SEAM_SNAP && r.marker <= SAMPLE_MARK_LOOP_END &&
+           r.expected.loop_enabled <= 1 && r.expected.loop_crossfade_ms <= kMaxLoopCrossfadeMs &&
+           r.expected.channel_mode <= SAMPLE_CH_MONO_SUM;
+}
+inline bool IsValidSampleSeamStatus(const SampleSeamStatus& s) {
+    return s.request_id && s.sample_id && s.error <= SAMPLE_SEAM_BUSY && s.moved <= 1 &&
+           s.raw_left >= -65535 && s.raw_left <= 65535 && s.raw_right >= -65535 &&
+           s.raw_right <= 65535 && s.left >= -65535 && s.left <= 65535 && s.right >= -65535 &&
+           s.right <= 65535;
+}
+static_assert(sizeof(SampleEditMessage) == 27 && sizeof(SampleSeamRequest) == 37 &&
+                  sizeof(SampleSeamStatus) == 30,
+              "sample seam wire contract");
 
 // ---------------------------------------------------------------------------
 // Waveform envelope (roadmap 1.5.5 item 2)
@@ -2233,6 +2355,19 @@ struct MidiCcMessage {
         : cc(cc_), value(value_), channel(channel_), reserved(0) {}
 } __attribute__((packed));
 
+inline bool IsValidMidiCc(const MidiCcMessage& m) {
+    return m.cc <= 127 && m.value <= 127 && m.channel < 16 && m.reserved == 0;
+}
+
+struct MidiPressureMessage {
+    uint8_t value = 0;
+    uint8_t channel = 0;
+};
+static_assert(sizeof(MidiPressureMessage) == 2);
+inline bool IsValidMidiPressure(const MidiPressureMessage& m) {
+    return m.value <= 127 && m.channel < 16;
+}
+
 // MSG_SEQ_CLOCK_OUT (D->E): the Daisy is the timing master; the ESP32 turns
 // these into 0xF8/0xFA/... bytes on DIN + USB immediately (no TX coalescing).
 struct SeqClockOutMessage {
@@ -3274,6 +3409,8 @@ inline const char* MessageTypeName(uint8_t type) {
             return "MIDI_PROGRAM";
         case MSG_MIDI_CC:
             return "MIDI_CC";
+        case MSG_MIDI_PRESSURE:
+            return "MIDI_PRESSURE";
         case MSG_SEQ_FILE_OP:
             return "SEQ_FILE_OP";
         case MSG_SEQ_FILE_STATUS:

@@ -18,6 +18,7 @@
 #include "snapshot_mailbox.hpp"
 #include "storage/card_space.hpp"
 #include "storage/fatfs_wav_reader.hpp"
+#include "storage/sample_file_job.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
 #include <array>
@@ -1741,6 +1742,31 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
                 Fail(&pool, &memory, INST_ERROR_IO);
                 return;
             }
+            // Prepare this newly admitted record's edit defaults while yielding
+            // between files. Explicit Project snapshots override defaults later.
+            auto* record = pool.Find(s_loaded_samples[s_index].pool_id);
+            SampleFile::Document saved;
+            const auto& resident = s_loaded_samples[s_index].resident;
+            saved.file_bytes = f_size(&s_file);
+            saved.data_offset = s_loaded_samples[s_index].data_offset;
+            saved.sample.sample_rate = resident.sample_rate;
+            saved.sample.total_frames = resident.total_frames;
+            saved.sample.channels = resident.channels;
+            saved.sample.bits_per_sample = resident.bit_depth;
+            saved.sample.Resolve();
+            if (!record) {
+                Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
+                return;
+            }
+            if (!s_project_bank) {
+                const auto result = Storage::ReadSampleSidecar(path, saved, saved.sample);
+                if (result == Storage::SampleSidecarResult::Invalid ||
+                    result == Storage::SampleSidecarResult::IoError) {
+                    Fail(&pool, &memory, INST_ERROR_IO);
+                    return;
+                }
+            }
+            record->payload.meta = saved.sample;
             s_current_written = 0;
             FillCurrentStatus();
             SendStatus(INST_STATUS_LOAD_PROGRESS);
@@ -1799,11 +1825,14 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
                     Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
                     return;
                 }
+                SampleFile::Document saved;
+                saved.sample = record->payload.meta;
                 FillLoadedSample(record->payload,
                                  loaded.pool_id,
                                  s_mapped.sample_paths[s_plan.entries[i].path_zone],
                                  loaded.resident,
                                  loaded.handle);
+                SampleFile::Apply(saved, record->payload.meta);
                 loaded.admitted = false;  // committed: no longer this load's to abandon
                 // Not pushed one by one: a burst of N records overruns the
                 // 4-deep TX queue. The frontend pages the Pool

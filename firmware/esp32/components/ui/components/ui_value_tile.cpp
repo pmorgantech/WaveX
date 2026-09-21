@@ -190,6 +190,14 @@ ValueTile valueTileCreate(
     lv_obj_set_style_bg_opa(t.knob, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(t.knob, kKnobW / 2, 0);
 
+    // These are decoration, not separate controls. Generic LVGL objects are
+    // clickable/scrollable by default and otherwise swallow a bar/knob drag
+    // before the card's adjustment callback can see it.
+    for (auto* decoration: {t.bar_track, t.bar_fill, t.knob}) {
+        lv_obj_remove_flag(decoration, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(decoration, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
     return t;
 }
 

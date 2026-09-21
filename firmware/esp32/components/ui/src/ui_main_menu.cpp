@@ -195,7 +195,7 @@ std::shared_ptr<UIPage> createMidiSettingsPage() {
     // track-and-patch-model.md §2.2), not a global filter here - a Track set
     // to a channel could otherwise be silenced by this page with nothing on
     // screen to say why. The Track page (stage 4) is where it is edited.
-    page->addInfo("Receive channel", "per Track - see the Track page");
+    page->addInfo("Receive channel", "per Track - see Project");
 
     page->addInfo("DIN MIDI in", WAVEX_ESP_DIN_MIDI_ENABLED ? "enabled" : "disabled in build");
     page->addInfo("USB MIDI in", WAVEX_UI_USB_MIDI_IN ? "enabled" : "disabled in build");
@@ -204,9 +204,10 @@ std::shared_ptr<UIPage> createMidiSettingsPage() {
     // on a MIDI settings page, and finding nothing is ambiguous in a way that
     // "not implemented" is not.
     page->addUnimplemented("Velocity curve", "not implemented - velocity passes through unchanged");
-    page->addUnimplemented("Clock source", "not implemented - MIDI clock is not received yet");
-    page->addUnimplemented("MIDI out", "not implemented - no output port is driven");
-    page->addUnimplemented("CC mapping", "not implemented - incoming CCs are discarded");
+    page->addInfo("Clock source", "Internal or MIDI - set in Sequencer");
+    page->addInfo("MIDI clock out", "DIN / USB - set in Sequencer");
+    page->addInfo("Expression", "CC1 Mod Wheel / Channel Pressure - Instrument Mod");
+    page->addInfo("Controller reset", "CC121 clears Mod Wheel and Pressure");
     page->addUnimplemented("Save on power-off",
                            "not implemented - Track routing resets to one channel per Track");
 

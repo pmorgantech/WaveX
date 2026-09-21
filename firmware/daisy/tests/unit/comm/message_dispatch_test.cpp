@@ -472,6 +472,31 @@ TEST_F(MessageDispatchTest, MidiClockEventReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().midi_clock_events[0].esp_delta_us, 20833u);
 }
 
+TEST_F(MessageDispatchTest, MidiExpressionRejectsInvalidPayloads) {
+    MidiPressureMessage m{127, 15};
+    Dispatch(MSG_MIDI_PRESSURE, m);
+    ASSERT_EQ(GetDispatchRecord().midi_pressures.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().midi_pressures[0].value, 127);
+    EXPECT_EQ(GetDispatchRecord().midi_pressures[0].channel, 15);
+    m.value = 128;
+    Dispatch(MSG_MIDI_PRESSURE, m);
+    m = {0, 16};
+    Dispatch(MSG_MIDI_PRESSURE, m);
+    EXPECT_EQ(GetDispatchRecord().midi_pressures.size(), 1u);
+    Dispatch(MSG_MIDI_CC, MidiCcMessage{128, 1, 0});
+    Dispatch(MSG_MIDI_CC, MidiCcMessage{1, 128, 0});
+    Dispatch(MSG_MIDI_CC, MidiCcMessage{1, 0, 16});
+    EXPECT_TRUE(GetDispatchRecord().midi_ccs.empty());
+    GetDispatchRecord().sample_file_busy = true;
+    Dispatch(MSG_MIDI_CC, MidiCcMessage{121, 0, 0});
+    Dispatch(MSG_MIDI_PRESSURE, MidiPressureMessage{0, 0});
+    EXPECT_EQ(GetDispatchRecord().midi_ccs.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().midi_pressures.size(), 2u);
+    GetDispatchRecord().project_busy = true;
+    Dispatch(MSG_MIDI_PRESSURE, MidiPressureMessage{1, 0});
+    EXPECT_EQ(GetDispatchRecord().midi_pressures.size(), 2u);
+}
+
 TEST_F(MessageDispatchTest, MidiCcReachesAudioEngine) {
     MidiCcMessage m(74 /*filter cutoff CC*/, 90, 4);
     Dispatch(MSG_MIDI_CC, m);
@@ -1062,4 +1087,41 @@ TEST_F(MessageDispatchTest, MelodicRequestChecksEveryLengthAndUnalignedStep) {
     Dispatch(MSG_SEQ_NOTES, r);
     ASSERT_EQ(GetDispatchRecord().seq_notes_requests.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().seq_notes_requests[0].first_step, 63);
+}
+
+TEST_F(MessageDispatchTest, SampleFileValidatesAndStorageLeasePreservesStopAndPolling) {
+    SampleFileOpMessage request;
+    request.request_id = 42;
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_SAMPLE_FILE_OP, 1, reinterpret_cast<uint8_t*>(&request), n);
+    EXPECT_TRUE(GetDispatchRecord().sample_file_ops.empty());
+    request.op = 255;
+    Dispatch(MSG_SAMPLE_FILE_OP, request);
+    EXPECT_TRUE(GetDispatchRecord().sample_file_ops.empty());
+    request.op = SAMPLE_FILE_GET;
+    GetDispatchRecord().sample_file_busy = true;
+    Dispatch(MSG_SAMPLE_FILE_OP, request);
+    EXPECT_EQ(GetDispatchRecord().sample_file_ops.size(), 1u);
+    Dispatch(MSG_SAMPLE_EDIT_SET, SampleEditMessage{});
+    Dispatch(MSG_SAMPLE_LOAD, SampleLoadMessage{});
+    EXPECT_TRUE(GetDispatchRecord().sample_edits.empty());
+    EXPECT_TRUE(GetDispatchRecord().sample_loads.empty());
+    Dispatch(MSG_NOTE_OFF, NoteMessage(60, 0, 0));
+    EXPECT_EQ(GetDispatchRecord().note_offs.size(), 1u);
+}
+
+TEST_F(MessageDispatchTest, StereoSnapRejectsMalformedAndTruncatedRequests) {
+    SampleSeamRequest r;
+    r.request_id = 99;
+    r.expected.sample_id = 1025;
+    for (size_t n = 0; n < sizeof(r); ++n)
+        ProcessInterMcuMessage(MSG_SAMPLE_SEAM_REQ, 1, reinterpret_cast<uint8_t*>(&r), n);
+    EXPECT_TRUE(GetDispatchRecord().sample_seams.empty());
+    r.radius = 2049;
+    Dispatch(MSG_SAMPLE_SEAM_REQ, r);
+    EXPECT_TRUE(GetDispatchRecord().sample_seams.empty());
+    r.radius = 512;
+    Dispatch(MSG_SAMPLE_SEAM_REQ, r);
+    ASSERT_EQ(GetDispatchRecord().sample_seams.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().sample_seams[0].request_id, 99u);
 }

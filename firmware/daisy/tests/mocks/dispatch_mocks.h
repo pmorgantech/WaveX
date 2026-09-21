@@ -43,6 +43,9 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SeqFileOpMessage> seq_file_ops;
     std::vector<WaveX::Protocol::CardOpMessage> card_ops;
     bool card_busy = false;
+    bool sample_file_busy = false;
+    std::vector<WaveX::Protocol::SampleSeamRequest> sample_seams;
+    std::vector<WaveX::Protocol::SampleFileOpMessage> sample_file_ops;
     bool project_busy = false;
     bool bank_busy = false;
     std::vector<WaveX::Protocol::BankOpMessage> bank_ops;
@@ -59,6 +62,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SeqPatternRequestMessage> seq_pattern_requests;
     std::vector<WaveX::Protocol::MidiClockEventMessage> midi_clock_events;
     std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
+    std::vector<WaveX::Protocol::MidiPressureMessage> midi_pressures;
     std::vector<WaveX::Protocol::TrackStateRequest> track_state_requests;
     std::vector<WaveX::Protocol::InstModOpMessage> mod_ops;
     std::vector<WaveX::Protocol::AllocationOpMessage> allocation_ops;
@@ -114,12 +118,13 @@ struct DispatchRecord {
                static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
                seq_notes_requests.size() + seq_slot_edits.size() + seq_slot_pages.size() +
                seq_slot_ops.size() + playhead_requests.size() + seq_song_ops.size() +
-               project_ops.size() + bank_ops.size() + midi_programs.size() + seq_file_ops.size() +
-               card_ops.size() + seq_pattern_ops.size() + seq_pattern_requests.size() +
-               midi_clock_events.size() + midi_ccs.size() + instrument_ops.size() +
-               browse_requests.size() + play_requests.size() + stop_requests.size() +
-               play_index_requests.size() + sample_edits.size() + meta_requests.size() +
-               loop_gaps_ms.size() + diag_subscribes.size() + mix_ops.size() + track_ops.size();
+               sample_seams.size() + sample_file_ops.size() + project_ops.size() + bank_ops.size() +
+               midi_programs.size() + seq_file_ops.size() + card_ops.size() +
+               seq_pattern_ops.size() + seq_pattern_requests.size() + midi_clock_events.size() +
+               midi_ccs.size() + instrument_ops.size() + browse_requests.size() +
+               play_requests.size() + stop_requests.size() + play_index_requests.size() +
+               sample_edits.size() + meta_requests.size() + loop_gaps_ms.size() +
+               diag_subscribes.size() + mix_ops.size() + track_ops.size();
     }
 };
 

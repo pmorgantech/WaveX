@@ -19,10 +19,10 @@ namespace wavex_ui {
  * window, laid out per the WaveX Wireframes v2 edit screen.
  *
  * Scope note: START, END, ZOOM, GAIN, LOOP and the fades are all real - they
- * are sent to the backend via MSG_SAMPLE_EDIT, so moving them changes what you
+ * are sent to the backend via MSG_SAMPLE_EDIT_SET, so moving them changes what you
  * hear. (This comment previously said GAIN and LOOP were "drawn but inert",
- * which stopped being true when sendEdit() started carrying them.) Normalize
- * and Save remain unwired: nothing in the protocol carries a write-back.
+ * which stopped being true when sendEdit() started carrying them.) Shifted Save/Save As open
+ * standalone sidecar/copy jobs. Normalize remains part of the future offline render pipeline.
  */
 class UISampleEditPage : public UIPage {
    public:
@@ -32,6 +32,8 @@ class UISampleEditPage : public UIPage {
 
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
+    size_t consoleState(char* out, size_t size, size_t len) override;
+    bool consoleCommand(const char* args, char* out, size_t size) override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
@@ -46,6 +48,8 @@ class UISampleEditPage : public UIPage {
         PARAM_GAIN,
         PARAM_FADE_IN,
         PARAM_FADE_OUT,
+        PARAM_CROSSFADE,
+        PARAM_CHANNEL,
         PARAM_COUNT
     };
     // Four cards fit the strip; the fifth (GAIN) shares the last slot and is
@@ -66,7 +70,7 @@ class UISampleEditPage : public UIPage {
 
     // Loop splice view (roadmap 1.5.6 item 1): the audio just BEFORE loop_end
     // on the left and just AFTER loop_start on the right, butted at a centre
-    // seam - what the loop will actually sound like where it wraps. Two
+    // seam. This is unprocessed PCM; measured playback jumps account for crossfade. Two
     // ordinary WaveformViews rather than a mode inside one: each half is a
     // normal envelope render, so stacked L/R and everything else it already
     // does come along unchanged, and the widget's tests keep covering it.
@@ -105,14 +109,14 @@ class UISampleEditPage : public UIPage {
     // MSG_SAMPLE_EDIT_SET on the link per second of drag. Non-zero means one
     // is owed; serviceUi() sends it and clears this.
     uint32_t edit_due_ms_ = 0;
+    uint8_t marker_drag_mask_ = 0;
 
     // Sample geometry, from the backend's cached SampleMetadata for the
     // current sample (see ui/current_sample.h).
     uint32_t total_frames_ = 0;
     uint32_t sample_rate_ = 48000;
-    // The envelope cache's key alongside the id. 0 for the life of a Pool
-    // id today; adopted from the record anyway, so a backend that starts
-    // bumping it files the new audio under a new key rather than the old.
+    // Waveform revision alongside the Pool id. A channel-mapping edit or PCM
+    // replacement invalidates cached envelopes; marker-only edits do not.
     uint16_t generation_ = 0;
 
     // Markers, in frames, absolute within the sample.
@@ -150,6 +154,13 @@ class UISampleEditPage : public UIPage {
     void zoomToFit();
     void clampMarkers();
     void sendEdit();
+    void requestSeam(bool snap);
+    uint32_t seam_pending_ = 0, seam_deadline_ = 0, edit_wait_until_ = 0;
+    uint8_t crossfade_ms_ = 0;
+    uint8_t channel_mode_ = WaveX::Protocol::SAMPLE_CH_AS_RECORDED, source_channels_ = 1;
+    WaveX::Protocol::SampleEditMessage sent_edit_;
+    char seam_text_[160]{};
+    WaveX::Protocol::SampleSeamStatus seam_result_;
     void applyMeta(const WaveX::Protocol::SampleMetadata& m);
     void refreshParams();
     void refreshFocusRing();

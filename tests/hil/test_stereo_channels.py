@@ -131,7 +131,9 @@ def stereo_sample(esp32, daisy):
     end = min(start + rate, int(meta["frames"]))
     daisy.msg(
         0x3C,
-        struct.pack("<HBBhIIIIHH", sid, 1, 0, 0, start, end, start, end, 0, 0),
+        struct.pack(
+            "<HBBhIIIIHHx", sid, 1, 0, 0, start, end, start, end, 0, 0
+        ),  # noqa: E501
     )
     # Keep the fixture resident across WXI replacement when selected alone.
     daisy.bind_track(15, sid)
@@ -423,3 +425,45 @@ def test_solo_preserves_manual_mute_edits_while_soloed(
         for track in (0, 1):
             daisy.msg(0x78, struct.pack("<BBH", 3, track, 0))
         esp.home()
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_sample_channel_selection_updates_audition_and_next_note_budget(
+    esp32, daisy, stereo_sample
+):
+    for track in range(8):
+        daisy.bind_track(track, stereo_sample)
+        _mono(daisy, track, False)
+    esp32.home()
+    esp32.open_menu("Sample")
+    esp32.page("TAB", "Edit")
+    esp32.wait_state(editid=stereo_sample)
+    esp32.page("FOCUS", 8)
+    prior = 0
+    for mode in (1, 2, 3, 0):
+        previous = daisy.cmd("SAMPLE", stereo_sample)
+        esp32.enc(mode - prior, steps=False)
+        esp32.wait_state(channelmode=mode)
+        deadline = time.monotonic() + 5
+        while True:
+            meta = daisy.cmd("SAMPLE", stereo_sample)
+            if meta["channelmode"] == str(mode):
+                break
+            assert time.monotonic() < deadline, meta
+            time.sleep(0.05)
+        assert meta["wavegen"] != previous["wavegen"]
+        esp32.wait_state(wavegen=meta["wavegen"])
+        esp32.softkey("Audition")
+        daisy.wait_state(streaming=1)
+        left, right = _peak(daisy)
+        assert left > 0 and right > 0, (mode, left, right)
+        if mode:
+            assert abs(left - right) <= 2, (mode, left, right)
+        esp32.softkey("Stop")
+        daisy.wait_state(streaming=0)
+        for track in range(8):
+            daisy.note(track, 60)
+        daisy.wait_state(voices=8 if mode else 4)
+        _release(daisy)
+        prior = mode

@@ -400,6 +400,7 @@ TEST_F(SequencerVoiceMapTest, AdmissionMetadataMatchesDualSourceChannelCostAndPr
     SampleResolver stereo{&resolver, [](const void* context, uint16_t id) {
                               auto sample = static_cast<const SampleResolver*>(context)->Get(id);
                               sample.channels = id % 2 ? 1 : 2;
+                              sample.channel_mode = id % 4;
                               return sample;
                           }};
     instrument.osc[1] = instrument.osc[0];
@@ -417,9 +418,9 @@ TEST_F(SequencerVoiceMapTest, AdmissionMetadataMatchesDualSourceChannelCostAndPr
         ASSERT_EQ(description.count, ResolveNoteOn(instrument, 2, note, 70, stereo, expected, 4));
         for (uint8_t i = 0; i < description.count; ++i) {
             const auto& p = expected[i];
-            const bool primary_stereo = p.channels == 2 && !p.mono;
-            const bool secondary_stereo =
-                p.secondary.sample && p.secondary.channels == 2 && !p.secondary.mono;
+            const bool primary_stereo = p.channels == 2 && !p.mono && p.channel_mode == 0;
+            const bool secondary_stereo = p.secondary.sample && p.secondary.channels == 2 &&
+                                          !p.secondary.mono && p.secondary.channel_mode == 0;
             EXPECT_EQ(description.layers[i].channels, primary_stereo || secondary_stereo ? 2 : 1);
             EXPECT_EQ(description.layers[i].choke, p.choke_group);
         }

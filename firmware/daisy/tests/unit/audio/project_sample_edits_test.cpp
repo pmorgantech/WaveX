@@ -35,5 +35,8 @@ TEST(ProjectSampleEdits, RejectsChangedDependencyWithoutChangingCandidateMetadat
     EXPECT_EQ(candidate.meta.fade_in_ms, 15);
     EXPECT_EQ(candidate.meta.fade_out_ms, 20);
     EXPECT_EQ(candidate.meta.channel_mode, Protocol::SAMPLE_CH_LEFT);
+    EXPECT_EQ(candidate.meta.generation, 1);
+    ASSERT_TRUE(ApplyProjectSample(saved, candidate));
+    EXPECT_EQ(candidate.meta.generation, 1);
     EXPECT_EQ(candidate.meta.flags, Protocol::SAMPLE_META_RESIDENT);
 }

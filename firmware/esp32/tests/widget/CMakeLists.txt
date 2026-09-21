@@ -115,11 +115,23 @@ foreach(test_source IN LISTS widget_tests)
             ${PARAMETER_WIDGET_FONTS})
     endif()
 
-    if(test_name STREQUAL "mixer_page_test" OR test_name STREQUAL "project_files_page_test" OR test_name STREQUAL "pattern_slots_page_test" OR test_name STREQUAL "song_page_test" OR test_name STREQUAL "sample_picker_page_test" OR test_name STREQUAL "bank_page_test")
+    if(test_name STREQUAL "mixer_page_test" OR test_name STREQUAL "project_files_page_test" OR test_name STREQUAL "pattern_slots_page_test" OR test_name STREQUAL "song_page_test" OR test_name STREQUAL "sample_picker_page_test" OR test_name STREQUAL "bank_page_test" OR test_name STREQUAL "sample_file_page_test" OR test_name STREQUAL "sample_edit_page_test")
         file(GLOB MIXER_FONTS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
         if(test_name STREQUAL "mixer_page_test")
             set(WAVEX_PAGE_SOURCE ui_mixer_page.cpp)
+        elseif(test_name STREQUAL "sample_edit_page_test")
+            set(WAVEX_PAGE_SOURCE ui_sample_edit_page.cpp)
+            target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui)
+            target_sources(${test_name} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/envelope_cache.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/envelope_fetcher.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/envelope_panel.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_value_tile.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/multi_touch_input.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/current_sample.cpp)
+        elseif(test_name STREQUAL "sample_file_page_test")
+            set(WAVEX_PAGE_SOURCE ui_sample_file_page.cpp)
         elseif(test_name STREQUAL "bank_page_test")
             set(WAVEX_PAGE_SOURCE ui_bank_page.cpp)
         elseif(test_name STREQUAL "sample_picker_page_test")

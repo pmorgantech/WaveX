@@ -221,3 +221,28 @@ TEST_F(ParameterWidgetsTest, DeletingHeldWidgetsDoesNotLeaveDanglingPointers) {
     touch.update(nullptr, 0);
     touch.deinit();
 }
+
+TEST_F(ParameterWidgetsTest, DraggingTheFillTrackAndKnobReachesTheTile) {
+    int steps = 0;
+    wavex_ui::valueTileSetOnAdjust(tile_, [&](int delta) { steps += delta; });
+    wavex_ui::valueTileSetFill(tile_, .5f);
+    Draw();
+    wavex_ui::MultiTouchInput touch;
+    ASSERT_TRUE(touch.init(display_));
+    for (auto* object: {tile_.bar_fill, tile_.bar_track, tile_.knob}) {
+        lv_area_t area;
+        lv_obj_get_coords(object, &area);
+        // The track's right end is not covered by its fill.
+        wavex_ui::TouchContact point{
+            7,
+            {object == tile_.bar_track ? area.x2 - 4 : (area.x1 + area.x2) / 2,
+             (area.y1 + area.y2) / 2}};
+        const int before = steps;
+        touch.update(&point, 1);
+        point.point.y -= 27;
+        touch.update(&point, 1);
+        touch.update(nullptr, 0);
+        EXPECT_EQ(steps, before + 3);
+    }
+    touch.deinit();
+}

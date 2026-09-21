@@ -123,7 +123,36 @@ enum as retired-but-reserved and reads 0.
 - Matrix/envelope edits now use the typed revisioned `MSG_INST_MOD_OP` and
   `MSG_INST_MOD_SYNC` messages in [the protocol](inter-mcu-protocol.md).
   Per-voice LFO snapshots use the typed revisioned `MSG_INST_LFO_OP`/`MSG_INST_LFO_SYNC` pair (0x6E/0x6F); global LFO editing and additional destinations remain target design.
-- Live sources: `SRC_MODWHEEL`/`SRC_AFTERTOUCH` need CC1/pressure forwarded — extend the ESP32 MIDI task to forward CC1 + channel pressure as `MSG_CONTROL_CHANGE{param=PARAM_MACRO-adjacent internal ids}`… cleaner: add `MSG_MIDI_CC {cc, value, channel}` (0x56) so the Daisy owns the CC→source map. Round-trip test + dispatch test same commit.
+- Live MIDI uses `MSG_MIDI_CC` (0x56) and `MSG_MIDI_PRESSURE` (0x8D).
+  Both DIN and USB share the parser/forwarder. CC1 drives Mod Wheel and
+  channel pressure drives Pressure in the Instrument Mod source selector.
+  Values are 0–127, normalized to 0–1 by the Daisy; unsupported CCs are ignored.
+  CC121 resets these two supported controller sources to zero.
+
+### MIDI source ownership (as-built)
+
+The foreground resolves each incoming MIDI channel to the current Track input
+routing. Off receives nothing; Omni uses the latest matching event from any
+channel. DIN and USB share the same channel namespace, as notes already do.
+The two values are session-owned per Track, not saved into Instruments, Banks
+or Projects. They affect all voices on that Track, including held/releasing
+notes and subsequent live or sequenced triggers. A routing change resets the
+Track's values; retiring/rebinding a Track resets them through the same
+foreground stop boundary. A backend restart starts at zero.
+
+Foreground updates publish a complete fixed sixteen-Track snapshot. The audio
+callback acquires the newest immutable snapshot once per block; controller
+bursts coalesce without occupying note or MIDI-clock queues. Intermediate
+controller positions may be coalesced. Sample-save jobs continue accepting
+expression; Project/Bank transactions retain their existing input freeze. Port loss does not synthesize a reset;
+send CC121 or change the Track routing to clear a held controller value.
+This is channel pressure, not polyphonic key pressure or MPE.
+
+Message grammar and CC121 semantics follow the MIDI Association's
+[message summary](https://midi.org/summary-of-midi-1-0-messages) and
+[controller table](https://midi.org/midi-1-0-control-change-messages).
+Physical port/latency and listening checks are tracked in HV-028.
+
 - P-lock edit/record ops are `SEQ_PATTERN_OP` extensions (already reserved in `sequencer.md` §4).
 
 ## 7. UI (ESP32)
@@ -159,10 +188,9 @@ enum as retired-but-reserved and reads 0.
 - The backend and ESP32 now run two Instrument-owned per-voice LFOs with typed
   revisioned snapshots, WXI retention, append-only source ids and the two-row
   touch page. Held-voice propagation and the resonance destination are built;
-  global LFO editing, expanded destinations and MIDI CC/channel-pressure source
-  wiring remain Phase 2.5 work.
-- MIDI CC/channel-pressure source wiring, live lock recording, global LFO
-  editing and analog/group lock lifetimes remain open. The corresponding
+  global LFO editing and expanded destinations remain Phase 2.5 work.
+- MIDI CC1/channel-pressure source wiring and UI selection are implemented.
+  Live lock recording, global LFO editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.
 
 

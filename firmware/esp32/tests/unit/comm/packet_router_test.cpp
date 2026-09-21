@@ -87,14 +87,14 @@ class PacketRouterTest : public ::testing::Test {
     // strong-override handlers. Used to assert "nothing was dispatched".
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
-        return cap.seq_song_status_calls + cap.seq_slot_page_calls + cap.seq_slot_status_calls +
-               cap.project_status_calls + g_handlers.sync_calls + g_handlers.error_calls +
-               g_handlers.unknown_calls + cap.oscillator_calls + cap.instrument_map_calls +
-               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
-               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
-               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
-               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
-               cap.cv_cal_calls;
+        return cap.sample_file_status_calls + cap.seq_song_status_calls + cap.seq_slot_page_calls +
+               cap.seq_slot_status_calls + cap.project_status_calls + g_handlers.sync_calls +
+               g_handlers.error_calls + g_handlers.unknown_calls + cap.oscillator_calls +
+               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
+               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
+               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
+               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
+               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -930,4 +930,39 @@ TEST_F(PacketRouterTest, MelodicSnapshotRejectsTruncationAndInvalidNotes) {
     m.notes[0].velocity = 127;
     router_->route_uart_message(MSG_SEQ_NOTES, bytes, sizeof(m), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_notes_calls, 1);
+}
+
+TEST_F(PacketRouterTest, SampleFileStatusRejectsTruncatedAndInvalidReplies) {
+    SampleFileStatusMessage status;
+    status.request_id = 77;
+    status.completed_request_id = 66;
+    status.completed_op = SAMPLE_FILE_COPY;
+    auto* bytes = reinterpret_cast<uint8_t*>(&status);
+    for (size_t n = 0; n < sizeof(status); ++n)
+        router_->route_uart_message(MSG_SAMPLE_FILE_STATUS, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_file_status_calls, 0);
+    status.busy = 1;  // active identity is required
+    router_->route_uart_message(MSG_SAMPLE_FILE_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_file_status_calls, 0);
+    status.busy = 0;
+    router_->route_uart_message(MSG_SAMPLE_FILE_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_file_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_file_status.completed_request_id, 66u);
+}
+
+TEST_F(PacketRouterTest, StereoSeamRejectsTruncatedAndImpossibleMeasurements) {
+    SampleSeamStatus s;
+    s.request_id = 77;
+    s.sample_id = 1025;
+    auto* bytes = reinterpret_cast<uint8_t*>(&s);
+    for (size_t n = 0; n < sizeof(s); ++n)
+        router_->route_uart_message(MSG_SAMPLE_SEAM_STATUS, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_seam_status_calls, 0);
+    s.right = 65536;
+    router_->route_uart_message(MSG_SAMPLE_SEAM_STATUS, bytes, sizeof(s), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_seam_status_calls, 0);
+    s.right = -65535;
+    router_->route_uart_message(MSG_SAMPLE_SEAM_STATUS, bytes, sizeof(s), 0, 1);
+    ASSERT_EQ(GetInterMcuCapture().sample_seam_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_seam_status.right, -65535);
 }
