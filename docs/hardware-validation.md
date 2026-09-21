@@ -83,7 +83,7 @@ Use Passed or Failed after recording the corresponding evidence.
 
 | ID | Check | Status | Latest result / prerequisite |
 |---|---|---|---|
-| HV-001 | SD format, confirmation and recovery | Partial pass | Format/folders and Pattern reboot/reload pass with conservative bus defaults; write-soak/streaming and remaining checks open |
+| HV-001 | SD format, confirmation and recovery | Partial pass | Scratch write/readback passes at 25/12.5 MHz; recorder single-sector CRC captured at 25 MHz, selected recorder flows pass at 12.5 MHz. Recovery/soak remain open |
 | HV-002 | Full-card save rejection and recovery | Pending | Host/compile verified; near-full test card needed |
 | HV-003 | Instrument save/recall admission | Pending | Host/compile verified; large and admitted WAV fixtures needed |
 | HV-004 | Stereo/Mono physical follow-up | Partial | Switching reported working by user, 2026-09-16; remaining checks below |
@@ -188,6 +188,75 @@ and `logs/hil-20260921-042630.log`. Recheck using the same timed Load and
 `test_standalone_save_copy_then_save_survives_pool_reload` with
 `--hil-sample2 "/03 Lips of Ashes.wav"`; require successful unique-copy Save As,
 sidecar Save and unloaded-pool reload before calling writes validated.
+
+### First-error write investigation, 2026-09-21
+
+**Setup:** normal Stage A, four-bit SDMMC, the same attached 60906 MiB card,
+profiling disabled, ESP32 SHA256
+`af3073b1f3b0202962c1b131f737a9ce25d3fb84f57a5565a7e6c4a6b4076510`.
+Daisy diagnostic images over `bd60138`:
+
+- 25 MHz SHA256 `856b44bda8ed08667ad6485574afbeec2d7bc3f9febb89f313aa4510f165dac1`.
+- 12.5 MHz SHA256 `d5d6ba62ee88769f0122d78dc57ffff5485df023769e45232da5a6628326583a`.
+- Final normal 25 MHz SHA256 `c11b23470a15537b0ef05808dc619f9994777ab4901d7146043f727c10577e23`
+  (avoids unnecessary foreground snapshot copies/masking and includes IDMA error flags).
+
+Run [the SD write probe](features/debug-harness-and-hil.md#sd-write-diagnosis)
+with an otherwise idle storage session. Each case exclusively creates a scratch
+file, writes deterministic data, syncs/closes/reopens, verifies every byte, then
+removes only that successful scratch file. Preserve first failure evidence and
+boot fresh between clock configurations; recovery is a separate experiment.
+Require every case to complete with no retained disk/IRQ failure or byte mismatch.
+
+At 25 MHz, 512 B, 4 KiB, 1 MiB and 48 MiB files passed using 4 KiB chunks.
+The 48 MiB complete write/readback/delete cycle took 34.810 s (not a raw write
+throughput measurement). Separate 1 MiB cases passed with 512-byte chunks,
+a buffer shifted four bytes from cache-line alignment, and a 44-byte first
+write followed by 4 KiB chunks. All sampled underrun counts were zero.
+
+The same idle matrix passed at 12.5 MHz; its 48 MiB cycle took 43.811 s.
+At 12.5 MHz with one resident stereo voice playing, 1 MiB and 48 MiB probes
+with a 44-byte prefix also passed (48 MiB: 57.759 s), with zero sampled
+underruns. Both real codec/internal recording capture/audition/Save/assignment
+HIL workflows then passed (2 tests, 6.85 s), and `SDIO` remained clear.
+Evidence: `logs/sd-write-125-{aligned,single,shift,prefix,playback}.jsonl` and
+`logs/sd-diagnostics-recording-125.log`. These are short selected passes;
+they do not establish that 12.5 MHz always works or that remount recovery works.
+
+After the initial 25 MHz probe matrix, both codec/internal recorder HIL
+workflows failed Save.
+The retained first error was **one sector**, LBA 582848, buffer `0x240302ac`
+(AXI SRAM, word aligned), write DMA active. Before HAL handled the IRQ,
+`STA=0x00000002` indicated data CRC failure, `DCOUNT=0`, `CLKCR=0x00004004`.
+The post-handler HAL error was `0x6`: data CRC (`0x2`) plus command-response
+timeout (`0x4`). The pinned HAL error branch issues STOP_TRANSMISSION and ORs
+its result into ErrorCode, so the timeout is secondary to the observed CRC flag.
+The recorder reported `phase=3`, `fatfs=1`, `bytes=0`: first payload write,
+not header generation. This establishes a device-I/O failure in the recorder
+path, without proving card, wiring, power or driver as the physical cause.
+
+The final normal 25 MHz image also passed 1 MiB and 48 MiB write/readback
+with a 44-byte prefix during one resident stereo voice (48 MiB: 49.488 s,
+zero sampled underruns). The follow-up recorder HIL passed codec Save but
+failed internal-mix Save: another **single-sector** CRC, LBA 472896,
+DMA buffer `0x24076a98`, `STA=0x2`, HAL `0x6`, this time in header phase 2.
+Thus short successes at 25 MHz coexist with reproduced failures; neither
+file size nor simultaneous resident playback alone explains the fault.
+Evidence: `logs/sd-write-25-playback.jsonl` and
+`logs/sd-diagnostics-recording-25-final.log` (1 passed, 1 failed).
+A further named internal take failed Save and explicit same-clock retry with
+`REC_IO`; its 21744 captured frames remained available until deliberate Discard.
+The original `SDIO` snapshot stayed byte-for-byte identical through both later
+failures. Evidence: `logs/sd-diagnostics-retry-named.log`. No automatic clock
+fallback/remount was exercised by this recorder retry; recovery remains open.
+The bench ended on the final normal 25 MHz image, idle, with no resident samples
+or active voices and the first-failure record retained for inspection.
+
+Evidence: `logs/sd-write-25-{aligned,single,shift,prefix}.jsonl`,
+`logs/sd-diagnostics-recording-25.log` and `SDIO_FAIL`/`SDIO_REG` in
+`logs/daisy.log`. First-failure retention/reset has three host tests; 866 Daisy
+host tests and both Stage A/Stage B builds pass. This investigation does not close write-soak, loaded-audio,
+recovery, power-loss or phase acceptance.
 
 **Remaining:** isolate card/socket/wiring integrity and the reproduced wider-bus
 write failure; successful reads alone do not prove write stability. Measure
@@ -2367,7 +2436,7 @@ Normal-image HIL used ESP32
 before the final unit-label/recorder-help text cleanup. Five controls/arpeggiator
 tests pass; both recorder
 workflows capture and audition, then fail Save with `FR_DISK_ERR` (first at WAV
-header write, then directory setup). RAM take retention was confirmed and the
+payload write (phase 3), then directory setup). RAM take retention was confirmed and the
 bench take discarded afterward. Evidence: `logs/task3-final-hil.log`,
 `logs/hil-20260921-182530.log`. These failures keep HV-030 Save/recovery open.
 

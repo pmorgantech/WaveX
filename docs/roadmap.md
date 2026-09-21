@@ -27,7 +27,8 @@ of capacity remediation; the above-threshold callback findings and all release g
 
 ## Phase 1.5 — Sample editing
 
-1. Resolve SD recovery after a 25 MHz write CRC and verify explicit retry.
+1. Isolate the SD single-sector write CRC reproduced by recorder Save, then
+   resolve recovery after a 25 MHz write CRC and verify explicit retry.
    Complete standalone WXCF Save/Save As physical recovery, listening and
    loaded-audio checks ([HV-025](hardware-validation.md#hv-025--standalone-sample-saves)).
    Destructive rendering remains Phase 4.

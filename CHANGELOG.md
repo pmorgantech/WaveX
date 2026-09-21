@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added retained first-failure SD disk/IRQ diagnostics and a debug-only,
+  cooperative scratch-file write/sync/readback probe. The bench runner compares
+  size, transfer chunks, buffer alignment and WAV-like offsets without raw-sector
+  writes or changing production clock negotiation.
+
 - Added Instrument modulation destinations for oscillator mix and LFO 1/2
   rates, with runtime evaluation, touch selection and WXI/protocol round-trip
   coverage.

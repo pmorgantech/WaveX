@@ -450,6 +450,8 @@ scrolling an unknown card by pot detent.
 | Verb | Effect |
 |---|---|
 | `PING`, `LOG`, `FILTER` | ack / as before |
+| `SDIO [REGS / RESET]` | Daisy SDMMC first failed disk transfer, retained until reset/reboot. Default: operation, LBA, block count, DMA buffer, elapsed ms, disk result, IRQ capture and selected speed index. REGS: pre-HAL SDMMC registers plus post-handler HAL error; RESET explicitly clears the retained record. Foreground failure without IRQ captures registers at disk return. |
+| `SDTEST START <bytes> <chunk> <shift> <prefix>` / `SDTEST STATUS` | Debug-only cooperative scratch-file probe on mounted SDMMC. Bytes 1..67108864, chunk 512/4096, buffer shift 0/4, prefix 0/44. Exclusively creates `/wxHHHHHH.tmp`, writes deterministic bytes, syncs/closes/reopens and verifies every byte. Passed files are removed; failed files remain. Requires otherwise idle storage; do not use UI storage operations during the probe. No automatic retry/remount. |
 | `LOGSTATS` | `usb_drop`, `isr_log`, and optional `rtt_drop`; foreground logging diagnostics |
 | `STATE` | `voices underruns samples streaming blocks dropped` |
 | `BANKSTATS` | Last accepted Bank job: `request op busy error pumps max_us work_us`; read-only, available during storage work. Rejected requests do not reset the measurement. |
@@ -558,3 +560,27 @@ Tracks to fill eight channels (two four-note Mono chords); `--burst-tracks 8`
 requests 32 same-frame notes as a separate overload screen. It records the
 flag in JSON alongside image identity, file cycles and MIDI pressure. This is
 a capacity stress screen, not physical MIDI or audible gate verification.
+
+### SD write diagnosis
+
+Run `python3 scripts/bench_sd_write.py` inside the devcontainer with serial
+loggers running and a freshly booted debug image. The default sequence tests
+512 B, 4 KiB, 1 MiB and 48 MiB files with 4 KiB chunks. Use `--chunk 512`,
+`--shift 4` or `--prefix 44` to isolate sector transfers, a word-aligned buffer
+that is not cache-line aligned, or a WAV-like first write. `--resident-playback`
+loads `/03 Lips of Ashes.wav` onto Track 15; use an empty bench
+session. This is resident playback, not simultaneous SD streaming.
+
+Run matched images at 25 and 12.5 MHz with four-bit mode retained; record each
+binary SHA256 and the mounted speed from the boot log. The script never changes
+clock or remounts. It refuses a pre-existing retained failure and stops on the
+first failed case. Test recovery separately, preserving the original snapshot.
+The foreground also emits `SDIO_FAIL` and `SDIO_REG` once per retained failure;
+IRQ code never logs, allocates or changes the underlying transfer behavior.
+
+Probe phases are 0 idle, 1 create, 2 write, 3 sync, 4 close-write, 5 reopen,
+6 read/verify, 7 close-read, 8 remove, 9 done, 10 failed. `result` is FatFs's
+code, or 100 short-write, 101 wrong file size, 102 short-read, 103 byte mismatch.
+`offset` is progress within the failing phase. File creation uses `FA_CREATE_NEW`;
+a name collision fails safely. See [HV-001](../hardware-validation.md#hv-001--sd-card-formatting)
+for hardware evidence and remaining recovery/soak gates.

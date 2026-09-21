@@ -42,6 +42,12 @@ static daisy::SpiHandle spi_handle;
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "storage/sd_sdio.h"
 
+#include "storage/sd_io_diagnostics.hpp"
+#if WAVEX_DEBUG_HARNESS_ENABLED
+#include "storage/sd_write_probe.hpp"
+static WaveX::Storage::SdWriteProbe s_sd_probe;
+#endif
+
 #include "storage/card_service.hpp"
 #endif
 
@@ -141,7 +147,7 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
     if ((WaveX::AudioEngine::ProjectBusy() || WaveX::AudioEngine::BankBusy()) &&
         std::strcmp(c.verb, "PING") && std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG") &&
-        std::strcmp(c.verb, "BANKSTATS")) {
+        std::strcmp(c.verb, "BANKSTATS") && std::strcmp(c.verb, "SDIO")) {
         FormatErr(
             seq, WaveX::AudioEngine::BankBusy() ? "bankbusy" : "projectbusy", reply, sizeof(reply));
         WaveX::Log::PrintLine("%s", reply);
@@ -164,6 +170,72 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
 
     if (std::strcmp(c.verb, "PING") == 0) {
         FormatOk(seq, reply, sizeof(reply));
+#if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
+    } else if (std::strcmp(c.verb, "SDTEST") == 0) {
+        unsigned long bytes, chunk, shift, prefix;
+        char extra;
+        if (std::strcmp(p, "STATUS") == 0) {
+            s_sd_probe.Status(reply, sizeof(reply), seq);
+        } else if (std::sscanf(
+                       p, "START %lu %lu %lu %lu %c", &bytes, &chunk, &shift, &prefix, &extra) ==
+                   4) {
+            bool busy = WaveX::Storage::CardService::Busy();
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            busy = busy || WaveX::AudioEngine::StorageJobBusy();
+#endif
+            if (busy || !s_sd_probe.Begin(bytes, chunk, shift, prefix)) {
+                FormatErr(seq, "busy_or_invalid", reply, sizeof(reply));
+            } else {
+                s_sd_probe.Status(reply, sizeof(reply), seq);
+            }
+        } else {
+            FormatErr(seq, "syntax", reply, sizeof(reply));
+        }
+    } else if (std::strcmp(c.verb, "SDIO") == 0) {
+        if (*p && std::strcmp(p, "RESET") && std::strcmp(p, "REGS")) {
+            FormatErr(seq, "syntax", reply, sizeof(reply));
+            WaveX::Log::PrintLine("%s", reply);
+            return;
+        }
+        if (std::strcmp(p, "RESET") == 0)
+            WaveX::Storage::SdIo::Reset();
+        const auto f = WaveX::Storage::SdIo::Snapshot();
+        const auto& r = f.registers;
+        if (std::strcmp(p, "REGS") == 0) {
+            std::snprintf(reply,
+                          sizeof(reply),
+                          "WAVEX-DBG: %ld OK hal=%08lx state=%lu ctx=%08lx sta=%08lx remain=%lu "
+                          "dma=%08lx base=%08lx clk=%08lx cmd=%08lx arg=%08lx resp=%08lx",
+                          static_cast<long>(seq),
+                          r.error,
+                          r.state,
+                          r.context,
+                          r.status,
+                          r.remaining,
+                          r.dma,
+                          r.buffer,
+                          r.clock,
+                          r.command,
+                          r.argument,
+                          r.response);
+        } else {
+            std::snprintf(reply,
+                          sizeof(reply),
+                          "WAVEX-DBG: %ld OK valid=%u seq=%lu op=%c lba=%lu blocks=%lu buf=%08lx "
+                          "ms=%lu result=%lu irq=%u speed=%d",
+                          static_cast<long>(seq),
+                          f.valid,
+                          f.sequence,
+                          f.write ? 'W' : 'R',
+                          f.sector,
+                          f.count,
+                          f.buffer,
+                          f.elapsed_ms,
+                          f.result,
+                          f.irq,
+                          WaveX::Storage::SdSdio::CurrentSpeedIndex());
+        }
+#endif
     } else if (std::strcmp(c.verb, "LOGSTATS") == 0) {
         size_t len = FormatOk(seq, reply, sizeof(reply));
         len = AppendKvInt(reply, sizeof(reply), len, "usb_drop", WaveX::Log::DroppedBytes());
@@ -900,6 +972,10 @@ int main(void) {
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
         // Debounced card-detect read; handles hot-swap without a reboot.
         WaveX::Storage::SdSdio::Poll();
+        WaveX::Storage::SdIo::Report();
+#if WAVEX_DEBUG_HARNESS_ENABLED
+        s_sd_probe.Pump();
+#endif
 #endif
 
 #if WAVEX_AUDIO_ENGINE_ENABLED

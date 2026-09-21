@@ -347,9 +347,9 @@ class Daisy(Target):
         state = "ON" if on else "OFF"
         return self.cmd("NOTE", channel, note, vel, state, "MIDI")
 
-    def msg(self, msg_type, payload=b""):
+    def msg(self, msg_type, payload=b"", *, timeout=3.0):
         hex_payload = payload.hex() if payload else ""
-        return self.cmd("MSG", f"{msg_type:02x}", hex_payload)
+        return self.cmd("MSG", f"{msg_type:02x}", hex_payload, timeout=timeout)
 
     # Wire messages the tests use for set-up and clean-up (protocol.h).
     MSG_SAMPLE_LOAD = 0x04
@@ -374,15 +374,18 @@ class Daisy(Target):
         for t in range(16):
             self.set_midi_in(t, t + 1)
 
-    def load_sample(self, sample_id, path):
-        """MSG_SAMPLE_LOAD: make `path` resident under `sample_id`, without
-        going through the frontend's browser. The size/rate/channel/depth
-        fields are hints the Daisy re-reads from the file, so 0 is fine."""
+    def load_sample(self, sample_id, path, *, timeout=3.0):
+        """MSG_SAMPLE_LOAD: request a resident load without the browser.
+
+        sample_id is the request correlation value; discover the allocated
+        Pool ID with samples(). Size/rate/channel/depth hints may be zero.
+        Large synchronous loads need an explicit longer ACK timeout.
+        """
         name = path.encode()
         if len(name) >= 256:
             raise ValueError("sample path exceeds protocol BROWSE_PATH_MAX")
         payload = struct.pack("<HIHBB256s", sample_id, 0, 0, 0, 0, name)
-        return self.msg(self.MSG_SAMPLE_LOAD, payload)
+        return self.msg(self.MSG_SAMPLE_LOAD, payload, timeout=timeout)
 
     def bind_track(self, track, sample_id, root_note=60):
         """MSG_SAMPLE_SELECT: bind a resident sample to a Track."""

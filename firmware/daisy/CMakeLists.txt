@@ -74,6 +74,7 @@ set(WAVEX_COLD_SOURCES
     src/storage/pattern_store.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
+    src/storage/sd_write_probe.cpp
 )
 
 # Set the project name and sources
@@ -109,6 +110,8 @@ set(FIRMWARE_SOURCES
     src/storage/pattern_store.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
+    src/storage/sd_write_probe.cpp
+    src/storage/sd_io_diagnostics.cpp
     src/memory_sections.cpp
     src/audio/output_sink.hpp
     src/audio/voice_manager.hpp
@@ -429,6 +432,10 @@ target_include_directories(wavex_lfo_math SYSTEM PUBLIC
 target_compile_definitions(wavex_lfo_math PRIVATE ARM_DSP_CONFIG_TABLES ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32)
 target_compile_options(wavex_lfo_math PRIVATE -w)
 target_link_libraries(${FIRMWARE_NAME} PRIVATE wavex_lfo_math)
+
+target_link_options(${FIRMWARE_NAME} PRIVATE
+    "-Wl,--wrap=disk_read,--wrap=disk_write,--wrap=HAL_SD_IRQHandler"
+)
 
 # Set linker specs to use nano library with nosys stubs
 set(CMAKE_EXE_LINKER_FLAGS "--specs=nano.specs --specs=nosys.specs")
