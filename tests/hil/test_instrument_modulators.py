@@ -276,3 +276,35 @@ def test_midi_expression_routes_by_track_and_resets(  # noqa: E501
         daisy.note(0, 60, on=False)
         daisy.set_midi_in(0, 1)
         esp.home()
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_extended_destinations_apply_revert(esp32, daisy, sequence_samples):
+    esp = esp32
+    _instrument(daisy, 853001, 4, "HIL extended modulation")
+    _wait_osc(daisy, 0, 0, completed=853001, error=0)
+    _instrument(daisy, 853002, 7, sample=sequence_samples[0])
+    _wait_osc(daisy, 0, 0, completed=853002, error=0, zones=1)
+    esp.home()
+    esp.track(0)
+    esp.open_menu("Instrument")
+    esp.wait_state(oscready=1, oscvalid=1)
+    esp.page("TAB", "Mod")
+    esp.wait_state(modready=1, modvalid=1)
+    esp.page("SLOT", 1)
+    for destination in (8, 9, 10):
+        esp.page("SOURCE", 12)
+        esp.page("DEST", destination)
+        esp.page("DEPTH", 16384)
+        esp.wait_state(modready=1, editpending=0, dest=destination)
+        state = daisy.cmd("MOD", 0, 0)
+        assert int(state["destination"]) == destination
+        assert state["depth"] == "16384"
+        esp.softkey("Apply")
+        esp.wait_state(editpending=0, editdirty=0)
+        esp.softkey("Clear")
+        esp.wait_state(editpending=0, editdirty=1, source=0)
+        esp.softkey("Revert")
+        esp.wait_state(editpending=0, editdirty=0, source=12, dest=destination)
+    esp.home()

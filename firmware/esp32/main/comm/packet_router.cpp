@@ -97,11 +97,14 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
 
     // The fixed-size envelope exposes padding as payload. This new fixed
     // message admits only zero padding; raw UART payloads stay exact-sized.
-    if (msg_type == MSG_SEQ_CLOCK_OUT && payload_size > sizeof(SeqClockOutMessage)) {
-        for (size_t i = sizeof(SeqClockOutMessage); i < payload_size; ++i)
+    const size_t exact_size = msg_type == MSG_SEQ_CLOCK_OUT ? sizeof(SeqClockOutMessage)
+                              : msg_type == MSG_REC_STATUS  ? sizeof(RecordStatusMessage)
+                                                            : 0;
+    if (exact_size && payload_size > exact_size) {
+        for (size_t i = exact_size; i < payload_size; ++i)
             if (payload[i] != 0)
                 return;
-        payload_size = sizeof(SeqClockOutMessage);
+        payload_size = exact_size;
     }
     route_by_message_type(msg_type, payload, payload_size, flags, sequence_number);
 
@@ -177,6 +180,13 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 CopyMessage(payload, payload_len, message, "SAMPLE_SEAM_STATUS") &&
                 WaveX::Protocol::IsValidSampleSeamStatus(message))
                 inter_mcu_store_sample_seam_status(message);
+        } break;
+        case WaveX::Protocol::MSG_REC_STATUS: {
+            WaveX::Protocol::RecordStatusMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "REC_STATUS") &&
+                WaveX::Protocol::IsValidRecordStatus(message))
+                inter_mcu_store_record_status(message);
         } break;
         case WaveX::Protocol::MSG_SAMPLE_FILE_STATUS: {
             WaveX::Protocol::SampleFileStatusMessage message;
@@ -259,6 +269,22 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             WaveX::Protocol::InstModSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "INST_MOD_SYNC"))
                 inter_mcu_store_modulator(message);
+        } break;
+        case WaveX::Protocol::MSG_SEQ_LOCK_NOTICE: {
+            WaveX::Protocol::SeqLockNoticeMessage message;
+            if (CopyMessage(payload, payload_len, message, "SEQ_LOCK_NOTICE") &&
+                WaveX::Protocol::IsValidSeqLockNotice(message))
+                inter_mcu_store_lock_notice(message);
+        } break;
+        case WaveX::Protocol::MSG_GLOBAL_LFO_SYNC: {
+            WaveX::Protocol::GlobalLfoSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "GLOBAL_LFO_SYNC"))
+                inter_mcu_store_global_lfo(message);
+        } break;
+        case WaveX::Protocol::MSG_INST_ARP_SYNC: {
+            WaveX::Protocol::InstArpSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "INST_ARP_SYNC"))
+                inter_mcu_store_instrument_arp(message);
         } break;
         case WaveX::Protocol::MSG_INST_LFO_SYNC: {
             WaveX::Protocol::InstLfoSyncMessage message;

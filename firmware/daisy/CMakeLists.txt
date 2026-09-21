@@ -65,6 +65,8 @@ set(WAVEX_COLD_SOURCES
     src/storage/bank_file_job.cpp
     src/storage/bank_session.cpp
     src/storage/sample_file_job.cpp
+    src/storage/recording_save.cpp
+    src/audio/recording_session.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
     src/storage/project_patterns.cpp
@@ -98,6 +100,8 @@ set(FIRMWARE_SOURCES
     src/storage/bank_file_job.cpp
     src/storage/bank_session.cpp
     src/storage/sample_file_job.cpp
+    src/storage/recording_save.cpp
+    src/audio/recording_session.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
     src/storage/project_patterns.cpp
@@ -414,6 +418,7 @@ endif()
 # The vendored CMSIS sine kernel replaces libm sine in the LFO control path.
 # Compile only this kernel and its 513-entry table with the target toolchain.
 add_library(wavex_lfo_math OBJECT
+    libs/libDaisy/Drivers/CMSIS-DSP/Source/SupportFunctions/arm_float_to_q15.c
     libs/libDaisy/Drivers/CMSIS-DSP/Source/FastMathFunctions/arm_sin_f32.c
     libs/libDaisy/Drivers/CMSIS-DSP/Source/CommonTables/arm_common_tables.c
 )

@@ -45,12 +45,13 @@ void UIMenuPage::onEnter(lv_obj_t* parent) {
     // change restyle two rows instead of rebuilding all of them.
     list_ = lv_obj_create(root_);
     lv_obj_remove_style_all(list_);
-    lv_obj_set_size(list_, UI_SCREEN_WIDTH - 2 * UI_MARGIN_X, lv_pct(100));
+    lv_obj_set_size(list_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_CONTENT_HEIGHT - kListTopPad);
     lv_obj_set_pos(list_, UI_MARGIN_X, kListTopPad);
     lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_flex_flow(list_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(list_, UI_GUTTER, 0);
-    lv_obj_remove_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
 
     rebuildList();
 
@@ -208,6 +209,8 @@ void UIMenuPage::rebuildList() {
         applyRowState(i);
     }
     refreshContext();
+    if (selected_ >= 0 && static_cast<size_t>(selected_) < rows_.size())
+        lv_obj_scroll_to_view(rows_[selected_].card, LV_ANIM_OFF);
 }
 
 // Focus styling for one row. Split out so moving the selection touches only
@@ -274,6 +277,7 @@ void UIMenuPage::moveSelection(int delta) {
     // invalidated the entire content area to move one highlight.
     applyRowState(previous);
     applyRowState(static_cast<size_t>(selected_));
+    lv_obj_scroll_to_view(rows_[selected_].card, LV_ANIM_OFF);
 
     ESP_LOGD(TAG, "Selection moved to %d: %s", selected_, items_[selected_].label.c_str());
 }

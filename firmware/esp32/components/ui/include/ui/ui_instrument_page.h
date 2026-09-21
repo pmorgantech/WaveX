@@ -1,5 +1,6 @@
 // WaveX Instrument editor
 #pragma once
+#include "arp_model.h"
 #include "components/encoder_strip.h"
 #include "components/ui_dial.h"
 #include "components/ui_value_tile.h"
@@ -37,7 +38,7 @@ class UIInstrumentPage : public UIPage {
     const char* contextLine() const override { return context_line_; }
 
     // Tabs share the selected Instrument.
-    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, Lfo, kCount };
+    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, Lfo, Arp, kCount };
 
    private:
     EncoderStrip encoder_strip_;
@@ -94,6 +95,12 @@ class UIInstrumentPage : public UIPage {
     int32_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
+    ArpModel arp_;
+    uint32_t arp_read_at_ = 0, arp_pending_at_ = 0;
+    bool arpStage() const { return stage_ == static_cast<int>(Stage::Arp); }
+    void readArp();
+    void serviceArp();
+    void refreshArp();
     LfoModel lfo_;
     uint32_t lfo_read_at_ = 0, lfo_pending_at_ = 0;
     bool lfoStage() const { return stage_ == static_cast<int>(Stage::Lfo); }
@@ -123,9 +130,9 @@ class UIInstrumentPage : public UIPage {
                stage_ == static_cast<int>(Stage::Mod);
     }
     bool draftActive() const {
-        return lfo_.Dirty() || lfo_.Pending() || oscillator_.Dirty() || oscillator_.Pending() ||
-               modulator_.Dirty() || modulator_.Pending() || sound_.Outgoing() ||
-               sound_.Pending() || requested_action_;
+        return arp_.Dirty() || arp_.Pending() || lfo_.Dirty() || lfo_.Pending() ||
+               oscillator_.Dirty() || oscillator_.Pending() || modulator_.Dirty() ||
+               modulator_.Pending() || sound_.Outgoing() || sound_.Pending() || requested_action_;
     }
     OscillatorModel oscillator_;
     lv_timer_t* timer_ = nullptr;

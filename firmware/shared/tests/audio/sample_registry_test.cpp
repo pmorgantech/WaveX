@@ -304,3 +304,23 @@ TEST_F(Fixture, ExplicitSnapshotKeepsIdentityButOwnsIndependentRecords) {
     EXPECT_EQ(reg.Find(b), nullptr);
     EXPECT_NE(reg.Find(next->sample_id), nullptr);
 }
+
+TEST_F(Fixture, TransientTakesHaveDistinctIdsAndPromoteWithoutReplacingOwners) {
+    Registry::Record *first = nullptr, *second = nullptr;
+    ASSERT_EQ(reg.AdmitTransient(&first), Registry::Admit::Ok);
+    ASSERT_EQ(reg.AdmitTransient(&second), Registry::Admit::Ok);
+    ASSERT_NE(first->sample_id, second->sample_id);
+    const uint16_t id = first->sample_id;
+    ASSERT_TRUE(reg.SetPinned(id, true));
+    ASSERT_TRUE(reg.SetUsedBy(id, 3, true));
+    EXPECT_EQ(first->payload.path[0], 0);
+    EXPECT_EQ(reg.FindByPath(""), nullptr);
+    ASSERT_TRUE(reg.BindPath(id, "/recorded.wav"));
+    EXPECT_EQ(reg.FindByPath("/recorded.wav"), first);
+    EXPECT_TRUE(first->pinned);
+    EXPECT_EQ(first->used_by, 8u);
+    EXPECT_EQ(first->sample_id, id);
+    EXPECT_FALSE(reg.BindPath(second->sample_id, "/recorded.wav"));
+    EXPECT_EQ(second->payload.path[0], 0);
+    EXPECT_FALSE(reg.BindPath(id, "/renamed.wav"));
+}

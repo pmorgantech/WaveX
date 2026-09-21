@@ -1,9 +1,11 @@
 #include "comm/log_ring.h"
 
 #include "../config.hpp"
+#include "audio/global_lfo.hpp"
 #include "audio/master_gain.hpp"
 #include "audio/mix_meter_window.hpp"
 #include "audio/parameter_locks.hpp"
+#include "audio/recording_session.hpp"
 #include "audio/sample_channels.hpp"
 #include "audio/sample_loop.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -39,6 +41,7 @@ using q15_t = int16_t;
 #include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
+#include "arp_runtime.hpp"
 #include "audio/sample_pool.hpp"
 #include "callback_stop_fence.hpp"
 #include "envelope_scan.hpp"
@@ -228,8 +231,9 @@ static const WaveX::AudioEngine::ModSlot* ResolveModSlots(const void*, uint8_t s
 }
 
 // One performance-owned global LFO. The other two LFOs belong to each
-// Instrument voice. This DTCM object is zeroed, so Init must set its rate.
-static WaveX::AudioEngine::Lfo s_mod_lfo1 WAVEX_DTCM_DATA;
+// Instrument voice. Foreground settings and callback phase have separate owners.
+static WaveX::AudioEngine::GlobalLfo s_global_lfo;
+static SnapshotMailbox<SeqLockNoticeMessage> s_lock_notice;
 
 // Sequencer transport is callback-owned: its command queue gives the main
 // loop an immutable, bounded hand-off and SequencerTransport itself keeps a
@@ -241,6 +245,8 @@ static WaveX::AudioEngine::Lfo s_mod_lfo1 WAVEX_DTCM_DATA;
 // map, its mailbox and the note queue below.
 static WaveX::BssStatic<WaveX::Sequencer::SequencerTransport> s_seq_transport_storage;
 static WaveX::Sequencer::SequencerTransport& s_seq_transport = s_seq_transport_storage.Get();
+// Callback publishes the Pattern identity for foreground motion-capture commands.
+static std::atomic<uint32_t> s_seq_capture_epoch{0};
 static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
@@ -325,6 +331,14 @@ static FIL s_cvcal_file;
 
 // Explicit initialization before audio starts; CPU-only, no DMA access.
 static LiveNoteRuntime s_live_notes WAVEX_DTCM_DATA;
+// Foreground-owned received MIDI events; UI Track notes are excluded.
+static uint32_t s_midi_notes = 0, s_midi_ccs = 0, s_midi_clocks = 0;
+// CPU-only SRAM state; preserve the linker-enforced DTCM stack reserve.
+static BssStatic<ArpRuntime> s_arps;
+static void RecordArp(
+    uint8_t source, uint8_t note, uint32_t serial, uint8_t velocity, uint16_t tracks) {
+    s_seq_transport.RecordInput(source, note, serial, velocity, tracks);
+}
 
 // One main-loop producer and one callback consumer. Select/unload and the
 // cooperative Instrument loader await their own generation before releasing
@@ -352,27 +366,36 @@ static bool StopTracksAndWait(uint16_t tracks) {
 static bool drain_note_queue() {
     if (s_seq_voices)
         s_seq_voices->mailbox.AcquireLatest();
+    s_arps.Get().Sync(s_seq_voices ? &s_seq_voices->mailbox.ConsumerValue() : nullptr,
+                      s_voice_manager,
+                      RecordArp);
     const bool triggered = s_live_notes.Drain(
         s_seq_voices ? &s_seq_voices->mailbox.ConsumerValue() : nullptr,
         s_voice_manager,
-        [](const LiveNoteEvent& event) {
+        [](LiveNoteEvent& event) {
+            s_arps.Get().Input(event);
             s_seq_transport.RecordInput(
                 event.id.source, event.id.note, event.id.serial, event.velocity, event.tracks);
         });
     if (s_seq_transport.InputMode())
         s_seq_transport.PruneRecording([](uint8_t source, uint8_t note, uint32_t serial) {
-            return s_live_notes.OverflowReleased({serial, source, note});
+            return source < 32 && s_live_notes.OverflowReleased({serial, source, note});
         });
-    s_voice_stop_fence.ConsumeAndStop(
-        [](uint16_t tracks) { s_live_notes.StopTracks(tracks, s_voice_manager); });
+    s_arps.Get().Prune([](LiveNoteId id) { return s_live_notes.OverflowReleased(id); });
+    s_voice_stop_fence.ConsumeAndStop([](uint16_t tracks) {
+        s_live_notes.StopTracks(tracks, s_voice_manager);
+        s_arps.Get().Stop(tracks, s_voice_manager, RecordArp);
+    });
     return triggered;
 }
 
 // Callback-only. drain_note_queue has already acquired the latest voice map.
 // The main loop publishes that map before enqueuing PLAY, so step 0 sees the
 // complete matching binding.
-template <typename Render>
-static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size, Render render) {
+template <typename Render, typename Controls>
+static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size,
+                                                               Render render,
+                                                               Controls controls) {
     SeqPatternRequestMessage read_request;
     bool read_requested = false, scoped_read = false, notes_requested = false;
     SeqPatternRequestMessage notes_request;
@@ -405,6 +428,9 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                     scoped_read = false;
                     read_request = command.pattern_request;
                     read_requested = true;
+                    break;
+                case WaveX::Sequencer::SequencerCommandType::RecordControl:
+                    s_seq_transport.RecordControl(command.control, command.pattern_epoch);
                     break;
                 case WaveX::Sequencer::SequencerCommandType::MidiClock:
                     s_seq_transport.OnMidiClock(command.midi_clock);
@@ -440,7 +466,9 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
             muted |= static_cast<uint16_t>(1u << t);
     s_voice_manager.EndSequence(muted);
 
-    WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
+    constexpr size_t kPlaybackEvents = WaveX::Sequencer::kMaxEventsPerTick + kNumTracks;
+    WaveX::Sequencer::TriggerEvent events[kPlaybackEvents];
+    const double arp_start_tick = s_seq_transport.scheduler().PositionTicks();
     const auto boundary_frame = s_seq_transport.scheduler().HasQueuedPattern()
                                     ? s_seq_transport.scheduler().QueuedBoundaryFrame()
                                     : block_start_frame;
@@ -469,6 +497,28 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         }
         s_voice_manager.SetTempo(s_seq_transport.scheduler().Tempo());
     }
+    const auto arp_count = s_arps.Get().Events(s_seq_transport.scheduler(),
+                                               block_start_frame,
+                                               arp_start_tick,
+                                               block_size,
+                                               s_seq_transport.IsPlaying(),
+                                               current_run,
+                                               events + event_count,
+                                               s_voice_manager,
+                                               RecordArp);
+    event_count += arp_count;
+    if (arp_count)
+        std::sort(events, events + event_count, [](const auto& a, const auto& b) {
+            return a.frame < b.frame || (a.frame == b.frame && a.track < b.track);
+        });
+    static uint32_t lock_notice_count = 0;
+    const auto& notice = s_seq_transport.LockNotice();
+    if (notice.count != lock_notice_count) {
+        lock_notice_count = notice.count;
+        s_lock_notice.Publish(notice);
+    }
+    controls(event_count != 0);
+    s_seq_capture_epoch.store(s_seq_transport.PatternEpoch(), std::memory_order_release);
     bool any_trigger = false;
     if (!s_seq_voices) {
         render(0, block_size, block_start_frame);
@@ -476,7 +526,7 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
     }
     const auto& voice_map = s_seq_voices->mailbox.ConsumerValue();
     static_assert(WaveX::Sequencer::kMaxEventsPerTick <= 64);
-    SequencerVoiceMap::Selection selected[WaveX::Sequencer::kMaxEventsPerTick];
+    SequencerVoiceMap::Selection selected[kPlaybackEvents];
     uint16_t rendered = 0;
     for (size_t begin = 0; begin < event_count;) {
         size_t end = begin + 1;
@@ -510,12 +560,17 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
                         ApplyParamLocks(params, event.param_locks, event.param_lock_count);
                         params.start_offset_frames = 0;
                         params.sequence_lane = event.lane;
-                        if (cleanup_offset != UINT16_MAX && offset < cleanup_offset)
+                        if (!event.arp && cleanup_offset != UINT16_MAX && offset < cleanup_offset)
                             params.sequence_release_offset =
                                 static_cast<uint16_t>(cleanup_offset - offset);
                         params.sequence_gate_tick =
-                            event.gate_ticks ? event.tick + event.gate_ticks : 0;
+                            !event.arp && event.gate_ticks ? event.tick + event.gate_ticks : 0;
                     }
+                },
+                [&](uint16_t request, uint64_t group) {
+                    const auto& event = events[begin + request];
+                    if (event.arp)
+                        s_arps.Get().Admit(event, group, s_voice_manager, RecordArp);
                 });
             any_trigger = admitted != 0 || any_trigger;
         }
@@ -726,6 +781,7 @@ static_assert(sizeof(SamplePool::Record) * WAVEX_SAMPLE_POOL_CAPACITY <=
 // construction does not fit).
 alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
 static SamplePool* s_pool = nullptr;
+static BssStatic<RecordingSession> s_recording;
 static BssStatic<std::optional<Storage::ProjectSession>> s_project_session;
 static BssStatic<std::optional<Storage::BankSession>> s_bank_session;
 static BssStatic<Storage::SampleFileJob> s_sample_file_job;
@@ -1122,6 +1178,8 @@ void PumpTrackBinding() {
 }
 
 bool UnloadSample(uint16_t sample_id) {
+    if (s_recording.Get().Owns(sample_id))
+        return false;
     if (SfzLoader::Busy()) {
         WaveX::Log::PrintLine("SAMPLE_UNLOAD: Instrument loader busy");
         return false;
@@ -2145,13 +2203,12 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
             (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
     }
 
+    s_recording.Get().Init(s_pool, &s_sample_mem_mgr, PushSampleMeta, Comm::LinkSend);
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
-    // Global LFOs run at the 1kHz control-tick rate regardless of the audio
-    // sample rate. See s_mod_lfo1's own comment for why SetRateHz() must
-    // be called explicitly here rather than trusted to a member initializer.
-    s_mod_lfo1.Init(1000.0f);
-    s_mod_lfo1.SetRateHz(1.0f);
+    // The global LFO advances once per 1 kHz audio/control block.
+    s_global_lfo.Init();
+    s_lock_notice.Init(SeqLockNoticeMessage{});
 
     // Sequencer transport uses the same sample-rate/block-size timebase as
     // the audio engine so its scheduler frames line up with the callback.
@@ -2255,6 +2312,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // content above. Render() only runs when a voice is active, so the
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
+    s_recording.Get().Commands(s_voice_manager);
     PROFILE_BEGIN(voice_events);
     bool any_note_on;
     {
@@ -2279,12 +2337,12 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     }
     const auto& midi_sources = s_midi_modulation.Acquire();
     ModSources global_sources;
-    global_sources.lfo1 = s_mod_lfo1.Tick();
     const ModSlotResolver resolver{nullptr, &ResolveModSlots};
     s_track_mixer.Tick(static_cast<uint32_t>(size));
     // Render chronologically up to each trigger frame before admitting its
     // groups. A later steal must never erase the earlier part of this block.
     const auto render = [&](uint16_t offset, uint16_t frames, uint64_t start) {
+        s_arps.Get().Gates(offset, frames, s_voice_manager, RecordArp);
         s_voice_manager.PrepareSequenceGates(start, frames, [&](double tick) {
             return s_seq_transport.scheduler().FrameAtTick(tick);
         });
@@ -2307,7 +2365,16 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
             out[1][offset + i] += vm_r[i];
         }
     };
-    any_note_on = drain_sequencer(static_cast<uint16_t>(size), render) || any_note_on;
+    any_note_on = drain_sequencer(static_cast<uint16_t>(size),
+                                  render,
+                                  [&](bool scheduled) {
+                                      global_sources.lfo1 =
+                                          s_global_lfo.Tick(s_seq_transport.scheduler().Tempo(),
+                                                            s_seq_transport.IsPlaying(),
+                                                            s_seq_transport.scheduler().RunEpoch(),
+                                                            any_note_on || scheduled);
+                                  }) ||
+                  any_note_on;
     if (s_para_mailbox.ConsumeLatest(s_para_active)) {
         s_para_env.SetParams(s_para_active.attack_s,
                              s_para_active.decay_s,
@@ -2351,6 +2418,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     }
     s_master_gain.SetTarget(s_track_mixer.MasterGain());
 
+    s_recording.Get().Monitor(in[0], in[1], out[0], out[1], static_cast<uint32_t>(size));
     // Compute post-master per-block meters
     float sumL = 0.f, sumR = 0.f;
     float pkL = 0.f, pkR = 0.f;
@@ -2367,6 +2435,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         if (ar > pkR)
             pkR = ar;
     }
+    s_recording.Get().Process(in[0], in[1], out[0], out[1], static_cast<uint32_t>(size));
     s_last_block_meters.rmsL = sqrtf(sumL / (float)size);
     s_last_block_meters.rmsR = sqrtf(sumR / (float)size);
     s_last_block_meters.peakL = pkL;
@@ -2609,6 +2678,15 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         SfzLoader::SetInstrumentEnv(track, env);
         s_track_live_updates.Publish(ComposeTrackLive(track, filter, env));
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << track));
+        if (!WaveX::PatternStore::BlocksEdits()) {
+            WaveX::Sequencer::SequencerCommand command;
+            command.type = WaveX::Sequencer::SequencerCommandType::RecordControl;
+            command.control = ctrl_msg;
+            command.control.channel = track;
+            command.pattern_epoch = s_seq_capture_epoch.load(std::memory_order_acquire);
+            if (!s_seq_command_queue.Push(command))
+                WaveX::Log::PrintLine("SEQ: motion capture queue full; control not recorded");
+        }
     }
 }
 
@@ -2767,7 +2845,8 @@ void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
 }
 
 void OnSeqFileOp(const SeqFileOpMessage& request) {
-    const bool accepted = WaveX::PatternStore::Request(request, s_pattern_exchange_storage.Get());
+    const bool accepted = WaveX::PatternStore::Request(
+        request, s_pattern_exchange_storage.Get(), s_recording.Get().Busy());
     if (accepted && (request.op == SEQ_FILE_SAVE_COPY || request.op == SEQ_FILE_LOAD))
         CloseWav();  // file jobs own SD bandwidth; resident Track voices continue
 }
@@ -2825,10 +2904,10 @@ void OnProjectOp(const ProjectOpMessage& request) {
         Comm::LinkSend(MSG_PROJECT_STATUS, &status, sizeof(status));
         return;
     }
-    const bool accepted =
-        s_project_session.Get()->Request(request,
-                                         SampleFileBusy() || BankBusy() || SfzLoader::Busy() ||
-                                             PatternStore::Busy() || Storage::CardService::Busy());
+    const bool accepted = s_project_session.Get()->Request(
+        request,
+        s_recording.Get().Busy() || SampleFileBusy() || BankBusy() || SfzLoader::Busy() ||
+            PatternStore::Busy() || Storage::CardService::Busy());
     if (accepted) {
         CancelEnvelopeJob();
         CloseWav();
@@ -2852,7 +2931,8 @@ bool BankBusy() {
     return s_bank_session.Get() && s_bank_session.Get()->Busy();
 }
 static bool BankExternalBusy() {
-    return (s_project_session.Get() && s_project_session.Get()->Busy()) || PatternStore::Busy() ||
+    return s_recording.Get().Busy() ||
+           (s_project_session.Get() && s_project_session.Get()->Busy()) || PatternStore::Busy() ||
            SampleFileBusy() || Storage::CardService::Busy() || (!BankBusy() && SfzLoader::Busy());
 }
 static void BankAccepted() {
@@ -2945,9 +3025,19 @@ void PumpProjectSession() {
         session->ReplySent();
 }
 bool StorageJobBusy() {
-    return SampleFileBusy() || BankBusy() ||
+    return s_recording.Get().Busy() || SampleFileBusy() || BankBusy() ||
            (s_project_session.Get() && s_project_session.Get()->Busy()) || SfzLoader::Busy() ||
            WaveX::PatternStore::Busy();
+}
+void OnRecordOp(const RecordOpMessage& request) {
+    const bool other_busy = SampleFileBusy() || BankBusy() ||
+                            (s_project_session.Get() && s_project_session.Get()->Busy()) ||
+                            SfzLoader::Busy() || WaveX::PatternStore::Busy() ||
+                            Storage::CardService::Busy();
+    s_recording.Get().Request(request, other_busy);
+}
+void PumpRecording() {
+    s_recording.Get().Pump(System::GetNow());
 }
 bool SampleFileBusy() {
     return s_sample_file_job.Get().Busy();
@@ -3088,7 +3178,16 @@ void PumpMixMeters() {
         s_mix_meter_sent = s_mix_meter_main.sequence;
 }
 
+void OnGlobalLfoOp(const GlobalLfoOpMessage& request) {
+    s_global_lfo.Request(request);
+}
 void PumpSequencerState() {
+    s_global_lfo.Pump(Comm::LinkSend);
+    static SeqLockNoticeMessage notice;
+    static bool notice_pending = false;
+    notice_pending |= s_lock_notice.ConsumeLatest(notice);
+    if (notice_pending && Comm::LinkSend(MSG_SEQ_LOCK_NOTICE, &notice, sizeof(notice)) >= 0)
+        notice_pending = false;
     SeqClockOutMessage clock;
     for (unsigned i = 0; i < 8 && s_seq_transport.PopClockOut(clock); ++i) {
         if (WaveX::Comm::LinkSend(MSG_SEQ_CLOCK_OUT, &clock, sizeof(clock)) < 0) {
@@ -3128,9 +3227,26 @@ void OnSeqPatternOp(const SeqPatternOpMessage& m) {
     EnqueueSequencerCommand(command);
 }
 
+void TakeMidiDiagnostics(DiagPushMessage& out) {
+    const auto sat = [](uint32_t n) {
+        return static_cast<uint16_t>(std::min<uint32_t>(n, UINT16_MAX));
+    };
+    out.midi_notes = sat(s_midi_notes);
+    out.midi_ccs = sat(s_midi_ccs);
+    out.midi_clock_ticks = sat(s_midi_clocks);
+    s_midi_notes = s_midi_ccs = s_midi_clocks = 0;
+    const auto& head = s_seq_head_pending_storage.Get();
+    out.measured_bpm_x100 = head.measured_bpm_x100;
+    out.sync_state = head.sync_state;
+    out.transport_playing = head.playing;
+    out.pattern = head.pattern;
+    out.step = head.step;
+}
 void OnMidiClockEvent(const MidiClockEventMessage& m) {
     if (!IsValidMidiClockEvent(m))
         return;
+    if (m.event == MIDI_CLK_TICK)
+        ++s_midi_clocks;
     if (ProjectBusy() && (s_project_session.Get()->Status().active_op != PROJECT_SAVE_COPY ||
                           (m.event != MIDI_CLK_TICK && m.event != MIDI_CLK_STOP)))
         return;
@@ -3154,6 +3270,7 @@ static uint16_t MidiDestinations(uint8_t channel) {
 void OnMidiCc(const MidiCcMessage& m) {
     if (!IsValidMidiCc(m))
         return;
+    ++s_midi_ccs;
     if (m.cc == 1)
         s_midi_modulation.Wheel(MidiDestinations(m.channel), m.value);
     else if (m.cc == 121)
@@ -3196,6 +3313,8 @@ void OnNoteOn(const NoteMessage& note_msg) {
         OnNoteOff(note_msg);
         return;
     }
+    if (!NoteAddressesTrack(note_msg.channel))
+        ++s_midi_notes;
     uint8_t tracks[kNumTracks];
     const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
     uint16_t destinations = 0;
@@ -3213,20 +3332,17 @@ void OnNoteOn(const NoteMessage& note_msg) {
 void OnNoteOff(const NoteMessage& note_msg) {
     if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0)
         return;
+    if (!NoteAddressesTrack(note_msg.channel))
+        ++s_midi_notes;
     // Original source and FIFO press identity survive routing/binding changes.
     // Never resolve destinations again and never release by pitch alone.
     s_live_notes.Release(LiveSource(note_msg.channel), note_msg.note);
 }
 
-// Wire hook for MSG_SAMPLE_CTRL (record/play transport from the UI's
-// record page). Deliberately a no-op today (review C2): the Sampler these
-// commands drove was inert end-to-end - nothing fed it input and nothing
-// rendered its playback - so it was deleted rather than left pretending to
-// record. Rebuild against the voice/streaming architecture when recording
-// is actually scheduled (offline-editing work, Phase 4).
+// Retired legacy transport commands. Recording uses correlated MSG_REC_OP.
 void OnSampleCtrl(const SampleCtrlMessage& sc) {
     if (s_hw)
-        WaveX::Log::PrintLine("SAMPLE_CTRL cmd=%u ignored (recording not implemented - review C2)",
+        WaveX::Log::PrintLine("SAMPLE_CTRL cmd=%u retired; recording uses REC_OP",
                               (unsigned)sc.cmd);
 }
 
@@ -3424,6 +3540,10 @@ void OnEditOp(const InstEditOpMessage& request) {
     if (SfzLoader::OnEditOp(request))
         PublishInstrumentSound(request.track);
 }
+void OnArpOp(const InstArpOpMessage& request) {
+    if (SfzLoader::OnArpOp(request))
+        PublishInstrumentSound(request.track);
+}
 void OnLfoOp(const InstLfoOpMessage& request) {
     if (SfzLoader::OnLfoOp(request))
         PublishInstrumentSound(request.track);
@@ -3450,6 +3570,16 @@ void OnPadSoundOp(const InstPadSoundOpMessage& request) {
 }
 
 void OnInstrumentOp(const InstOpMessage& request) {
+    if (s_recording.Get().Busy()) {
+        InstStatusMessage status;
+        status.request_id = request.request_id;
+        status.slot = request.slot;
+        status.op = request.op;
+        status.state = INST_STATUS_FAILED;
+        status.error = INST_ERROR_BUSY;
+        Comm::LinkSend(MSG_INST_STATUS, &status, sizeof(status));
+        return;
+    }
     if (request.op == INST_OP_SAVE && !SfzLoader::Busy())
         CloseWav();
     if (request.op == INST_OP_SET_MOD_SLOT) {
@@ -3541,7 +3671,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // An import's admitted records and hit ids belong to its transaction
     // until Commit/Fail. They must not look like completed loads or be removed
     // by another Pool mutation during a cooperative yield.
-    if (SfzLoader::Busy()) {
+    if (SfzLoader::Busy() || s_recording.Get().Busy()) {
         ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_BUSY);
         return;
     }
@@ -4610,7 +4740,8 @@ void OnSampleSeam(const SampleSeamRequest& request) {
     reply.sample_id = request.expected.sample_id;
     auto* info = find_loaded_sample(reply.sample_id);
     const auto ref = ResolveLoadedSample(nullptr, reply.sample_id);
-    if (SampleFileBusy() || ProjectBusy() || BankBusy() || SfzLoader::Busy()) {
+    if (SampleFileBusy() || ProjectBusy() || BankBusy() || SfzLoader::Busy() ||
+        s_recording.Get().Owns(reply.sample_id)) {
         reply.error = SAMPLE_SEAM_BUSY;
     } else if (!info || !ref.valid()) {
         reply.error = SAMPLE_SEAM_MISSING;
@@ -4676,6 +4807,10 @@ void SetEditParams(uint16_t sample_id,
         return;
     }
 
+    if (s_recording.Get().Owns(sample_id)) {
+        PushSampleMeta(*info);
+        return;
+    }
     auto& m = info->meta;
     if (gain_db_x10 < -240) {
         gain_db_x10 = -240;

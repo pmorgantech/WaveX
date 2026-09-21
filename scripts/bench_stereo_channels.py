@@ -216,10 +216,22 @@ def main():
         required=True,
     )
     parser.add_argument("--seconds", type=float, default=605)
+    parser.add_argument("--record-source", type=int, choices=(0, 3))
+    parser.add_argument("--arpeggiator", action="store_true")
     parser.add_argument(
         "--mono-keys",
         action="store_true",
         help="Mono held-key fallback bursts; requires --midi-bursts",
+    )
+    parser.add_argument(
+        "--live-lock-recording",
+        action="store_true",
+        help="Capture moving Play controls on the armed Track",
+    )
+    parser.add_argument(
+        "--extended-modulation",
+        action="store_true",
+        help="Exercise oscillator mix and both LFO rate destinations",
     )
     parser.add_argument("--layers", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument(
@@ -288,6 +300,8 @@ def main():
         parser.error("--cycle-mixes requires --stereo 0")
     if args.midi_expression:
         ROUTES[0:2] = [(12, 1), (13, 6)]
+    if args.extended_modulation:
+        ROUTES[0:4] = [(12, 8), (6, 9), (17, 10), (13, 8)]
     has_bursts = args.layers > 1 or args.burst_tracks or args.midi_bursts
     if has_bursts and args.cycle_mixes:
         parser.error("layer/trigger bursts run separately from --cycle-mixes")
@@ -307,6 +321,8 @@ def main():
     offset = None
     data = {
         "source_commit": args.commit,
+        "record_source": args.record_source,
+        "arpeggiator": args.arpeggiator,
         "image_sha256": hashlib.sha256(args.image.read_bytes()).hexdigest(),
         "stereo": args.stereo,
         "mono": mono,
@@ -318,6 +334,8 @@ def main():
         "active_tracks": active_tracks,
         "midi_bursts": 0,
         "midi_expression": args.midi_expression,
+        "extended_modulation": args.extended_modulation,
+        "live_lock_recording": args.live_lock_recording,
         "mono_keys": args.mono_keys,
         "melodic": args.melodic,
         "mix_interval_seconds": args.mix_seconds if args.cycle_mixes else None,
@@ -338,7 +356,17 @@ def main():
     }
 
     def transport(play):
-        send(d, 0x50, "<BBBBHH", int(play), 0, 0, 0, 12000, 0)
+        send(
+            d,
+            0x50,
+            "<BBBBHH",
+            int(play),
+            0,
+            2 if args.live_lock_recording else 0,
+            0,
+            12000,
+            0,
+        )
 
     def pattern_op(op, track=0, step=0, value8=0, value16=0):
         send(d, 0x51, "<BBBBHh", op, track, step, value8, value16, 0)
@@ -438,6 +466,28 @@ def main():
                     int(args.topology == "ladder"),
                 )
             )
+        if args.arpeggiator:
+            state = d.cmd("OSC", 0, 0)
+            request = next(REQUESTS)
+            send(
+                d,
+                0x8E,
+                "<IIBB8B",
+                request,
+                int(state["revision"]),
+                0,
+                1,
+                1,
+                0,
+                2,
+                0,
+                75,
+                1,
+                0,
+                100,
+            )
+            for note in (60, 64, 67):
+                d.note(0, note, 100, True)
         # Instrument replacement preserves Track overrides; reset them here.
         for track in range(16):
             for scope in (1, 0) if track < active_tracks else (1,):
@@ -462,6 +512,8 @@ def main():
         if args.mono_keys:
             d.midi_note(1, 60, 100)
             data["midi_bursts"] += 1
+        if args.live_lock_recording:
+            pattern_op(16, 0, 0)
         pattern_op(5, value16=16)
         pattern_op(7, value8=60)
         for track in range(16):
@@ -514,6 +566,33 @@ def main():
         data["source_format"] = dict(
             zip(("rate", "channels", "bits"), map(int, geometry.groups()))
         )
+        if args.record_source is not None:
+            e.home()
+            e.open_menu("Sample")
+            e.page("TAB", "Record")
+            e.wait_state(recready=1, recstate=0)
+            take = next(REQUESTS)
+            send(
+                d,
+                0x70,
+                "<IIIHHBBBB48s",
+                take,
+                0,
+                48000 * 20,
+                100,
+                0,
+                1,
+                args.record_source,
+                0,
+                0,
+                b"",
+            )
+            e.wait_state(recready=1, recstate=1)
+            e.softkey("Start")
+            e.wait_state(recready=1, recstate=2)
+            e.home()
+            e.open_menu("Sequencer")
+            e.wait_state(seqready=1)
         offset = Path(d.logfile).stat().st_size
         start = time.monotonic()
         data["started_utc"] = time.strftime(
@@ -577,6 +656,8 @@ def main():
             if args.midi_expression:
                 e.cmd("MIDICC", 1, 1, (tick * 17) % 128)
                 e.cmd("MIDIPRESSURE", 1, (tick * 29) % 128)
+            if args.live_lock_recording:
+                send(d, 0x01, "<BBH", 2, 0, 50000 if tick % 2 else 10000)
             filter_edit(
                 d,
                 tick % active_tracks,
@@ -585,6 +666,23 @@ def main():
             )
             elapsed = time.monotonic() - start
             if elapsed >= next_file:
+                if args.record_source is not None and "capture" not in data:
+                    e.home()
+                    e.open_menu("Sample")
+                    e.page("TAB", "Record")
+                    captured = e.wait_state(recready=1)
+                    if captured["recstate"] in ("1", "2"):
+                        e.softkey("Stop")
+                        captured = e.wait_state(recready=1, recstate=4)
+                    data["capture"] = captured
+                    assert captured["recerror"] == "0", captured
+                    assert captured["reccaptureerror"] == "0", captured
+                    assert int(captured["recframes"]) > 48000, captured
+                    if args.record_source == 3:
+                        assert int(captured["recpeak"]) > 0, captured
+                    e.softkey("Discard")
+                    e.wait_state(recready=1, recstate=0)
+                    e.home()
                 # Idle navigation may return to the root between file cycles.
                 if e.state().get("page") != "Sequencer":
                     e.open_menu("Sequencer")
@@ -653,6 +751,17 @@ def main():
                     d.midi_note(1, pitch, on=False)
             if args.midi_bursts:
                 d.reset_routing()
+            if args.record_source is not None and "capture" not in data:
+                e.home()
+                e.open_menu("Sample")
+                e.page("TAB", "Record")
+                state = e.wait_state(recready=1)
+                if state["recstate"] in ("1", "2"):
+                    e.softkey("Stop")
+                    state = e.wait_state(recready=1, recstate=4)
+                if state["recstate"] == "4":
+                    e.softkey("Discard")
+                    e.wait_state(recready=1, recstate=0)
             e.home()
         finally:
             d.close()

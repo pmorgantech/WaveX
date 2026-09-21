@@ -335,3 +335,27 @@ TEST(ModMatrix, CachedMappingsMatchFreshEvaluationAcrossSourceAndRouteEdits) {
         EXPECT_EQ(actual.resonance_offset, expected.resonance_offset);
     }
 }
+
+TEST(ModMatrix, MixAndLfoRatesSumClampAndClearIndependently) {
+    ModSources sources;
+    sources.velocity = 1;
+    ModSlot slots[] = {
+        Slot(SRC_VELOCITY, DEST_OSC_MIX, 32767),
+        Slot(SRC_VELOCITY, DEST_OSC_MIX, -16384),
+        Slot(SRC_VELOCITY, DEST_LFO1_RATE, 32767),
+        Slot(SRC_VELOCITY, DEST_LFO1_RATE, 32767),
+        Slot(SRC_VELOCITY, DEST_LFO2_RATE, -32767),
+    };
+    ModScaleCache cache;
+    auto value = EvaluateModMatrix(slots, 5, sources, &cache);
+    EXPECT_NEAR(value.oscillator_mix_offset, .5f, .0001f);
+    EXPECT_FLOAT_EQ(value.lfo_rate_mul[0], 16.f);
+    EXPECT_FLOAT_EQ(value.lfo_rate_mul[1], .0625f);
+    slots[3].depth = -32767;
+    value = EvaluateModMatrix(slots, 5, sources, &cache);
+    EXPECT_FLOAT_EQ(value.lfo_rate_mul[0], 1.f);
+    value = EvaluateModMatrix(nullptr, 0, sources, &cache);
+    EXPECT_FLOAT_EQ(value.oscillator_mix_offset, 0.f);
+    EXPECT_FLOAT_EQ(value.lfo_rate_mul[0], 1.f);
+    EXPECT_FLOAT_EQ(value.lfo_rate_mul[1], 1.f);
+}

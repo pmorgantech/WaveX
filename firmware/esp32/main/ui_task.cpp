@@ -300,6 +300,7 @@ void UITask::run() {
         // may only raise flags; this is where the widgets actually change.
         LV_LOCK();
         wavex_ui::BusyOverlay::service();
+        wavex_ui::UINavigator::instance().serviceNotices();
         wavex_ui::UISampleBrowser::processDeferredUpdates();
         wavex_ui::ServicePanelLeds();
         if (auto page = wavex_ui::UINavigator::instance().active())

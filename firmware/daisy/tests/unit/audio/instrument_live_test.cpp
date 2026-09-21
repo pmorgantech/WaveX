@@ -420,3 +420,77 @@ TEST_F(InstrumentLiveTest, PitchLockAndStolenVoiceDoNotInheritOscillatorModulati
     EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_oscillator_pitch_mul[1], 1);
     EXPECT_FLOAT_EQ(vm.GetVoice(0).increment, .5f);
 }
+
+TEST_F(InstrumentLiveTest, MixModulationRecoversSilentOscillatorAndHonorsLiveBase) {
+    ins.osc[1].type = OscType::Sample;
+    ins.osc[0].level = .8f;
+    ins.osc[1].level = .6f;
+    ins.osc_mix = 0;
+    zone.gain = .5f;
+    auto params = TriggerParams();
+    auto second = TriggerParams(60, 1);
+    PairOscillatorTrigger(params, second);
+    vm.Trigger(params);
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_MODWHEEL, DEST_OSC_MIX, 32767, 0, 0};
+    ModSlotResolver resolver{slots,
+                             [](const void* p, uint8_t) { return static_cast<const ModSlot*>(p); }};
+    ModSources sources;
+    sources.modwheel = 1;
+    vm.TickModulation(resolver, sources, 48);
+    const auto& voice = vm.GetVoice(0);
+    EXPECT_FLOAT_EQ(voice.SourceLevel(voice), 0);
+    EXPECT_NEAR(voice.SourceLevel(voice.secondary), .3f, 1e-6);
+    ins.osc_mix = .25f;
+    ins.osc[1].level = .2f;
+    Live();
+    sources.modwheel = .25f;
+    vm.TickModulation(resolver, sources, 48);
+    EXPECT_NEAR(voice.SourceLevel(voice), .2f, 1e-6);
+    EXPECT_NEAR(voice.SourceLevel(voice.secondary), .05f, 1e-6);
+    slots[0] = {};
+    vm.TickModulation(resolver, sources, 48);
+    EXPECT_NEAR(voice.SourceLevel(voice), .3f, 1e-6);
+    EXPECT_NEAR(voice.SourceLevel(voice.secondary), .025f, 1e-6);
+    EXPECT_GT(Render(), 0);
+}
+
+TEST_F(InstrumentLiveTest, RateRoutesHaveOneBlockDelayAndClearingPreservesPhase) {
+    ins.lfo[0].wave = 3;  // square is initially +1, including self-modulation
+    ins.lfo[0].rate_hz = 1;
+    ins.lfo[1].rate_hz = 2;
+    vm.Trigger(TriggerParams());
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_LFO_VOICE, DEST_LFO1_RATE, 32767, 0, 0};
+    slots[1] = {SRC_LFO_VOICE, DEST_LFO2_RATE, 32767, 0, 0};
+    ModSlotResolver resolver{slots,
+                             [](const void* p, uint8_t) { return static_cast<const ModSlot*>(p); }};
+    const auto& voice = vm.GetVoice(0);
+    vm.TickModulation(resolver, {}, 48);
+    EXPECT_NEAR(voice.lfo[0].Phase(), .001f, .00001f);
+    EXPECT_NEAR(voice.lfo[1].Phase(), .002f, .00001f);
+    vm.TickModulation(resolver, {}, 48);
+    EXPECT_NEAR(voice.lfo[0].Phase(), .017f, .00001f);
+    EXPECT_NEAR(voice.lfo[1].Phase(), .034f, .00001f);
+    slots[0] = slots[1] = {};
+    vm.TickModulation(resolver, {}, 48);  // previously published rate advances once
+    const auto phase = voice.lfo[0].Phase();
+    vm.TickModulation(resolver, {}, 48);
+    EXPECT_NEAR(voice.lfo[0].Phase(), phase + .001f, .00001f);
+}
+TEST_F(InstrumentLiveTest, MixRouteUsesLoneOscillatorTwoIdentityAndPreservesZeroLevel) {
+    ins.osc[1].type = OscType::Sample;
+    ins.osc[1].level = .6f;
+    ins.osc_mix = 0;
+    zone.gain = .5f;
+    vm.Trigger(TriggerParams(60, 1));
+    ModDestinations mod;
+    mod.oscillator_mix_offset = 1;
+    auto& voice = const_cast<Voice&>(vm.GetVoice(0));
+    voice.SetBlockModulation(mod);
+    EXPECT_NEAR(voice.SourceLevel(voice), .6f, 1e-6);
+    EXPECT_NEAR(voice.gain, .5f, 1e-6);
+    ins.osc[1].level = 0;
+    Live();
+    EXPECT_EQ(voice.SourceLevel(voice), 0);
+}

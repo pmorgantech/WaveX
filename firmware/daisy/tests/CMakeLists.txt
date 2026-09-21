@@ -93,6 +93,7 @@ include_directories(
 
 # Test the same portable sine kernel/table used by the device.
 add_library(wavex_lfo_math_host OBJECT
+    ../libs/libDaisy/Drivers/CMSIS-DSP/Source/SupportFunctions/arm_float_to_q15.c
     ../libs/libDaisy/Drivers/CMSIS-DSP/Source/FastMathFunctions/arm_sin_f32.c
     ../libs/libDaisy/Drivers/CMSIS-DSP/Source/CommonTables/arm_common_tables.c
 )
@@ -285,9 +286,17 @@ function(add_wavex_test test_source)
         )
     endif()
 
-    if(test_name STREQUAL "sample_file_job_test")
+    if(test_name STREQUAL "recording_session_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/recording_session.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/recording_save.cpp
+        )
+    endif()
+
+    if(test_name STREQUAL "sample_file_job_test" OR test_name STREQUAL "recording_save_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/sample_file_job.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/recording_save.cpp
         )
     endif()
 
@@ -307,6 +316,7 @@ function(add_wavex_test test_source)
     if(test_name STREQUAL "sfz_loader_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/sample_file_job.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/recording_save.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/bank_file_job.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/bank_session.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_file_job.cpp

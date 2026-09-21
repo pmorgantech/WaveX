@@ -13,6 +13,32 @@ versioning and release process.
 
 ### Added
 
+- Added Instrument modulation destinations for oscillator mix and LFO 1/2
+  rates, with runtime evaluation, touch selection and WXI/protocol round-trip
+  coverage.
+
+- Added live Play-control lock capture for the armed Track while recording;
+  callback-owned pattern epochs reject stale updates and sparse lock
+  publication limits each capture to the touched steps.
+
+- Added recording from codec stereo, codec left/right or the internal
+  post-master mix, with threshold and pre-roll capture, source meters,
+  optional input monitoring, immediate audition through a normal Pool
+  identity, WAV plus sidecar saving and assignment of the saved sample.
+  Capacity and full physical acceptance remain open.
+
+- Added an Instrument arpeggiator with six modes, octave and division
+  controls, gate and latch behavior, velocity modes, revisioned Apply/Revert
+  handling and an optional backward-compatible WXI chunk.
+
+- Added session-owned global LFO settings with a dedicated edit/reset page;
+  Instrument Apply/Revert and Save do not alter the global settings.
+
+- Added held-step encoder editing for parameter locks and an authoritative
+  lock-eviction notice when a new lock replaces an existing one.
+
+- Added authoritative received MIDI note, CC and clock counts to diagnostics.
+
 - Instrument modulation now accepts MIDI CC1 (Mod Wheel) and channel pressure from DIN/USB, routed per Track with CC121 reset and coalesced callback snapshots. Both sources are selectable on the Mod tab.
 
 - Sample-save failure logs now preserve the failing phase, copied bytes, FatFS file errors and original SD peripheral error before cleanup.
@@ -578,6 +604,16 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed Menu selection scrolling, Pad Map naming/sample overlays, Song
+  playback labeling and disabled Song buttons on the dark UI theme. Shared
+  header context now stays within the meter/CPU strip boundary and uses
+  ellipsis with bounded cached text to avoid repainting identical labels.
+  MIDI diagnostics now identifies unavailable legacy fields instead of
+  presenting zero as a measurement.
+
+- Removed leftover Global LFO unit placeholders and made recording help text
+  follow the confirmed take state.
+
 - Sample-save SD bus errors now attempt a lower clock after closing job files, retaining 4-bit mode and the failed result for explicit retry. Fixed-clock bench copies fail with a data-CRC error at 25 MHz and pass at 12.5 MHz; remount after the write fault still fails on the bench card (HV-025). No save is automatically replayed.
 
 - Mono sample audition now feeds both stereo outputs instead of only the left output.
@@ -747,6 +783,15 @@ versioning and release process.
   below.
 
 ### Changed
+
+- Recording save transactions now use short temporary names after long names
+  failed on real SD media; the short-name path passed two-source HIL checks,
+  while the underlying FatFs cause remains undetermined. Later final-image
+  saves still fail with `FR_DISK_ERR`; RAM takes remain available and SD
+  save/recovery acceptance stays open in HV-030.
+
+- Require a commit for each completed, validated task, including its related
+  documentation and changelog, while preserving open hardware acceptance.
 
 - Keep the roadmap focused on open work and require closing updates to highlight remaining roadmap/backlog tasks; retain completed work in the changelog and validation evidence in the hardware checklist.
 

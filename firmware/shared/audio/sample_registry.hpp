@@ -149,32 +149,22 @@ class SampleRegistry {
             *out = existing;
             return Admit::AlreadyResident;
         }
-        // Next free slot after the last one handed out, so freed slots are
-        // not reused immediately: a stale id has to survive Capacity
-        // admissions AND a generation wrap before it could alias.
-        for (size_t n = 0; n < Capacity; ++n) {
-            const size_t slot = (next_slot_ + n) % Capacity;
-            if (ids_[slot] != 0) {
-                continue;
-            }
-            Record& r = records_[slot];
-            uint16_t gen = static_cast<uint16_t>(r.generation + 1u);
-            if (gen == 0 || gen > kMaxGeneration) {
-                gen = 1;
-            }
-            r = Record{};
-            r.generation = gen;
-            r.sample_id = static_cast<uint16_t>((gen << kSlotBits) | slot);
-            r.path_hash = HashSamplePath(path);
-            std::memcpy(r.payload.path, path, path_len + 1);
-            ids_[slot] = r.sample_id;
-            next_slot_ = (slot + 1) % Capacity;
-            ++count_;
-            *out = &r;
-            return Admit::Ok;
-        }
-        *out = nullptr;
-        return Admit::Full;
+        return AdmitNew(path, path_len, out);
+    }
+
+    /// A resident unsaved take has a normal generation-tagged id, no path.
+    Admit AdmitTransient(Record** out) { return AdmitNew("", 0, out); }
+
+    /// Publish the saved path without changing the take's id or ownership.
+    /// Only pathless entries may be promoted; collisions preserve both records.
+    bool BindPath(uint16_t sample_id, const char* path) {
+        auto* record = Find(sample_id);
+        const size_t length = PathLength(path);
+        if (!record || record->payload.path[0] || !length || FindByPath(path))
+            return false;
+        std::memcpy(record->payload.path, path, length + 1);
+        record->path_hash = HashSamplePath(path);
+        return true;
     }
 
     /// Forgets the entry. The caller releases the audio memory first (or
@@ -282,6 +272,35 @@ class SampleRegistry {
     void NoteNewest(uint16_t sample_id) { newest_ = sample_id; }
 
    private:
+    Admit AdmitNew(const char* path, size_t path_len, Record** out) {
+        // Next free slot after the last one handed out, so freed slots are
+        // not reused immediately: a stale id has to survive Capacity
+        // admissions AND a generation wrap before it could alias.
+        for (size_t n = 0; n < Capacity; ++n) {
+            const size_t slot = (next_slot_ + n) % Capacity;
+            if (ids_[slot] != 0) {
+                continue;
+            }
+            Record& r = records_[slot];
+            uint16_t gen = static_cast<uint16_t>(r.generation + 1u);
+            if (gen == 0 || gen > kMaxGeneration) {
+                gen = 1;
+            }
+            r = Record{};
+            r.generation = gen;
+            r.sample_id = static_cast<uint16_t>((gen << kSlotBits) | slot);
+            r.path_hash = HashSamplePath(path);
+            std::memcpy(r.payload.path, path, path_len + 1);
+            ids_[slot] = r.sample_id;
+            next_slot_ = (slot + 1) % Capacity;
+            ++count_;
+            *out = &r;
+            return Admit::Ok;
+        }
+        *out = nullptr;
+        return Admit::Full;
+    }
+
     // Zero is invalid (empty/null or no terminator within owned storage).
     static size_t PathLength(const char* path) {
         if (!path) {

@@ -14,6 +14,7 @@ class UISequencerPage : public UIPage {
     void onTrackChanged() override;
     PanelPageLeds panelLeds() const override;
     void onInput(const InputEvent& event) override;
+    EncoderBindings encoderBindings() override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
     size_t consoleState(char* out, size_t cap, size_t len) override;
@@ -52,6 +53,11 @@ class UISequencerPage : public UIPage {
     bool soloActive() const;
     void lockMode(bool enabled);
     void adjustLock(uint8_t parameter, int delta);
+    void heldLock(uint8_t slot, int delta);
+    Cell* held_cell_ = nullptr;
+    uint32_t held_epoch_ = 0;
+    uint8_t held_track_ = 0, held_step_ = 0;
+    bool holding() const;
     bool setLock(uint8_t id, uint16_t value);
     void renderLocks();
     uint8_t selectedRow() const;

@@ -184,6 +184,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 #endif
         return;
     }
+    if (msg_type == MSG_REC_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        RecordOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidRecordOp(request))
+                AudioEngine::OnRecordOp(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_SAMPLE_FILE_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         SampleFileOpMessage request;
@@ -436,6 +447,24 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                 InstEditOpMessage msg;
                 memcpy(&msg, payload, sizeof(msg));
                 WaveX::AudioEngine::OnEditOp(msg);
+            }
+#endif
+            break;
+        case MSG_GLOBAL_LFO_OP:
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            if (payload && payload_size == sizeof(GlobalLfoOpMessage)) {
+                GlobalLfoOpMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                WaveX::AudioEngine::OnGlobalLfoOp(msg);
+            }
+#endif
+            break;
+        case MSG_INST_ARP_OP:
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            if (payload && payload_size == sizeof(InstArpOpMessage)) {
+                InstArpOpMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                WaveX::AudioEngine::OnArpOp(msg);
             }
 #endif
             break;

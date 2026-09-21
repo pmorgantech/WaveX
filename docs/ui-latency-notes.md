@@ -13,6 +13,7 @@ limits for the Phase 2 ESP32 UI responsiveness work.
 - [Final hardware state](#final-hardware-state)
 - [Related](#related)
 - [Step Notes follow-up](#step-notes-follow-up--2026-09-20)
+- [Recording and performance controls](#recording-and-performance-controls--2026-09-21)
 
 ## Scope and outcome
 
@@ -457,3 +458,39 @@ screen. Edit sysmon busy time averages 31%, peaks 43% (8 retained samples).
 Both Daisy counters start and finish at zero. The short feedback trace checks
 its rendering behavior, not a statistically stable performance distribution.
 `logs/melodic-notes-halfstep.png` verifies the final half-step label/layout.
+
+## Recording and performance controls — 2026-09-21
+
+Normal Daisy `bb4502317c87549b523f402e60c5d7f0017869d3218b4b0337a8da73fd00f822`,
+ESP32 measurement image `9c2132337bb54dddd3a81af8d59e1354c69df3dfa5530404854bfee3ec446701`,
+working tree over `90b7329+`. Profiling-only RENDER and log-mode sysmon enabled.
+Each idle window lasts five seconds; edit windows last one second after a
+console-driven control. Transport is stopped, with small samples resident.
+This is a repaint check, not a loaded rendering or physical touch-latency gate.
+
+| Page / interaction | Frames / full | Submitted pixels | Mean refresh ms | Peak refresh ms |
+|---|---:|---:|---:|---:|
+| Record / idle | 13 / 0 | 3,276 | 0.79 | 1.06 |
+| Record / edit | 3 / 0 | 136,064 | 10.41 | 29.79 |
+| Arp / idle | 0 / 0 | 0 | 0.00 | 0.00 |
+| Arp / edit | 3 / 0 | 120,508 | 6.88 | 9.47 |
+| Global LFO / idle | 0 / 0 | 0 | 0.00 | 0.00 |
+| Global LFO / edit | 2 / 0 | 312,508 | 34.93 | 35.94 |
+| Held locks / idle | 0 / 0 | 0 | 0.00 | 0.00 |
+| Held locks / edit | 1 / 1 | 1,024,000 | 243.52 | 243.52 |
+| Held locks / held encoder | 1 / 0 | 77,714 | 18.52 | 18.52 |
+| Diagnostics / idle | 10 / 0 | 305,442 | 4.66 | 9.10 |
+| Diagnostics / edit | 2 / 0 | 768,256 | 64.34 | 127.49 |
+
+Record source, Arp octave, global rate and held-lock encoder edits remain partial.
+Entering the Locks layout from the grid rebuilds the content and costs a full
+243.52 ms refresh; this mode-entry cost remains a UI follow-up. Navigation
+entry/re-entry includes Main Menu and the default tab before selecting the target,
+so those totals are not isolated page-construction timings. Their largest
+single refresh was 259.20 ms. Idle Arp, global LFO and sequencer submit no pixels;
+Record and Diagnostics retain small status/meter updates.
+
+Evidence: `logs/task3-ui-render.json`, `logs/task3-ui-render.log` and
+`logs/task3-ui-sysmon.log`; sysmon retains render/flush splits. No general speed
+comparison is claimed. Normal firmware restores profiling off. Physical feel,
+loaded rendering and callback/soak acceptance remain in HV-018/HV-030–HV-032.

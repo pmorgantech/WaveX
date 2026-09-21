@@ -53,6 +53,7 @@ set(COMPONENT_SRCS
     "pages/ui_system_info_page.cpp"
     "pages/ui_instrument_page.cpp"
     "pages/ui_sample_record_page.cpp"
+    "pages/ui_global_lfo_page.cpp"
     "pages/ui_cv_cal_page.cpp"
     "pages/ui_storage_page.cpp"
     "pages/ui_sample_edit_page.cpp"

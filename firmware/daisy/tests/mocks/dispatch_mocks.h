@@ -68,6 +68,8 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::AllocationOpMessage> allocation_ops;
     std::vector<WaveX::Protocol::InstEditOpMessage> edit_ops;
     std::vector<WaveX::Protocol::InstLfoOpMessage> lfo_ops;
+    std::vector<WaveX::Protocol::InstArpOpMessage> arp_ops;
+    std::vector<WaveX::Protocol::RecordOpMessage> record_ops;
     std::vector<WaveX::Protocol::InstOscOpMessage> osc_ops;
     std::vector<WaveX::Protocol::InstKeyMapOpMessage> key_map_ops;
     std::vector<WaveX::Protocol::InstPadSoundOpMessage> pad_sound_ops;

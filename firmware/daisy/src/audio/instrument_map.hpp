@@ -113,6 +113,7 @@ inline void FromFile(const Wxi::InstrumentFile& doc, Sfz::MappedInstrument& out)
         out.instrument.env[e].sustain = doc.env[e].sustain;
         out.instrument.env[e].release_s = doc.env[e].release_s;
     }
+    out.instrument.arp = doc.arp;
     for (uint8_t i = 0; i < 2; ++i) {
         out.instrument.lfo[i].wave = doc.lfo[i].wave;
         out.instrument.lfo[i].rate_hz = doc.lfo[i].rate_hz;
@@ -234,6 +235,7 @@ inline bool ToFile(const Instrument& instrument,
         doc.env[e].sustain = instrument.env[e].sustain;
         doc.env[e].release_s = instrument.env[e].release_s;
     }
+    doc.arp = instrument.arp;
     for (uint8_t i = 0; i < 2; ++i) {
         doc.lfo[i].wave = instrument.lfo[i].wave;
         doc.lfo[i].rate_hz = instrument.lfo[i].rate_hz;

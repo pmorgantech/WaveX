@@ -65,6 +65,8 @@ class UINavigator {
     /// Re-read the active page's contextLine() into the header. Call from a
     /// page whose context changed without a push or pop (a Track switch, say).
     void refreshContext();
+    void serviceNotices();
+    uint32_t lockEvictions() const { return lock_evictions_; }
     size_t depth() const { return stack_.size(); }
 
     /**
@@ -85,6 +87,8 @@ class UINavigator {
     void notifySoftkeyUsed();
 
    private:
+    char notice_[128]{};
+    uint32_t notice_at_ = 0, lock_evictions_ = 0;
     UINavigator() = default;
     ~UINavigator() = default;
 
@@ -103,6 +107,9 @@ class UINavigator {
     lv_obj_t* header_ = nullptr;
     lv_obj_t* title_label_ = nullptr;
     lv_obj_t* context_label_ = nullptr;
+    // DOT mode rewrites the label text. Retain the bounded presentation input
+    // so identical backend refreshes cannot invalidate the header repeatedly.
+    char header_context_[256]{};
     lv_obj_t* shift_rule_ = nullptr;
     lv_obj_t* content_ = nullptr;
     lv_obj_t* shift_chip_ = nullptr;

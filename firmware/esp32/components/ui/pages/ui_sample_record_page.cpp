@@ -1,210 +1,359 @@
 #include "ui/ui_sample_record_page.h"
 
-#include <esp_timer.h>
+#include <esp_random.h>
 
-#include "components/envelope_cache.h"
-#include "components/envelope_panel.h"
-#include "components/waveform_view.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
 #include "ui_theme.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+
 namespace wavex_ui {
-
+using namespace WaveX::Protocol;
 namespace {
-
-// Same request policy as the Edit tab: a run the backend drops is retried a
-// few times, then the page says so rather than polling forever.
-constexpr uint32_t kRequestTimeoutMs = 3000;
-constexpr uint8_t kMaxRequestRetries = 3;
-
-// Layout, page-relative, matching the Edit tab's waveform panel so the trace
-// sits in the same place when the user switches between them.
-constexpr int kMargin = UI_MARGIN_X;
-constexpr int kWaveW = UI_SCREEN_WIDTH - 2 * kMargin;  // 1240
-constexpr int kWaveY = 12;
-constexpr int kWaveH = 220;
-constexpr int kWavePad = 4;
-constexpr int kWaveBorder = 1;
-// The panel's content area: inside its border and padding. LVGL sizes
-// children against this, not the panel's outer box, and WaveformView takes
-// its column count from the width it is given.
-constexpr int kWaveInnerW = kWaveW - 2 * (kWavePad + kWaveBorder);  // 1230
-constexpr int kWaveInnerH = kWaveH - 2 * (kWavePad + kWaveBorder);  // 210
-constexpr int kNameY = kWaveY + kWaveH + 16;                        // 248
-constexpr int kStatusY = kNameY + 36;                               // 284
-
+uint32_t nextId() {
+    static uint32_t id = esp_random();
+    if (!++id)
+        ++id;
+    return id;
+}
+const char* sources[] = {"Codec stereo", "Codec left", "Codec right", "Internal mix"};
+const char* states[] = {
+    "Ready to arm", "Armed", "Recording", "Finishing take", "Take ready", "Saving"};
+const char* hints[] = {"Arm, then Start (manual) or wait for the threshold.",
+                       "Press Start or wait for the threshold; Stop cancels an empty take.",
+                       "Press Stop to finish the take.",
+                       "Finishing the captured audio...",
+                       "Audition, name and Save the take, or Discard it.",
+                       "Writing the take to the card..."};
+const char* errors[] = {"",
+                        "Storage or take is busy",
+                        "Take changed; read its current state",
+                        "Action unavailable in this state",
+                        "Not enough sample memory",
+                        "Capture overflow; contiguous audio retained",
+                        "Card write failed; take retained for retry",
+                        "Name already exists; choose another",
+                        "Use letters, numbers, spaces, - or _"};
+void text(lv_obj_t* label, const char* value) {
+    if (std::strcmp(lv_label_get_text(label), value))
+        lv_label_set_text(label, value);
+}
 }  // namespace
-
 void UISampleRecordPage::onEnter(lv_obj_t* parent) {
     root_ = lv_obj_create(parent);
-    lv_obj_remove_style_all(root_);
-    lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(root_, UI_COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+    ui_theme_apply_container_style(root_, false);
+    lv_obj_set_size(root_, UI_CONTENT_WIDTH, UI_CONTENT_HEIGHT);
+    lv_obj_set_style_pad_all(root_, 0, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
-
-    EnsureEnvelopeCacheInitialised();
-
-    lv_obj_t* panel = lv_obj_create(root_);
-    lv_obj_remove_style_all(panel);
-    lv_obj_set_size(panel, kWaveW, kWaveH);
-    lv_obj_set_pos(panel, kMargin, kWaveY);
-    lv_obj_set_style_bg_color(panel, UI_COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(panel, kWaveBorder, 0);
-    lv_obj_set_style_border_color(panel, UI_COLOR_LINE, 0);
-    lv_obj_set_style_pad_all(panel, kWavePad, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    waveform_ = std::make_unique<WaveformView>(panel, kWaveInnerW, kWaveInnerH);
-
-    name_label_ = lv_label_create(root_);
-    lv_label_set_text(name_label_, "");
-    lv_obj_set_style_text_font(name_label_, UI_FONT_TITLE, 0);
-    lv_obj_set_style_text_color(name_label_, UI_COLOR_TEXT, 0);
-    lv_obj_set_pos(name_label_, kMargin, kNameY);
-
+    const int width = (UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - 4 * UI_GUTTER) / 5;
+    const char* titles[] = {"SOURCE", "THRESHOLD", "PRE-ROLL", "MAX LENGTH", "MONITOR"};
+    for (uint8_t i = 0; i < 5; ++i) {
+        tiles_[i] = valueTileCreate(root_,
+                                    UI_MARGIN_X + i * (width + UI_GUTTER),
+                                    UI_PADDING_LARGE,
+                                    width,
+                                    UI_PERFORMANCE_TILE_HEIGHT,
+                                    titles[i],
+                                    "");
+        valueTileSetOnAdjust(tiles_[i], [this, i](int delta) {
+            focus_ = i;
+            adjust(i, delta);
+        });
+    }
+    for (uint8_t i = 0; i < 2; ++i) {
+        meters_[i] = lv_bar_create(root_);
+        lv_obj_set_pos(meters_[i], UI_MARGIN_X, UI_RECORD_METERS_Y + i * UI_RECORD_METER_GAP);
+        lv_obj_set_size(meters_[i], UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_RECORD_METER_HEIGHT);
+        lv_bar_set_range(meters_[i], 0, 32768);
+        lv_obj_set_style_bg_color(meters_[i], UI_COLOR_CARD_ALT, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(meters_[i], UI_COLOR_ACCENT, LV_PART_INDICATOR);
+    }
+    input_ = lv_textarea_create(root_);
+    lv_textarea_set_one_line(input_, true);
+    lv_textarea_set_max_length(input_, FILE_NAME_MAX - 1);
+    lv_textarea_set_accepted_chars(
+        input_, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_");
+    lv_textarea_set_placeholder_text(input_, "Take name for Save");
+    lv_obj_set_pos(input_, UI_MARGIN_X, UI_RECORD_NAME_Y);
+    lv_obj_set_size(input_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_RECORD_NAME_HEIGHT);
+    lv_obj_set_style_bg_color(input_, UI_COLOR_CARD, 0);
+    lv_obj_set_style_text_color(input_, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(input_, UI_FONT_BODY, 0);
+    lv_obj_set_style_anim_duration(input_, 0, LV_PART_CURSOR);
     status_label_ = lv_label_create(root_);
-    lv_label_set_text(status_label_, "");
+    ui_theme_apply_label_style(status_label_, false);
     lv_obj_set_style_text_font(status_label_, UI_FONT_SMALL, 0);
-    lv_obj_set_style_text_color(status_label_, UI_COLOR_DIM, 0);
-    lv_obj_set_pos(status_label_, kMargin, kStatusY);
-
-    EnvelopePanel::Config cfg;
-    cfg.timeout_ms = kRequestTimeoutMs;
-    cfg.max_retries = kMaxRequestRetries;
-    EnvelopeSink* sinks[] = {waveform_.get()};
-    panel_.attach(cfg, EspEnvelopeLink(), &GetEnvelopeCache(), sinks, 1);
-    shown_sample_id_ = 0;
-    shown_generation_ = 0;
-    no_sample_shown_ = false;
-    wave_status_shown_ = false;
-
-    ui_timer_ = lv_timer_create(&UISampleRecordPage::uiTimerCb, 50, this);
-    syncSample();
+    lv_obj_set_pos(status_label_, UI_MARGIN_X, UI_RECORD_STATUS_Y);
+    lv_obj_set_width(status_label_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
+    keyboard_ = lv_keyboard_create(root_);
+    lv_keyboard_set_textarea(keyboard_, input_);
+    lv_obj_set_size(keyboard_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_RECORD_KEYBOARD_HEIGHT);
+    lv_obj_align(keyboard_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_CARD, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(keyboard_, UI_COLOR_FG, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(keyboard_, UI_FONT_BODY, LV_PART_ITEMS);
+    lv_obj_add_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(
+        input_,
+        [](lv_event_t* e) {
+            auto* self = static_cast<UISampleRecordPage*>(lv_event_get_user_data(e));
+            lv_obj_remove_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN);
+        },
+        LV_EVENT_FOCUSED,
+        this);
+    auto close = [](lv_event_t* e) {
+        auto* self = static_cast<UISampleRecordPage*>(lv_event_get_user_data(e));
+        lv_obj_add_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN);
+    };
+    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_READY, this);
+    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_CANCEL, this);
+    alive_ = inter_mcu_backend_link_alive();
+    valid_ = false;
+    read();
+    render();
+    timer_ = lv_timer_create(
+        [](lv_timer_t* timer) {
+            static_cast<UISampleRecordPage*>(lv_timer_get_user_data(timer))->service();
+        },
+        67,
+        this);
 }
-
 void UISampleRecordPage::onExit() {
-    // The panel releases the chunk listener and any run in flight before the
-    // view it would have drawn into is destroyed.
-    panel_.detach();
-    if (ui_timer_) {
-        lv_timer_delete(ui_timer_);
-        ui_timer_ = nullptr;
-    }
-    waveform_.reset();
-    if (root_) {
-        lv_obj_del(root_);
-        root_ = nullptr;
-    }
-    name_label_ = nullptr;
-    status_label_ = nullptr;
+    if (timer_)
+        lv_timer_delete(timer_);
+    timer_ = nullptr;
+    if (root_)
+        lv_obj_delete(root_);
+    root_ = input_ = keyboard_ = status_label_ = nullptr;
+    valid_ = false;
 }
-
+bool UISampleRecordPage::ready() const {
+    return alive_ && valid_ && !pending_ && !status_.active_request_id &&
+           lv_tick_get() - received_ < 1500;
+}
+void UISampleRecordPage::read() {
+    RecordOpMessage query;
+    query.request_id = nextId();
+    read_id_ = query.request_id;
+    inter_mcu_send_record_op(query);
+    requested_ = lv_tick_get();
+}
+void UISampleRecordPage::send(uint8_t op) {
+    if (!ready())
+        return;
+    auto request = config_;
+    request.request_id = nextId();
+    request.take_id = status_.take_id;
+    request.op = op;
+    if (op == REC_SAVE)
+        detail::CopyWireString(request.name, sizeof(request.name), lv_textarea_get_text(input_));
+    if (op == REC_DISCARD && status_.path[0])
+        setCurrentSampleId(status_.sample_id);
+    if (inter_mcu_send_record_op(request) == ESP_OK) {
+        pending_ = request.request_id;
+        keys_ = UINT32_MAX;  // The disabled pending row must refresh even when state is unchanged.
+        std::snprintf(message_, sizeof(message_), "Waiting for confirmation...");
+        read();
+        render();
+        UINavigator::instance().refreshSoftkeys();
+    }
+}
+void UISampleRecordPage::service() {
+    const bool alive = inter_mcu_backend_link_alive();
+    if (alive != alive_) {
+        alive_ = alive;
+        valid_ = false;
+        if (alive)
+            read();
+    }
+    RecordStatusMessage received;
+    if (alive_ && inter_mcu_get_record_status(&received) && received.request_id == read_id_ &&
+        IsValidRecordStatus(received)) {
+        status_ = received;
+        received_ = lv_tick_get();
+        valid_ = true;
+        if (status_.state != REC_IDLE) {
+            config_.source = status_.source;
+            config_.max_frames = status_.max_frames;
+            config_.threshold = status_.threshold;
+            config_.preroll_ms = status_.preroll_ms;
+            config_.monitor = status_.monitor;
+        }
+        if (pending_ && received.completed_request_id == pending_) {
+            pending_ = 0;
+            std::snprintf(message_, sizeof(message_), "%s", errors[received.error]);
+            if (received.completed_op == REC_SAVE && received.error == REC_OK) {
+                setCurrentSampleId(received.sample_id);
+                std::snprintf(
+                    message_,
+                    sizeof(message_),
+                    "Saved: %s. Done releases the take to Sample Edit/Pool for assignment.",
+                    received.path);
+            }
+        } else if (pending_ && received.active_request_id != pending_ && !received.take_id &&
+                   received.state == REC_IDLE) {
+            pending_ = 0;
+            std::snprintf(message_,
+                          sizeof(message_),
+                          "Take unavailable. The previous action was not replayed.");
+        }
+    }
+    if (alive_ && lv_tick_get() - requested_ >= 300)
+        read();
+    render();
+    const uint32_t keys =
+        uint32_t(ready()) | uint32_t(status_.state) << 1 | uint32_t(bool(status_.path[0])) << 5;
+    if (keys != keys_) {
+        keys_ = keys;
+        UINavigator::instance().refreshSoftkeys();
+    }
+}
+void UISampleRecordPage::render() {
+    if (!root_)
+        return;
+    char value[48];
+    valueTileSetValue(tiles_[0], sources[config_.source], true);
+    if (config_.threshold)
+        std::snprintf(value, sizeof(value), "%u%%", config_.threshold * 100u / 32768u);
+    else
+        std::strcpy(value, "Manual");
+    valueTileSetValue(tiles_[1], value, true);
+    std::snprintf(value, sizeof(value), "%u ms", config_.preroll_ms);
+    valueTileSetValue(tiles_[2], value, true);
+    std::snprintf(
+        value, sizeof(value), "%lu s", static_cast<unsigned long>(config_.max_frames / 48000u));
+    valueTileSetValue(tiles_[3], value, true);
+    valueTileSetValue(tiles_[4],
+                      config_.source == REC_INTERNAL_MIX ? "Internal"
+                      : config_.monitor                  ? "On"
+                                                         : "Off",
+                      true);
+    for (uint8_t i = 0; i < 5; ++i)
+        valueTileSetFocus(tiles_[i], i == focus_);
+    if (lv_bar_get_value(meters_[0]) != status_.rms_l)
+        lv_bar_set_value(meters_[0], status_.rms_l, LV_ANIM_OFF);
+    if (lv_bar_get_value(meters_[1]) != status_.rms_r)
+        lv_bar_set_value(meters_[1], status_.rms_r, LV_ANIM_OFF);
+    char text_buffer[768];
+    std::snprintf(text_buffer,
+                  sizeof(text_buffer),
+                  "%s / %s / %.2f s / Peak %u:%u%% / Clips %lu\n%s\n%s\nCapture continues if you "
+                  "leave this tab. Stop before "
+                  "saving; an unsaved take is lost on power-off.",
+                  !alive_   ? "Disconnected"
+                  : !valid_ ? "Reading recorder"
+                            : states[status_.state],
+                  sources[status_.state == REC_IDLE ? config_.source : status_.source],
+                  static_cast<double>(status_.frames) / 48000.0,
+                  status_.peak_l * 100u / 32768u,
+                  status_.peak_r * 100u / 32768u,
+                  static_cast<unsigned long>(status_.clip_count),
+                  status_.capture_error ? errors[status_.capture_error]
+                  : status_.path[0]     ? "Saved. Press Done to use this sample."
+                                        : hints[status_.state],
+                  message_);
+    text(status_label_, text_buffer);
+}
+void UISampleRecordPage::adjust(uint8_t field, int delta) {
+    if (!ready() || status_.state != REC_IDLE || !delta)
+        return;
+    switch (field) {
+        case 0:
+            config_.source = static_cast<uint8_t>(std::clamp(int(config_.source) + delta, 0, 3));
+            break;
+        case 1:
+            config_.threshold =
+                static_cast<uint16_t>(std::clamp(int(config_.threshold) + delta * 328, 0, 32768));
+            break;
+        case 2:
+            config_.preroll_ms =
+                static_cast<uint16_t>(std::clamp(int(config_.preroll_ms) + delta * 10, 0, 500));
+            break;
+        case 3:
+            config_.max_frames =
+                static_cast<uint32_t>(std::clamp(int(config_.max_frames / 48000) + delta, 1, 120)) *
+                48000;
+            break;
+        case 4:
+            config_.monitor = delta > 0;
+            break;
+    }
+    render();
+}
+void UISampleRecordPage::onInput(const InputEvent& e) {
+    if (e.type == InputType::EncoderRight || e.type == InputType::EncoderLeft)
+        adjust(focus_, e.steps());
+    else if (e.type == InputType::EncoderClick) {
+        focus_ = static_cast<uint8_t>((focus_ + 1) % 5);
+        render();
+    }
+}
 std::array<Softkey, NUM_SOFTKEYS> UISampleRecordPage::getSoftkeys() {
+    const bool active =
+        status_.state == REC_ARMED || status_.state == REC_CAPTURING || status_.state == REC_READY;
+    const bool take = status_.state == REC_READY;
     std::array<Softkey, NUM_SOFTKEYS> keys{};
-    keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    // Dimmed, not hidden: the row is six fixed positions. It stays until the
-    // backend can capture (roadmap Phase 1), so the key that will do it is
-    // already where it will be.
-    keys[1] = {"Record", nullptr, false, "recording not implemented"};
-    // Ask again, from scratch: after a give-up this is the only way to retry
-    // without leaving the tab.
-    keys[2] = {"Refresh", [this]() {
-                   shown_sample_id_ = 0;
-                   shown_generation_ = 0;
-               }};
+    keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
+    keys[1] = {active ? "Stop" : "Arm",
+               [this, active] { send(active ? REC_STOP : REC_ARM); },
+               ready() && (active || status_.state == REC_IDLE),
+               "Finish the current take"};
+    keys[2] = {
+        "Start", [this] { send(REC_START); }, ready() && status_.state == REC_ARMED, "Arm first"};
+    keys[3] = {"Audition",
+               [this] { send(REC_AUDITION); },
+               ready() && take && status_.frames >= 2,
+               "Record a take first"};
+    keys[4] = {
+        "Save", [this] { send(REC_SAVE); }, ready() && take && !status_.path[0], "No unsaved take"};
+    keys[5] = {status_.path[0] ? "Done" : "Discard",
+               [this] { send(REC_DISCARD); },
+               ready() && take,
+               "Stop first"};
     return keys;
 }
-
-void UISampleRecordPage::uiTimerCb(lv_timer_t* timer) {
-    auto* self = static_cast<UISampleRecordPage*>(lv_timer_get_user_data(timer));
-    if (self) {
-        self->serviceUi();
-    }
+size_t UISampleRecordPage::consoleState(char* out, size_t cap, size_t len) {
+    if (len >= cap)
+        return len;
+    const int n = std::snprintf(out + len,
+                                cap - len,
+                                " recready=%u recstate=%u recsource=%u recframes=%lu rectake=%lu "
+                                "recsample=%u recerror=%u reccaptureerror=%u recpending=%lu "
+                                "recsaved=%u recpeak=%u recclips=%lu",
+                                ready(),
+                                status_.state,
+                                config_.source,
+                                static_cast<unsigned long>(status_.frames),
+                                static_cast<unsigned long>(status_.take_id),
+                                status_.sample_id,
+                                status_.error,
+                                status_.capture_error,
+                                static_cast<unsigned long>(pending_),
+                                bool(status_.path[0]),
+                                status_.peak_l,
+                                static_cast<unsigned long>(status_.clip_count));
+    return n > 0 ? len + static_cast<size_t>(n) : len;
 }
-
-// UI task, inside an lv_timer. Follows the current sample and drives the
-// panel; the panel coalesces and retries on its own, this only words it.
-void UISampleRecordPage::serviceUi() {
-    const uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
-    syncSample();
-    switch (panel_.service(now)) {
-        case EnvelopePanel::Event::Drawn:
-            if (wave_status_shown_) {
-                wave_status_shown_ = false;
-                setStatus("Recording is not implemented yet. Showing the current sample.");
-            }
-            break;
-        case EnvelopePanel::Event::Retrying:
-            wave_status_shown_ = true;
-            setStatus("Waveform request timed out - retrying");
-            break;
-        case EnvelopePanel::Event::SendFailed:
-            wave_status_shown_ = true;
-            setStatus("Waveform request refused by the link - retrying");
-            break;
-        case EnvelopePanel::Event::GaveUp:
-            wave_status_shown_ = true;
-            setStatus("Waveform unavailable - Refresh to retry");
-            break;
-        case EnvelopePanel::Event::None:
-            break;
-    }
+bool UISampleRecordPage::consoleCommand(const char* args, char* reply, size_t cap) {
+    unsigned source = 0;
+    if (std::sscanf(args, "SOURCE %u", &source) == 1 && source <= REC_INTERNAL_MIX && ready() &&
+        status_.state == REC_IDLE) {
+        config_.source = static_cast<uint8_t>(source);
+        render();
+    } else if (!std::strncmp(args, "NAME ", 5))
+        lv_textarea_set_text(input_, args + 5);
+    else
+        return false;
+    std::snprintf(reply, cap, "OK");
+    return true;
 }
-
-// Hands the panel the current sample whenever it, or its generation, differs
-// from what was last shown. Geometry comes from the backend's cached metadata
-// so any resident sample shows, however it got there; a sample whose metadata
-// has not arrived yet is simply tried again next tick.
-void UISampleRecordPage::syncSample() {
-    if (!panel_.attached()) {
-        return;
-    }
-    const uint16_t sample_id = getCurrentSampleId();
-    if (sample_id == 0) {
-        if (panel_.hasSample()) {
-            panel_.clearSample();
-        }
-        if (shown_sample_id_ != 0 || !no_sample_shown_) {
-            shown_sample_id_ = 0;
-            shown_generation_ = 0;
-            no_sample_shown_ = true;
-            wave_status_shown_ = false;
-            lv_label_set_text(name_label_, "No sample selected");
-            setStatus("Recording is not implemented yet. Load a sample to see it here.");
-        }
-        return;
-    }
-
-    WaveX::Protocol::SampleMetadata m;
-    if (!inter_mcu_get_sample_meta(sample_id, &m) || m.total_frames == 0) {
-        return;
-    }
-    if (sample_id == shown_sample_id_ && m.generation == shown_generation_) {
-        return;
-    }
-    shown_sample_id_ = sample_id;
-    shown_generation_ = m.generation;
-    no_sample_shown_ = false;
-    lv_label_set_text(name_label_, m.name);
-    panel_.setWindow(0, 0, m.total_frames);
-    panel_.setSample(sample_id, m.generation, m.total_frames);
-    // Worded on Drawn, so the line reads as an outcome and not a promise.
-    wave_status_shown_ = true;
-    setStatus("Loading waveform...");
-}
-
-void UISampleRecordPage::setStatus(const char* text) {
-    if (status_label_ && text) {
-        lv_label_set_text(status_label_, text);
-    }
-}
-
 std::shared_ptr<UIPage> createSampleRecordPage() {
     return std::make_shared<UISampleRecordPage>();
 }
-
 }  // namespace wavex_ui

@@ -137,6 +137,11 @@ void inter_mcu_store_modulator(const WaveX::Protocol::InstModSyncMessage& state)
     ++cap.modulator_calls;
     cap.modulator = state;
 }
+void inter_mcu_store_instrument_arp(const WaveX::Protocol::InstArpSyncMessage& state) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.instrument_arp_calls;
+    cap.instrument_arp = state;
+}
 void inter_mcu_store_instrument_lfo(const WaveX::Protocol::InstLfoSyncMessage& state) {
     auto& cap = GetInterMcuCapture();
     ++cap.instrument_lfo_calls;
@@ -194,3 +199,27 @@ void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus&
     ++cap.sample_seam_status_calls;
     cap.sample_seam_status = status;
 }
+
+void inter_mcu_store_record_status(const WaveX::Protocol::RecordStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.record_status_calls;
+    cap.record_status = status;
+}
+
+esp_err_t inter_mcu_send_record_op(const WaveX::Protocol::RecordOpMessage& request) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.record_op_calls;
+    cap.last_record_op = request;
+    return cap.send_result;
+}
+bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage* out) {
+    const auto& cap = GetInterMcuCapture();
+    if (!out || !cap.record_status_calls)
+        return false;
+    *out = cap.record_status;
+    return true;
+}
+
+void inter_mcu_store_global_lfo(const WaveX::Protocol::GlobalLfoSyncMessage&) {}
+
+void inter_mcu_store_lock_notice(const WaveX::Protocol::SeqLockNoticeMessage&) {}

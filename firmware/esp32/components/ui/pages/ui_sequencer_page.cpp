@@ -156,11 +156,7 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
             cell.label = lv_label_create(cell.button);
             lv_obj_set_style_text_font(cell.label, UI_FONT_MONO_SMALL, 0);
             lv_obj_center(cell.label);
-#if WAVEX_UI_LATENCY_PROFILE_ENABLED
             lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_ALL, &cell);
-#else
-            lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_PRESSED, &cell);
-#endif
         }
     }
     drawn_lock_slot_ = 0xff;
@@ -177,6 +173,7 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
 }
 
 void UISequencerPage::onExit() {
+    held_cell_ = nullptr;
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
     if (root_)
         lv_display_remove_event_cb_with_user_data(lv_obj_get_display(root_), refreshEvent, this);
@@ -237,8 +234,10 @@ void UISequencerPage::window(uint8_t track, uint8_t step) {
 void UISequencerPage::focus(uint8_t track, uint8_t step) {
     if (track >= SEQ_TRACK_COUNT || step >= SEQ_MAX_STEPS)
         return;
-    if (getCurrentTrack() != track || selected_step_ != step)
+    if (getCurrentTrack() != track || selected_step_ != step) {
+        held_cell_ = nullptr;
         model_.DiscardPreview();
+    }
     setCurrentTrack(track);
     selected_step_ = step;
     const uint8_t first_track = static_cast<uint8_t>((track / 4) * 4);
@@ -251,14 +250,22 @@ void UISequencerPage::focus(uint8_t track, uint8_t step) {
     UINavigator::instance().refreshContext();
 }
 void UISequencerPage::onTrackChanged() {
+    held_cell_ = nullptr;
     focus(getCurrentTrack(), selected_step_);
 }
 
+bool UISequencerPage::holding() const {
+    return held_cell_ && held_epoch_ == model_.Epoch() && held_track_ == getCurrentTrack() &&
+           held_step_ == selected_step_;
+}
 void UISequencerPage::service() {
+    if (held_cell_ && !holding())
+        held_cell_ = nullptr;
     const bool alive = inter_mcu_backend_link_alive();
     if (alive != link_alive_) {
         link_alive_ = alive;
         model_.Invalidate();
+        held_cell_ = nullptr;
         settings_.valid = 0;
         if (alive) {
             requestRow(0);
@@ -281,6 +288,8 @@ void UISequencerPage::service() {
                 page.steps[latency_.column].on == latency_.expected_on)
                 latency_.accepted_us = esp_timer_get_time();
 #endif
+            if (held_cell_ && (held_epoch_ != model_.Epoch() || model_.ReadOnly()))
+                held_cell_ = nullptr;
             settings_ = page;
             next_row_ = static_cast<uint8_t>((page.track - model_.FirstTrack() + 1) % 4);
             if (was_ready != model_.AllReady())
@@ -688,7 +697,8 @@ void UISequencerPage::renderLocks() {
                   value,
                   !link_alive_ ? "Audio engine disconnected"
                   : !ready     ? "Reading step..."
-                               : "* marks a locked step");
+                  : held_cell_ ? "Holding step: turn an encoder to write a lock"
+                               : "* marks a locked step. Hold a step for encoder locks.");
     text(status_, status);
 }
 bool UISequencerPage::clockSource(uint8_t source) {
@@ -733,9 +743,9 @@ void UISequencerPage::clearRow() {
 }
 void UISequencerPage::cellEvent(lv_event_t* event) {
     auto* cell = static_cast<Cell*>(lv_event_get_user_data(event));
+    const auto code = lv_event_get_code(event);
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
     auto& trace = cell->owner->latency_;
-    const auto code = lv_event_get_code(event);
     if (code == LV_EVENT_PRESSED) {
         const uint32_t sequence = trace.sequence + 1;
         trace = LatencyTrace{};
@@ -747,10 +757,23 @@ void UISequencerPage::cellEvent(lv_event_t* event) {
                trace.column == cell->column) {
         trace.released_us = esp_timer_get_time();
     }
-    if (code != LV_EVENT_PRESSED)
-        return;
 #endif
-    cell->owner->toggle(cell->row, cell->column);
+    auto& page = *cell->owner;
+    if (code == LV_EVENT_LONG_PRESSED && page.link_alive_ && page.model_.Ready(cell->row) &&
+        !page.model_.ReadOnly()) {
+        page.focus(page.model_.FirstTrack() + cell->row, page.model_.FirstStep() + cell->column);
+        page.held_cell_ = cell;
+        page.held_track_ = getCurrentTrack();
+        page.held_step_ = page.selected_step_;
+        page.held_epoch_ = page.model_.Epoch();
+        page.lockMode(true);
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (page.held_cell_ == cell) {
+            page.held_cell_ = nullptr;
+            page.render();
+        }
+    } else if (code == LV_EVENT_SHORT_CLICKED)
+        page.toggle(cell->row, cell->column);
 }
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
 void UISequencerPage::refreshEvent(lv_event_t* event) {
@@ -784,6 +807,40 @@ void UISequencerPage::rowEvent(lv_event_t* event) {
 }
 void UISequencerPage::timerEvent(lv_timer_t* timer) {
     static_cast<UISequencerPage*>(lv_timer_get_user_data(timer))->service();
+}
+EncoderBindings UISequencerPage::encoderBindings() {
+    EncoderBindings bindings{};
+    SequencerGridModel::Step step;
+    const bool enabled = holding() && valueStep(step);
+    for (uint8_t i = 0; i < 4; ++i) {
+        auto& b = bindings[i];
+        b.label = enabled ? ParameterLocks::Name(step.locks[i].parameter) : "Hold step";
+        b.owner = this;
+        b.parameter = i;
+        b.enabled = enabled;
+        b.coarse_step = 4;
+        b.onSteps = [](void* self, uint8_t slot, int delta) {
+            static_cast<UISequencerPage*>(self)->heldLock(slot, delta);
+        };
+        if (enabled) {
+            const char* unit;
+            ParameterLocks::Format(step.locks[i], b.value.data(), b.value.size(), unit);
+        }
+    }
+    return bindings;
+}
+void UISequencerPage::heldLock(uint8_t slot, int delta) {
+    SequencerGridModel::Step step;
+    if (!holding() || slot >= 4 || !valueStep(step))
+        return;
+    lock_slot_ = slot;
+    auto lock = step.locks[slot];
+    if (!lock.parameter) {
+        lock.parameter = ParameterLocks::Next(step, slot, 1);
+        lock.value = ParameterLocks::choices[ParameterLocks::Index(lock.parameter)].initial;
+    }
+    setLock(lock.parameter,
+            static_cast<uint16_t>(std::clamp(int(lock.value) + delta * 256, 0, 65535)));
 }
 void UISequencerPage::onInput(const InputEvent& event) {
     if (event.type == InputType::EncoderLeft || event.type == InputType::EncoderRight ||
@@ -920,6 +977,7 @@ void UISequencerPage::solo(uint8_t track) {
     UINavigator::instance().refreshSoftkeys();
 }
 size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
+    len = WaveX::Debug::AppendKvInt(out, cap, len, "holding", held_cell_ != nullptr);
     using namespace WaveX::Debug;
     len = AppendKvInt(out, cap, len, "seqlocks", locks_mode_);
     len = AppendKvInt(
@@ -994,7 +1052,13 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
                       static_cast<long>((area.y1 + area.y2) / 2));
         return true;
     }
-    if (count == 2 && std::strcmp(verb, "CLOCK") == 0 && a >= 0 && a <= 1) {
+    if (count == 2 && std::strcmp(verb, "HOLD") == 0 && (a == 0 || a == 1)) {
+        lv_obj_send_event(cells_[selectedRow()][selected_step_ % 16].button,
+                          a ? LV_EVENT_LONG_PRESSED : LV_EVENT_RELEASED,
+                          nullptr);
+    } else if (count == 3 && std::strcmp(verb, "HELDLOCK") == 0 && a >= 0 && a < 4 && held_cell_) {
+        heldLock(a, b);
+    } else if (count == 2 && std::strcmp(verb, "CLOCK") == 0 && a >= 0 && a <= 1) {
         if (!clockSource(static_cast<uint8_t>(a)))
             return false;
     } else if (count == 1 && std::strcmp(verb, "STOP") == 0 && link_alive_ && settings_.valid) {
@@ -1012,7 +1076,7 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
         focus(static_cast<uint8_t>(a - 1), static_cast<uint8_t>(b - 1));
     else if (count == 1 && std::strcmp(verb, "TOGGLE") == 0 && editable())
         lv_obj_send_event(
-            cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_PRESSED, nullptr);
+            cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_SHORT_CLICKED, nullptr);
     else if (count == 2 && link_alive_ && std::strcmp(verb, "SOLO") == 0 && a >= 0 && a <= 16)
         solo(a == 0 ? 0xFF : static_cast<uint8_t>(a - 1));
     else if (count == 2 && link_alive_ && settings_.valid) {

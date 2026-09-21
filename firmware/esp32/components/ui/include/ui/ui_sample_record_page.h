@@ -1,60 +1,35 @@
 #pragma once
-
-#include "../components/envelope_panel.h"
-#include "input_event.h"
+#include "components/ui_value_tile.h"
+#include "spi_protocol/protocol.h"
 #include "ui_page.h"
-
-#include <array>
-#include <cstdint>
-#include <memory>
-
 namespace wavex_ui {
-
-/**
- * @brief The Record tab of the Sample group.
- *
- * Recording is not implemented: the backend acknowledges SAMPLE_CTRL and does
- * nothing with it (audio_engine OnSampleCtrl, "review C2"), and roadmap Phase
- * 1 rebuilds the capture path. Until then this page shows the current sample's
- * whole-file envelope through the same EnvelopePanel the Browse and Edit tabs
- * use, and says plainly that the Record key is inert. It used to drive its own
- * decimated-preview protocol and report "Recording..." on a command the
- * backend ignores; both are gone, and the preview protocol was retired with
- * PROTOCOL_VERSION 3.
- */
 class UISampleRecordPage : public UIPage {
    public:
-    UISampleRecordPage() = default;
-
     const char* name() const override { return "SampleRecord"; }
-
-    void onEnter(lv_obj_t* parent) override;
+    void onEnter(lv_obj_t*) override;
     void onExit() override;
+    void onInput(const InputEvent&) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    size_t consoleState(char*, size_t, size_t) override;
+    bool consoleCommand(const char*, char*, size_t) override;
 
    private:
-    lv_obj_t* root_ = nullptr;
-    lv_obj_t* name_label_ = nullptr;
-    lv_obj_t* status_label_ = nullptr;
-    lv_timer_t* ui_timer_ = nullptr;
-    std::unique_ptr<class WaveformView> waveform_;
-
-    // The panel owns the chunk listener and the request cycle; this page only
-    // tells it which sample to show and words the outcome.
-    EnvelopePanel panel_;
-    // What the panel was last told, so a reload (new generation) or a Load on
-    // another tab is noticed without re-sending an unchanged sample.
-    uint16_t shown_sample_id_ = 0;
-    uint16_t shown_generation_ = 0;
-    bool no_sample_shown_ = false;    // the "No sample selected" text is up
-    bool wave_status_shown_ = false;  // the status line is about the request
-
-    static void uiTimerCb(lv_timer_t* timer);
-    void serviceUi();
-    void syncSample();
-    void setStatus(const char* text);
+    void adjust(uint8_t, int);
+    void send(uint8_t);
+    void read();
+    void service();
+    void render();
+    bool ready() const;
+    lv_obj_t *root_ = nullptr, *status_label_ = nullptr, *input_ = nullptr, *keyboard_ = nullptr;
+    lv_obj_t* meters_[2]{};
+    lv_timer_t* timer_ = nullptr;
+    ValueTile tiles_[5];
+    WaveX::Protocol::RecordOpMessage config_;
+    WaveX::Protocol::RecordStatusMessage status_;
+    uint32_t read_id_ = 0, pending_ = 0, requested_ = 0, received_ = 0, keys_ = UINT32_MAX;
+    uint8_t focus_ = 0;
+    bool valid_ = false, alive_ = false;
+    char message_[384]{};
 };
-
 std::shared_ptr<UIPage> createSampleRecordPage();
-
 }  // namespace wavex_ui

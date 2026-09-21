@@ -400,14 +400,21 @@ void UIPadMapPage::showNames(uint8_t op) {
     ui_theme_apply_container_style(overlay_, false);
     lv_obj_set_pos(overlay_, 0, 0);
     lv_obj_set_size(overlay_, UI_CONTENT_WIDTH, UI_CONTENT_HEIGHT);
+    lv_obj_set_style_pad_all(overlay_, 0, 0);
     lv_obj_remove_flag(overlay_, LV_OBJ_FLAG_SCROLLABLE);
     input_ = lv_textarea_create(overlay_);
     lv_textarea_set_one_line(input_, true);
     lv_textarea_set_max_length(input_, INST_NAME_BYTES - 1);
     lv_textarea_set_accepted_chars(
         input_, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_");
-    lv_obj_set_pos(input_, 20, 20);
-    lv_obj_set_width(input_, 1220);
+    lv_obj_set_pos(input_, UI_MARGIN_X, UI_PROJECT_FILE_INPUT_Y);
+    lv_obj_set_size(input_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_PROJECT_FILE_INPUT_H);
+    lv_obj_set_style_bg_color(input_, UI_COLOR_CARD, 0);
+    lv_obj_set_style_text_color(input_, UI_COLOR_FG, 0);
+    lv_obj_set_style_text_font(input_, UI_FONT_BODY, 0);
+    lv_obj_set_style_border_color(input_, UI_COLOR_LINE, 0);
+    lv_obj_set_style_anim_duration(input_, 0, LV_PART_CURSOR);
+    lv_obj_set_style_anim_duration(input_, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
     char initial[INST_NAME_BYTES];
     std::snprintf(initial,
                   sizeof(initial),
@@ -416,13 +423,27 @@ void UIPadMapPage::showNames(uint8_t op) {
     lv_textarea_set_text(input_, op == newOp() || !map_.name[0] ? initial : map_.name);
     auto* hint = lv_label_create(overlay_);
     name_hint_ = hint;
-    lv_obj_set_pos(hint, 20, 100);
+    ui_theme_apply_label_style(hint, false);
+    lv_obj_set_style_text_font(hint, UI_FONT_SMALL, 0);
+    lv_obj_set_pos(hint, UI_MARGIN_X, UI_PROJECT_FILE_HINT_Y);
+    lv_obj_set_width(hint, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_label_set_text(hint,
                       op == INST_OP_SAVE
                           ? "Save a new copy in wavex/instruments. Use a new name for each copy."
                           : "Name: 1-23 letters, numbers, spaces, hyphens or underscores.");
     auto* keyboard = lv_keyboard_create(overlay_);
-    lv_obj_set_size(keyboard, 1240, 360);
+    lv_obj_set_size(keyboard, UI_CONTENT_WIDTH - 2 * UI_PADDING_SMALL, UI_PROJECT_FILE_KEYBOARD_H);
+    lv_obj_set_style_bg_color(keyboard, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_color(keyboard, UI_COLOR_CARD, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(keyboard, UI_COLOR_FG, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(keyboard, UI_FONT_BODY, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(keyboard, UI_COLOR_LINE, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(keyboard, UI_BORDER_WIDTH, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(keyboard, UI_COLOR_CARD_ALT, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(keyboard, UI_COLOR_FG, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(keyboard, UI_COLOR_ACCENT, LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(keyboard, UI_COLOR_ACCENT_FG, LV_PART_ITEMS | LV_STATE_PRESSED);
     lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(keyboard, input_);
     lv_obj_add_event_cb(keyboard, keyboardEvent, LV_EVENT_READY, this);
@@ -453,14 +474,25 @@ void UIPadMapPage::showSamples(uint16_t first) {
     lv_obj_set_style_pad_all(overlay_, 0, 0);
     lv_obj_remove_flag(overlay_, LV_OBJ_FLAG_SCROLLABLE);
     auto* hint = lv_label_create(overlay_);
-    lv_obj_set_pos(hint, 20, 15);
+    ui_theme_apply_label_style(hint, false);
+    lv_obj_set_style_text_font(hint, UI_FONT_SMALL, 0);
+    lv_obj_set_pos(hint, UI_MARGIN_X, UI_PADDING_LARGE);
     lv_label_set_text(hint, "Choose a resident sample. Load more from Sample > Browse.");
     for (uint8_t i = 0; i < 8; ++i) {
         auto& b = choices_[i];
         b.owner = this;
         b.index = i;
         b.object = lv_button_create(overlay_);
+        lv_obj_remove_style_all(b.object);
         ui_theme_apply_button_style(b.object, false);
+        lv_obj_set_style_bg_opa(b.object, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b.object, UI_COLOR_CARD, 0);
+        lv_obj_set_style_bg_color(b.object, UI_COLOR_CARD_ALT, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(b.object, UI_COLOR_ACCENT, LV_STATE_PRESSED);
+        lv_obj_set_style_text_color(b.object, UI_COLOR_FG, 0);
+        lv_obj_set_style_text_color(b.object, UI_COLOR_DIMMER, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(b.object, UI_COLOR_ACCENT_FG, LV_STATE_PRESSED);
+        lv_obj_set_style_text_font(b.object, UI_FONT_BODY, 0);
         lv_obj_set_pos(b.object, 20 + (i % 2) * 620, 65 + (i / 2) * 112);
         lv_obj_set_size(b.object, 608, 100);
         b.label = lv_label_create(b.object);

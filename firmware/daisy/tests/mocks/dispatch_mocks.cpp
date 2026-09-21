@@ -262,6 +262,12 @@ void OnAllocationOp(const WaveX::Protocol::AllocationOpMessage& m) {
 void OnEditOp(const WaveX::Protocol::InstEditOpMessage& m) {
     WaveX::Test::GetDispatchRecord().edit_ops.push_back(m);
 }
+void OnRecordOp(const WaveX::Protocol::RecordOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().record_ops.push_back(m);
+}
+void OnArpOp(const WaveX::Protocol::InstArpOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().arp_ops.push_back(m);
+}
 void OnLfoOp(const WaveX::Protocol::InstLfoOpMessage& m) {
     WaveX::Test::GetDispatchRecord().lfo_ops.push_back(m);
 }
@@ -294,4 +300,8 @@ void OnSeqNotesRequest(const Protocol::SeqPatternRequestMessage& m) {
 void OnSeqSlotPageRequest(const Protocol::SeqPatternRequestMessage& message) {
     Test::GetDispatchRecord().seq_slot_pages.push_back(message);
 }
+}  // namespace WaveX::AudioEngine
+
+namespace WaveX::AudioEngine {
+void OnGlobalLfoOp(const Protocol::GlobalLfoOpMessage&) {}
 }  // namespace WaveX::AudioEngine

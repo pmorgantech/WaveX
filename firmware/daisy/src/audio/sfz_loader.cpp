@@ -499,6 +499,8 @@ static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
 static InstModSyncMessage s_mod_reply;
 static bool s_mod_pending = false;
+static InstArpSyncMessage s_arp_reply;
+static bool s_arp_pending = false;
 static InstLfoSyncMessage s_lfo_reply;
 static bool s_lfo_pending = false;
 static InstOscSyncMessage s_osc_reply;
@@ -571,6 +573,32 @@ void FillOscReply(const InstOscOpMessage& request,
         out.completed_request_id = request.request_id;
         out.error = immediate_error;
     }
+}
+void FillArpReply(const InstArpOpMessage& request,
+                  InstArpSyncMessage& out,
+                  uint8_t immediate_error = 0) {
+    out = {};
+    out.request_id = request.request_id;
+    out.track = request.track;
+    if (request.track >= kNumTracks) {
+        out.error = INST_ERROR_BAD_FILE;
+        return;
+    }
+    const auto& ins = s_bank->At(request.track).instrument;
+    out.valid = ins.origin != InstrumentOrigin::None;
+    out.busy = Busy();
+    out.revision = s_key_revision[request.track];
+    out.completed_request_id = s_edit_completed[request.track];
+    out.error = s_edit_error[request.track];
+    out.value = ins.arp;
+    if (immediate_error) {
+        out.completed_request_id = request.request_id;
+        out.error = immediate_error;
+    }
+}
+void QueueArpReply(const InstArpOpMessage& request, uint8_t error = 0) {
+    FillArpReply(request, s_arp_reply, error);
+    s_arp_pending = true;
 }
 void FillLfoReply(const InstLfoOpMessage& request,
                   InstLfoSyncMessage& out,
@@ -848,6 +876,7 @@ void Reset() {
     s_key_pending = s_key_assignment = false;
     s_osc_pending = false;
     s_mod_pending = false;
+    s_arp_pending = false;
     s_lfo_pending = false;
     s_action_pending = s_allocation_pending = false;
     if (s_bank)
@@ -1294,6 +1323,41 @@ bool OnEditOp(const InstEditOpMessage& request) {
     return changed;
 }
 
+InstArpSyncMessage ReadArpState(uint8_t track) {
+    InstArpOpMessage request;
+    request.track = track;
+    InstArpSyncMessage out;
+    FillArpReply(request, out);
+    return out;
+}
+bool OnArpOp(const InstArpOpMessage& request) {
+    if (!IsValidInstArpOp(request)) {
+        QueueArpReply(request, INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == INST_ARP_GET || s_edit_completed[request.track] == request.request_id) {
+        QueueArpReply(request);
+        return false;
+    }
+    if (Busy()) {
+        QueueArpReply(request, INST_ERROR_BUSY);
+        return false;
+    }
+    auto& ins = s_bank->At(request.track).instrument;
+    uint8_t error = INST_ERROR_NONE;
+    if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
+        error = INST_ERROR_BAD_FILE;
+    else {
+        s_sound_undo[request.track].Capture(ins);
+        ins.arp = request.value;
+    }
+    s_edit_completed[request.track] = request.request_id;
+    s_edit_error[request.track] = error;
+    if (!error)
+        BumpKeyRevision(request.track);
+    QueueArpReply(request);
+    return error == INST_ERROR_NONE;
+}
 InstLfoSyncMessage ReadLfoState(uint8_t track) {
     InstLfoOpMessage request;
     request.track = track;
@@ -1531,6 +1595,9 @@ void PumpEditorReply() {
     if (s_action_pending &&
         WaveX::Comm::LinkSend(MSG_INST_EDIT_SYNC, &s_action_reply, sizeof(s_action_reply)) >= 0)
         s_action_pending = false;
+    if (s_arp_pending &&
+        WaveX::Comm::LinkSend(MSG_INST_ARP_SYNC, &s_arp_reply, sizeof(s_arp_reply)) >= 0)
+        s_arp_pending = false;
     if (s_lfo_pending &&
         WaveX::Comm::LinkSend(MSG_INST_LFO_SYNC, &s_lfo_reply, sizeof(s_lfo_reply)) >= 0)
         s_lfo_pending = false;

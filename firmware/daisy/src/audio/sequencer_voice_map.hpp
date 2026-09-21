@@ -33,6 +33,7 @@ struct SequencerVoiceMap {
         uint64_t revision = 0;  // foreground cache identity, not callback state
         PreparedOscillator secondary;
         Allocation::Policy policy;
+        Arp::Config arp;
         bool keyboard = true;
     };
     PreparedTrack tracks[kNumTracks]{};
@@ -43,6 +44,7 @@ struct SequencerVoiceMap {
         auto& dest = tracks[track];
         ++dest.revision;
         dest.policy = instrument.allocation;
+        dest.arp = instrument.arp;
         dest.keyboard = instrument.mode == InstrumentMode::Keyboard;
         PrepareOscillator(dest, instrument, resolver, track, 0);
         PrepareOscillator(dest.secondary, instrument, resolver, track, 1);

@@ -966,3 +966,20 @@ TEST_F(PacketRouterTest, StereoSeamRejectsTruncatedAndImpossibleMeasurements) {
     ASSERT_EQ(GetInterMcuCapture().sample_seam_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().sample_seam_status.right, -65535);
 }
+
+TEST_F(PacketRouterTest, RecordingStatusRejectsTruncatedAndInvalidReplies) {
+    RecordStatusMessage state;
+    state.request_id = 19;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&state);
+    for (size_t size = 0; size < sizeof(state); ++size)
+        router_->route_uart_message(MSG_REC_STATUS, bytes, size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().record_status_calls, 0);
+    state.state = 99;
+    router_->route_uart_message(MSG_REC_STATUS, bytes, sizeof(state), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().record_status_calls, 0);
+    state.state = REC_IDLE;
+    auto packet = ProtocolTestHelper::CreateWaveXPacket(MSG_REC_STATUS, &state, sizeof(state));
+    router_->route_packet(packet.data(), packet.size());
+    EXPECT_EQ(GetInterMcuCapture().record_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().record_status.request_id, 19u);
+}

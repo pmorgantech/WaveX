@@ -2841,3 +2841,28 @@ TEST_F(SfzLoaderTest, StandaloneSidecarRestoresImportedSampleDefaults) {
     EXPECT_EQ(record->payload.meta.start_frame, 1u);
     EXPECT_EQ(record->payload.meta.gain_db_x10, -60);
 }
+
+TEST_F(SfzLoaderTest, ArpRevisionUndoAndSavedInstrumentRecall) {
+    ASSERT_TRUE(Load(0));
+    InstArpOpMessage m;
+    m.request_id = 99601;
+    m.op = INST_ARP_SET;
+    m.revision = SfzLoader::ReadArpState(0).revision;
+    m.value = {1, 3, 2, 6, 90, 1, 1, 99};
+    ASSERT_TRUE(SfzLoader::OnArpOp(m));
+    auto state = SfzLoader::ReadArpState(0);
+    EXPECT_TRUE(WaveX::Arp::Equal(state.value, m.value));
+    EXPECT_FALSE(SfzLoader::OnArpOp(m));
+    ++m.request_id;
+    EXPECT_FALSE(SfzLoader::OnArpOp(m));
+    EXPECT_EQ(SfzLoader::ReadArpState(0).error, INST_ERROR_BAD_FILE);
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Test Arp").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Test Arp.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    EXPECT_TRUE(WaveX::Arp::Equal(SfzLoader::ReadArpState(0).value, m.value));
+}

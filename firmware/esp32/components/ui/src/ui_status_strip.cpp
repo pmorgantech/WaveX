@@ -21,24 +21,23 @@ namespace {
 // meter columns - each separated by UI_HEADER_GAP. Everything is derived from
 // UI_SHIFT_CHIP_X rather than from the screen edge, so moving the chip moves
 // the strip with it instead of letting the two overlap.
-constexpr int kMeters = 8;
-constexpr int kMeterW = 9;
-constexpr int kMeterGap = 3;
+constexpr int kMeters = UI_HEADER_METER_COUNT;
+constexpr int kMeterW = UI_HEADER_METER_W;
+constexpr int kMeterGap = UI_HEADER_METER_GAP;
 constexpr int kMeterPitch = kMeterW + kMeterGap;
 constexpr int kMeterH = 40;
 constexpr int kMeterY = (UI_HEADER_HEIGHT - kMeterH) / 2;
-constexpr int kMetersW = kMeters * kMeterW + (kMeters - 1) * kMeterGap;
 
 // The CPU block is a right-aligned label over a slim bar, not a bar with a
 // label beside it: the number is what gets read, the bar is peripheral.
-constexpr int kCpuBlockW = 90;
+constexpr int kCpuBlockW = UI_HEADER_CPU_W;
 constexpr int kCpuBlockX = UI_SHIFT_CHIP_X - UI_HEADER_GAP - kCpuBlockW;
 constexpr int kCpuBarW = kCpuBlockW;
 constexpr int kCpuBarH = 6;
 constexpr int kCpuLabelY = 16;
 constexpr int kCpuBarY = 42;
 
-constexpr int kMeterX0 = kCpuBlockX - UI_HEADER_GAP - kMetersW;
+constexpr int kMeterX0 = UI_HEADER_STATUS_X;
 
 // An idle column is a 3px base rather than a full-height empty track: the
 // track shape implies a level is being measured, and for six of these eight

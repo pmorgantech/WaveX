@@ -585,6 +585,13 @@ void serve_state(int32_t seq) {
                       "reply_dropped",
                       s_reply_dropped.load(std::memory_order_relaxed));
     len = AppendKvInt(s_reply, sizeof(s_reply), len, "shift", nav.isShifted() ? 1 : 0);
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "lockevictions", nav.lockEvictions());
+    WaveX::Protocol::DiagPushMessage diag;
+    if (inter_mcu_get_diag_push(&diag, 1500)) {
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "midinotes", diag.midi_notes);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "midiccs", diag.midi_ccs);
+        len = AppendKvInt(s_reply, sizeof(s_reply), len, "midiclocks", diag.midi_clock_ticks);
+    }
     len = AppendKv(
         s_reply, sizeof(s_reply), len, "root", wavex_ui::rootGroupName(nav.activeRootGroup()));
     len = AppendKv(s_reply,

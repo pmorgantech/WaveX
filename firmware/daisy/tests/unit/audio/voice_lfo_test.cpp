@@ -218,3 +218,44 @@ TEST(VoiceLfo, UnchangedSettingsReconfigureForSampleRateAndFollowedPitch) {
     l.Advance(12000, 0);
     EXPECT_NEAR(l.Phase(), .25f, 1e-5);
 }
+
+TEST(VoiceLfo, RateModulationPreservesPhaseAndAgeAndResetsAtAdmission) {
+    InstLfoSettings settings;
+    settings.wave = 2;
+    settings.rate_hz = 1;
+    VoiceLfo lfo;
+    const auto beat = VoiceLfo::BeatStep(120, 48000);
+    lfo.Start(settings, 48000, 1, 0, 0, beat, 0, 19, 0);
+    lfo.Advance(4800, beat);
+    const float phase = lfo.Phase();
+    lfo.SetRateMultiplier(2);
+    EXPECT_FLOAT_EQ(lfo.Phase(), phase);
+    lfo.Advance(4800, beat);
+    EXPECT_NEAR(lfo.Phase(), .3f, .0001f);
+    settings.sync_div = 3;  // quarter at 120 BPM = 2 Hz
+    lfo.UpdateSettings(settings, 48000, 1);
+    lfo.Advance(4800, beat);
+    EXPECT_NEAR(lfo.Phase(), .7f, .0001f);
+    lfo.SetRateMultiplier(1);
+    lfo.Advance(4800, beat);
+    EXPECT_NEAR(lfo.Phase(), .9f, .0001f);
+    lfo.SetRateMultiplier(16);
+    lfo.Start(settings, 48000, 1, 0, 0, beat, 0, 19, 0);
+    lfo.Advance(4800, beat);
+    EXPECT_NEAR(lfo.Phase(), .2f, .0001f);
+}
+TEST(VoiceLfo, ModulatedHzIsBoundedAtRuntimeLimits) {
+    InstLfoSettings settings;
+    VoiceLfo lfo;
+    const auto beat = VoiceLfo::BeatStep(120, 48000);
+    settings.rate_hz = 100;
+    lfo.Start(settings, 48000, 1, 0, 0, beat, 0, 19, 0);
+    lfo.SetRateMultiplier(16);
+    lfo.Advance(48, beat);
+    EXPECT_NEAR(lfo.Phase(), .1f, .0001f);
+    settings.rate_hz = .01f;
+    lfo.Start(settings, 48000, 1, 0, 0, beat, 0, 19, 0);
+    lfo.SetRateMultiplier(.0625f);
+    lfo.Advance(48000, beat);
+    EXPECT_NEAR(lfo.Phase(), .01f, .00002f);
+}

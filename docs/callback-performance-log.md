@@ -26,6 +26,86 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Recording, arpeggiator and performance controls — 2026-09-21
+
+User-authorized continuation over `90b7329+`, Stage A QSPI `-O2`, 480 MHz,
+48 kHz / 48-frame blocks, ordinary DWT profiling. The workload retains both
+oscillators, ladder filters, eight modulation routes, live locks, streaming,
+live filter edits and a Pattern save/load cycle. These short diagnostic screens
+retain the earlier UPGRADE finding; they are not ten-minute or one-hour gates.
+
+| Scenario | Windows / callbacks | Weighted mean cycles | Peak cycles / block budget |
+|---|---:|---:|---:|
+| Eight Mono, new image with recorder/arp idle | 15 / 82,098 | 217,648.91 | 414,625 / 86.3802% |
+| Eight Mono, internal-mix recording + arp | 16 / 80,016 | 223,327.88 | 415,219 / 86.5040% |
+| Four stereo, codec-input recording + arp | 16 / 80,020 | 169,624.16 | 333,460 / 69.4708% |
+
+The internal take contains exactly 960,000 frames (20 seconds), peak 9,299,
+zero clipped frames and no capture error. Capture runs during the first
+20 seconds; the take remains Ready until discard before the 60-second Pattern
+file cycle. The complete 80-second run includes both capture and idle periods,
+so its mean is not a capture-only cost. Arp runs on Track 1 with a latched
+C/E/G chord. All three screens report zero sampled stream underruns and console
+drops and complete one Pattern save/load cycle. They do not test saving the
+captured WAV under the same workload. A 90-second take was first correctly
+refused for insufficient RAM with the large resident source already loaded.
+
+Evidence: `logs/stereo-0-ladder-20260921-180958.{json,log}` and
+`logs/stereo-0-ladder-20260921-181708.{json,log}`, and
+`logs/stereo-4-ladder-20260921-181931.{json,log}`. The codec take also contains
+960,000 frames without capture error; peak 9 is background input, not a
+verified external test signal. Daisy profiling SHA256:
+`2cd6a37516046f6c1ac61e5ae555001b9cdc443dad0ff56168323d50c8772c62`.
+The earlier 85.3713% result is retained below; workload variance and changed
+features prevent interpreting these screens as a general speed comparison.
+Final firmware restores profiling off. See HV-030–HV-032 for functional and
+physical acceptance, and HV-001/HV-025 for the unresolved SD write/recovery fault.
+
+## Expanded modulation and live locks — 2026-09-21
+
+Short diagnostic screens on Stage A QSPI `-O2`, 480 MHz, 48 kHz/48 frames;
+the callback budget is 480,000 cycles. All runs use sixteen Tracks with four
+layers per trigger, the unchanged eight-render-channel admission budget, two
+oscillators, three envelopes, both per-voice LFOs, eight matrix routes, ladder
+filters, four locks per enabled step, 512-frame loops with 20 ms crossfade,
+streamed audition and live edits. Extended routes add moving wheel/pressure
+mix offsets and both LFO-rate destinations. Motion capture records cutoff on
+Track 1 through `MSG_CONTROL_CHANGE`.
+
+| Screen | Windows / callbacks | Weighted mean cycles | Peak cycles / utilization |
+|---|---:|---:|---:|
+| Four stereo voices, original routes | 8 / 40,009 | 201,926.98 | 330,714 / 68.8988% |
+| Four stereo, extended routes + MIDI expression | 8 / 40,012 | 201,744.26 | 320,612 / 66.7942% |
+| Above + live locks, full Pattern publication | 8 / 40,013 | 203,257.46 | 358,532 / 74.6942% |
+| Above + touched-lock publication | 8 / 40,008 | 207,327.59 | 321,997 / 67.0827% |
+| **Eight Mono voices, extended routes + live locks + file cycle** | **16 / 80,046** | **302,295.66** | **409,782 / 85.3713%** |
+
+The lock change publishes only four-slot records for touched steps at the
+existing safe boundary. The matched short screen has a lower observed peak,
+but the higher mean and single-run variance do not establish a general speed
+improvement. **The eight-Mono result is UPGRADE**, because sampling/recording
+and arpeggiator callback work remained at that measurement. The user subsequently
+authorized that continuation with all capacity gates retained; continue the
+[activated migration plan](rt1170-migration.md) or measured capacity remediation.
+No phase/release gate is closed. These 40/80-second captures are shorter than
+the ten-minute measurement gate and one-hour acceptance soak.
+
+All runs reported zero sampled stream underruns and console RX drops. The
+Mono run completed one Pattern save/load cycle; the four shorter screens did
+not reach the first file cycle. The bench script's `passed` result covers its
+functional assertions, **not** the DWT capacity decision.
+
+Evidence stems under `logs/` (each has `.json` and `.log`), in table order:
+`stereo-4-ladder-20260921-111505`, `stereo-4-ladder-20260921-111828`,
+`stereo-4-ladder-20260921-112301`, `stereo-4-ladder-20260921-112911`,
+`stereo-0-ladder-20260921-113202`. Source: `90b7329+`.
+Profile image SHA256, first two rows:
+`6c1fefd377ee3986264a690ff3bd0820a834ff3f706f7a5a6a41c045f4fc9598`;
+full-copy row:
+`87fceb020c0eb7a1b20aaf5e356dfa2c659ae07f31ddfab3980be457f28b0569`;
+last two rows:
+`1da8f16001f04a5e578f3ba32acec67b8d16aef2a6518aff22d333981af442c4`.
+
 ## Melodic chord pressure — 2026-09-20
 
 The first melodic screen requested **32 simultaneous notes** (eight Tracks ×

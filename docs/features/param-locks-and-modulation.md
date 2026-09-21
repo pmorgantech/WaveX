@@ -1,14 +1,13 @@
 # Parameter Locks & Modulation Matrix — Design
 
-**Status**: Parameter-lock application and touch editing are implemented. Four
-voice-scoped locks per step are applied after zone resolution; pattern files
-retain them. The Instrument modulation editor, matrix, global LFOs and three
-envelopes exist. Two per-voice LFO runtimes, their typed transport and the LFO
-touch page with live audition are implemented. The resonance destination is
-implemented; oscillator pitch destinations are implemented and their clean gate
-is STAY near the 70% threshold;
-live motion recording, additional destinations and analog/group
-locks remain target design below, not implemented behavior.
+**Status**: Voice-scoped parameter locks, touch editing and live Play-control
+capture are implemented. The saved Instrument matrix offers oscillator mix,
+OSC1/OSC2 pitch, cutoff, resonance, gain, pan and both per-voice LFO rates.
+CC1/channel pressure, three envelopes and two per-voice LFOs are available as
+sources. Callback capacity and physical acceptance remain open; see
+[the hardware checklist](../hardware-validation.md). Session-global LFO editing,
+held-step encoder locks and eviction notices are implemented. Wavetable positions
+and analog/group locks remain targets.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
@@ -45,13 +44,42 @@ unlocked step resolves the Instrument normally. Master volume, global LFO,
 macros and analog/group parameters are not offered as voice locks. Unsupported
 ids in files are preserved but ignored by the renderer.
 
+### Held-step encoder editing
+
+A short tap toggles a grid step on release. A long press selects the step and
+opens Locks without toggling it. While held, four encoder bindings edit the four
+visible lock slots; an empty slot chooses the first unused supported parameter.
+Release, lost press, navigation, Track changes, disconnect or a replacement
+Pattern epoch cancels the hold. Explicit-step writes use the existing scoped
+Pattern edit contract, so a delayed operation cannot edit a replacement Pattern.
+The lock editor remains available after release. Physical encoder feel and
+press-to-panel latency remain hardware checks.
+
 ## 2. Parameter locks
 
 Already in the pattern model (`sequencer.md` §3): `param_locks[≤4]{param_id, value}` per step. This doc pins the application path:
 
 - At step-fire time the scheduler resolves the step's zone/notes into `VoiceTriggerParams` (via `instrument-model.md` §3) and then applies each lock **to the trigger params** for voice-scoped ids (cutoff, ADSR, pitch offset via `pitch_ratio_mul`, pan, gain via `gain_mul`, sample start as region offset). No global state is touched — a p-lock on step 5 cannot bleed into a live-played note. Host-testable pure function: `ApplyParamLocks(VoiceTriggerParams&, const ParamLock*, n)`.
-- Locks on *track/group-scoped* ids (PARAM_ANALOG_CUTOFF, sends later) stage a control-tick value that reverts to base at the next step boundary of that track (Elektron behavior: the lock lasts one step). Implemented as `{value, revert_at_tick}` pairs in the track state.
-- **Live p-lock recording**: transport in live-record, hold a step (or with record running, just turn a knob — "motion record lite"): incoming `MSG_CONTROL_CHANGE` while a step window is active writes a lock into that step (window = the step whose span contains `Φ_now`). Capped at 4 locks/step, oldest evicted with UI flash (same rule as melodic lane overflow).
+- **Target only:** locks on *track/group-scoped* ids (PARAM_ANALOG_CUTOFF, sends later) would stage a control-tick value that reverts to base at the next step boundary of that track (Elektron behavior: the lock lasts one step). Implemented as `{value, revert_at_tick}` pairs in the track state.
+- **Live p-lock recording (as built):** on Step Notes select Live rec and Play,
+  then move a Play-page cutoff/resonance/ADSR control. PAN/PITCH control messages
+  also record. Only the armed recording Track captures; other Tracks still
+  receive their ordinary live sound edits. The callback writes into the nominal
+  step containing its current Pattern time, independent of note quantization,
+  swing and micro-offset. A knob alone never enables a step or makes it melodic.
+  Repeated parameters update their existing slot; new parameters use a free slot
+  or evict slot 1 and shift the remaining locks left. Pattern/Project saves retain
+  the result. Master/global controls and typed Instrument editor operations do
+  not record locks. Eviction posts a three-second header notice identifying the
+  Track, step and replaced parameter; bursts retain the latest notice and count.
+- Motion arrives through the existing bounded sequencer command queue, tagged
+  with the callback-published Pattern epoch. A stale Pattern, Song playback,
+  stopped transport or another input mode rejects capture. Queue overflow drops
+  capture with a foreground diagnostic; it never blocks audio. The callback owns
+  the pending Pattern, marks touched lock slots and publishes those records at
+  the same safe step boundary as ordinary edits. Unchanged values do not advance
+  the revision. Step Notes gives confirmed Pattern-update feedback; Locks view
+  shows the stored overrides and grid badges.
 
 ## 3. Modulation matrix (instrument-scoped)
 
@@ -71,11 +99,10 @@ struct ModSlot {
 `firmware/daisy/src/audio/mod_matrix.hpp`, mirrored as raw bytes in
 `firmware/shared/spi_protocol/protocol.h`. The five fields are source,
 destination, signed depth, curve and flags. Current destinations include
-cutoff, gain, pitch, pan, resonance, OSC1_PITCH and OSC2_PITCH; oscillator
-mix, wavetable-position and LFO-rate destinations remain planned.
+cutoff, gain, pitch, pan, resonance, OSC1_PITCH, OSC2_PITCH, OSC_MIX,
+LFO1_RATE and LFO2_RATE. Wavetable-position destinations remain planned.
 
-**Evaluation model — control-rate, never per-sample**: once per 1 ms control
-tick, each active voice sums its instrument routes before applying destination
+**Evaluation model — control-rate, never per-sample**: once per control block (nominally 1 ms), each active voice sums its instrument routes before applying destination
 clamps. Cutoff and resonance are handed to the existing SVF through combined
 `VoiceFilter::SetParameters` once per block; gain/pan are block-constant
 multipliers and pitch updates the increment once per block. Callback cost is a
@@ -100,12 +127,31 @@ OSC2_PITCH address their corresponding oscillator, including an Oscillator 2
 primary cursor when that source owns the voice. A full-depth source 1 raises
 pitch by 2 semitones at +100% depth and lowers it by 2 semitones at -100%;
 routes sum before the pitch scale is exponentiated and composed
-with common pitch, note/zone/live tuning and pitch locks. Sync, FM, oscillator
-mix and LFO-rate destinations remain separate future work.
+with common pitch, note/zone/live tuning and pitch locks. Sync and FM remain separate future work.
 
-## 4. Second envelope (filter envelope)
+Oscillator mix is a signed normalized offset: routes sum, clamp to `[-1, 1]`,
+then add to the Instrument's base mix and clamp to `[0, 1]`. Source oscillator
+identity also applies when OSC2 is the primary cursor. Separate unmixed levels
+preserve zone/sample gain and let a source muted by the base crossfade become
+audible without a retrigger or division by zero. An oscillator level of zero
+stays silent. Clearing the route restores the current base mix.
 
-E-mu voices had filter + amp envelopes; WaveX `Voice` has one (amp). Add `Envelope env2` to `Voice` (same linear `envelope.hpp` class, retrigger/release alongside env1), exposed only as `SRC_ENV_FILTER`. Zone carries its ADSR (defaults in `instrument-model.md` wire-Zone chunk v2 — append fields, bump chunk version). Cost: one more `Process()` per active voice per sample… **no** — env2 is a *mod source*, so it's evaluated **once per block** (32.32 phase advanced by block length), not per sample. Keeps the callback budget flat.
+LFO1_RATE/LFO2_RATE address the two Instrument LFOs, with full depth spanning
+±4 octaves (1/16–16 times base rate). Routes sum and clamp before conversion;
+the effective rate stays within 0.01–100 Hz. Both Hz and tempo divisions can be
+modulated, preserving phase, note age, delay and fade. Each block advances the
+LFOs using the previous block's rate, evaluates the matrix, then publishes rates
+for the next block. This one-block delay makes self/cross-LFO routing causal.
+Clearing routes returns to the base rate on the next advance; retrigger resets
+rate modulation to unity.
+
+## 4. Filter and auxiliary envelopes (as built)
+
+All three envelopes have saved Instrument settings. Env 1 drives amplitude;
+Env 2 and Env 3 are block-rate matrix sources. The latter advance by the
+active frame count and share note/release/choke ownership with Env 1, without
+adding per-sample envelope processing. Live edits preserve held-note state;
+the common Instrument preview and Apply/Revert controls retain their settings.
 
 ## 5. LFOs
 
@@ -114,7 +160,7 @@ per-voice LFOs owned by the Instrument plus one engine-global LFO.** The
 earlier "2 global + 1 per-voice" split is withdrawn; `SRC_LFO2` stays in the
 enum as retired-but-reserved and reads 0.
 
-- **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.01–100) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
+- **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.01–100) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; follows the current internal/MIDI tempo). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
 - **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.01–100) or tempo divisions (1/16 … 4 bars, including 3/16); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend, typed transport and two-row eight-tile LFO page are implemented; edits use the common automatic-preview Apply/Revert path and WXI save retains the audible working copy. Live rate/wave/delay/fade edits preserve held-note LFO phase and age; gate/free admission policy applies to the next note.
 - Why the Instrument owns them: an `.wxi` must sound the same on any Track and in any Project. Slot 3's wobble must not change because slot 5 loaded a new Instrument, and it must not depend on an engine setting the file does not carry.
 
@@ -122,7 +168,7 @@ enum as retired-but-reserved and reads 0.
 
 - Matrix/envelope edits now use the typed revisioned `MSG_INST_MOD_OP` and
   `MSG_INST_MOD_SYNC` messages in [the protocol](inter-mcu-protocol.md).
-  Per-voice LFO snapshots use the typed revisioned `MSG_INST_LFO_OP`/`MSG_INST_LFO_SYNC` pair (0x6E/0x6F); global LFO editing and additional destinations remain target design.
+  Per-voice LFO snapshots use the typed revisioned `MSG_INST_LFO_OP`/`MSG_INST_LFO_SYNC` pair (0x6E/0x6F); global LFO GET/SET/RESET uses a separate session revision and callback snapshot.
 - Live MIDI uses `MSG_MIDI_CC` (0x56) and `MSG_MIDI_PRESSURE` (0x8D).
   Both DIN and USB share the parser/forwarder. CC1 drives Mod Wheel and
   channel pressure drives Pressure in the Instrument Mod source selector.
@@ -158,12 +204,12 @@ Physical port/latency and listening checks are tracked in HV-028.
 ## 7. UI (ESP32)
 
 1. **Step hold + knob** = write p-lock (the core Elektron gesture); locked steps render with a corner badge; step hold shows current locks with per-lock clear.
-2. **Mod page** (per instrument slot): 8 slot rows `source → dest, depth, curve`; encoder-driven; live value bars per source (needs a coalesced `MSG_INST_STATUS` extension or piggyback on meter cadence — 10 Hz is plenty).
+2. **Mod page** (per instrument slot): 8 slot rows `source → dest, depth, curve`; encoder-driven. Live value bars per source remain a target (needs a coalesced `MSG_INST_STATUS` extension or piggyback on meter cadence — 10 Hz is plenty).
 3. **LFO page**: expose the two Instrument-owned per-voice LFOs; the
    engine-global LFO stays performance-owned. The implemented page uses eight
    tiles in two rows and the common automatic-preview Apply/Revert path.
    Held-voice propagation for the implemented LFO controls is built; global
-   LFO editing remains open.
+   LFO editing is available through Global LFO or Settings → Global LFO.
 
 ## 8. Test plan
 
@@ -188,10 +234,11 @@ Physical port/latency and listening checks are tracked in HV-028.
 - The backend and ESP32 now run two Instrument-owned per-voice LFOs with typed
   revisioned snapshots, WXI retention, append-only source ids and the two-row
   touch page. Held-voice propagation and the resonance destination are built;
-  global LFO editing and expanded destinations remain Phase 2.5 work.
+  global LFO editing is session-owned and independent of Instrument Apply/Revert.
 - MIDI CC1/channel-pressure source wiring and UI selection are implemented.
-  Live lock recording, global LFO editing and analog/group lock lifetimes remain open. The corresponding
-  gestures and protocol extensions above describe targets, not current controls.
+  Live Play-control capture, held-step encoder editing, session-global LFO
+  controls and eviction notices are implemented. Analog/group lock lifetimes
+  remain target design. Physical acceptance is tracked in HV-032.
 
 
 ### LFO rate controls
@@ -209,7 +256,7 @@ The shared `audio/lfo_config.hpp` owns runtime bounds and division identities.
 Existing wire/WXI IDs retain their meanings; 3/16 is appended. WXI still retains
 the broader 0–1000-Hz storage domain for compatibility, while runtime and UI
 adjustment clamp to 0.01–100. Both Instrument and global LFO runtimes use these
-bounds; the global LFO editor/sync remain separate work.
+bounds; the session-global editor offers the same Hz and sync divisions.
 
 Instrument LFOs follow the current internal or MIDI-followed tempo. Sync changes
 rate only: held voices keep phase across rate/mode edits and transport/SPP

@@ -29,6 +29,9 @@ void Callback(daisy::AudioHandle::InputBuffer in,
               daisy::AudioHandle::OutputBuffer out,
               size_t size);
 
+void OnRecordOp(const WaveX::Protocol::RecordOpMessage& request);
+void PumpRecording();
+
 // Control/message hook APIs
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m);
 
@@ -60,6 +63,8 @@ bool LoadSfzInstrument(const char* path, uint8_t slot);
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& request);
 void OnAllocationOp(const WaveX::Protocol::AllocationOpMessage& request);
 void OnEditOp(const WaveX::Protocol::InstEditOpMessage& request);
+void OnGlobalLfoOp(const WaveX::Protocol::GlobalLfoOpMessage&);
+void OnArpOp(const WaveX::Protocol::InstArpOpMessage& request);
 void OnLfoOp(const WaveX::Protocol::InstLfoOpMessage& request);
 void OnModOp(const WaveX::Protocol::InstModOpMessage& request);
 void OnOscOp(const WaveX::Protocol::InstOscOpMessage& request);
@@ -152,6 +157,7 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
 // Audio callbacks executed since boot. Advances at sample_rate/block_size
 // (1 kHz here) whenever the SAI DMA is running, independent of the main loop.
 uint32_t GetCallbackBlocks();
+void TakeMidiDiagnostics(WaveX::Protocol::DiagPushMessage& out);
 
 // Lowest ring-buffer occupancy (frames) seen since the previous call, sampled
 // per audio callback. Reading resets it. Ring capacity is 2048 frames / ~42 ms.

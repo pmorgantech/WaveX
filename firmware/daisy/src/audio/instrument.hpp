@@ -192,6 +192,7 @@ struct Instrument {
     float trim_gain = 1.0f, trim_pan = 0.5f, osc_mix = 0.0f;
     Oscillator osc[kNumOscillators]{{OscType::Sample}, {OscType::Off}};
     InstrumentLfo lfo[2];
+    Arp::Config arp;
     // Modulation matrix (param-locks-and-modulation.md §3/§9 stage 4).
     // Always kMaxModSlots (8) entries - there is no separate "how many are
     // populated" count, because a default-constructed ModSlot is already
@@ -296,6 +297,8 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.keytrack = !p.drum && osc.keytrack;
     const float mix = ins.osc_mix < 0 ? 0 : (ins.osc_mix > 1 ? 1 : ins.osc_mix);
     p.source_level = osc.level * (oscillator == 0 ? 1.0f - mix : mix);
+    p.unmixed_level = osc.level;
+    p.oscillator_mix = mix;
     p.dry_pitch_ratio = TuneRatio(zone.coarse_tune, zone.fine_tune);
     p.pitch_ratio_mul = p.dry_pitch_ratio * TuneRatio(osc.coarse_tune, osc.fine_tune) *
                         TuneRatio(ins.transpose, ins.fine_tune);
@@ -375,9 +378,11 @@ inline void PrepareInstrumentLive(const Instrument& ins, VoiceLiveParams& live) 
     p.gain = ins.trim_gain;
     p.pan = ins.trim_pan;
     const float mix = std::clamp(ins.osc_mix, 0.f, 1.f);
+    p.oscillator_mix = mix;
     const float tune = TuneRatio(ins.transpose, ins.fine_tune);
     for (uint8_t i = 0; i < 2; ++i) {
         p.osc[i].level = ins.osc[i].level * (i ? mix : 1.f - mix);
+        p.osc[i].unmixed_level = ins.osc[i].level;
         p.osc[i].tune_ratio = TuneRatio(ins.osc[i].coarse_tune, ins.osc[i].fine_tune) * tune;
         p.osc[i].keytrack = ins.mode != InstrumentMode::Drum && ins.osc[i].keytrack;
         const auto& env = ins.env[i + 1];

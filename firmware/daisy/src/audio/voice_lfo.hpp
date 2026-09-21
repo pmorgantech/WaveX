@@ -32,6 +32,7 @@ class VoiceLfo {
                uint32_t random_seed,
                uint8_t index) {
         Configure(settings, sample_rate, pitch_ratio);
+        rate_scale_q16_ = 65536;
         elapsed_frames_ = 0;
         // This clock advances even while every physical voice is idle.
         phase_ = settings.retrigger || !enabled_ ? 0
@@ -57,12 +58,26 @@ class VoiceLfo {
         elapsed_frames_ += std::min(frames, UINT32_MAX - elapsed_frames_);
         if (!enabled_)
             return 0;
-        phase_ += division_ ? DivideBeatPhase(uint64_t{beat_step} * frames, division_)
-                            : uint64_t{rate_step_} * frames;
+        uint64_t advance = division_ ? DivideBeatPhase(uint64_t{beat_step} * frames, division_)
+                                     : uint64_t{rate_step_} * frames;
+        if (rate_scale_q16_ != 65536) {
+            // Split before multiplication so long host-test blocks cannot
+            // overflow the intermediate Q16 product. No phase/age reset.
+            advance =
+                (advance >> 16) * rate_scale_q16_ + ((advance & 65535u) * rate_scale_q16_ >> 16);
+            advance = std::clamp(
+                advance, uint64_t{min_rate_step_} * frames, uint64_t{max_rate_step_} * frames);
+        }
+        phase_ += advance;
         Recompute();
         return value_;
     }
     float Value() const { return value_; }
+    void SetRateMultiplier(float multiplier) {
+        if (!(multiplier >= .0625f && multiplier <= 16.f))
+            multiplier = 1.f;
+        rate_scale_q16_ = static_cast<uint32_t>(multiplier * 65536.f);
+    }
     float Phase() const {
         return static_cast<float>(static_cast<uint32_t>(phase_)) / 4294967296.0f;
     }
@@ -102,6 +117,9 @@ class VoiceLfo {
         hz = std::clamp(hz, LfoControl::kMinRateHz, LfoControl::kMaxRateHz);
         rate_step_ = static_cast<uint32_t>(
             std::min(4294967295.0, static_cast<double>(hz) * 4294967296.0 / sample_rate));
+        min_rate_step_ = static_cast<uint32_t>(LfoControl::kMinRateHz * 4294967296.0 / sample_rate);
+        max_rate_step_ = static_cast<uint32_t>(
+            std::min(4294967295.0, LfoControl::kMaxRateHz * 4294967296.0 / sample_rate));
         auto frames = [sample_rate](float seconds) {
             if (!(seconds >= 0 && seconds <= 600))
                 seconds = 0;
@@ -151,6 +169,7 @@ class VoiceLfo {
     bool configured_ = false;
     uint64_t phase_ = 0;
     uint32_t rate_step_ = 0, delay_frames_ = 0, fade_frames_ = 0, elapsed_frames_ = 0, seed_ = 0;
+    uint32_t rate_scale_q16_ = 65536, min_rate_step_ = 0, max_rate_step_ = 0;
     float fade_scale_ = 1, value_ = 0;
     uint8_t wave_ = 0, division_ = 0;
     bool enabled_ = false;

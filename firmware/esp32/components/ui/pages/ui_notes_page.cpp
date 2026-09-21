@@ -97,7 +97,7 @@ void UINotesPage::service() {
         const bool changed =
             state_.epoch && (state_.epoch != reply.epoch || state_.pattern != reply.pattern);
         if (!changed && state_.epoch && state_.track == reply.track && state_.step == reply.step &&
-            reply.input_mode && std::memcmp(state_.notes, reply.notes, sizeof(reply.notes))) {
+            reply.input_mode && state_.revision != reply.revision) {
             feedback_ = true;
             feedback_at_ = lv_tick_get();
         } else if (changed) {
@@ -203,6 +203,7 @@ void UINotesPage::render() {
                   "Velocity 0 clears a lane. 96 ticks = one quarter note; gate 0 holds until "
                   "retrigger or Stop.\n"
                   "Record target: Track %u, Step %u. Step record advances after all keys lift.\n"
+                  "Live rec: Play-page controls capture four locks per step on this Track.\n"
                   "Shift: drum/melodic, quantize, clear lane. Save with Pattern or Project.",
                   getCurrentTrack() + 1,
                   step_ + 1,
@@ -212,7 +213,7 @@ void UINotesPage::render() {
                   state_.read_only ? " / Song read-only"
                   : ready_         ? ""
                                    : " / Reading...",
-                  feedback_ ? " / Step updated" : "",
+                  feedback_ ? " / Pattern updated" : "",
                   state_.notes[0].note,
                   state_.notes[0].velocity,
                   state_.notes[1].note,

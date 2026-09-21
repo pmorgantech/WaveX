@@ -439,3 +439,18 @@ bool inter_mcu_get_seq_notes(WaveX::Protocol::SeqNotesMessage*);
 esp_err_t inter_mcu_send_sample_seam_request(const WaveX::Protocol::SampleSeamRequest&);
 void inter_mcu_store_sample_seam_status(const WaveX::Protocol::SampleSeamStatus&);
 bool inter_mcu_get_sample_seam_status(WaveX::Protocol::SampleSeamStatus*);
+
+esp_err_t inter_mcu_send_record_op(const WaveX::Protocol::RecordOpMessage&);
+void inter_mcu_store_record_status(const WaveX::Protocol::RecordStatusMessage&);
+bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage*);
+
+esp_err_t inter_mcu_send_instrument_arp(const WaveX::Protocol::InstArpOpMessage& request);
+void inter_mcu_store_instrument_arp(const WaveX::Protocol::InstArpSyncMessage& state);
+bool inter_mcu_get_instrument_arp(WaveX::Protocol::InstArpSyncMessage* out);
+
+esp_err_t inter_mcu_send_global_lfo(const WaveX::Protocol::GlobalLfoOpMessage&);
+void inter_mcu_store_global_lfo(const WaveX::Protocol::GlobalLfoSyncMessage&);
+bool inter_mcu_get_global_lfo(WaveX::Protocol::GlobalLfoSyncMessage*);
+
+void inter_mcu_store_lock_notice(const WaveX::Protocol::SeqLockNoticeMessage&);
+bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage*);

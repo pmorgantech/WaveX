@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "audio/arp_config.hpp"
 #include "audio/lfo_config.hpp"
 #include "audio/note_policy.hpp"
 #include <cstring>
@@ -187,6 +188,8 @@ enum MessageType : uint8_t {
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
+    MSG_REC_OP = 0x70,          // E->D: correlated recording session operation
+    MSG_REC_STATUS = 0x71,      // D->E: retained recording status and take identity
     MSG_MIX_OP = 0x78,          // E->D: one mixer control change
     MSG_MIX_METERS = 0x79,      // D->E: per-track peak, while the mixer page is open
     MSG_MIX_STATE_REQ = 0x7B,   // E->D: correlated selected Track mix read
@@ -204,6 +207,11 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_SEAM_REQ = 0x8B,
     MSG_SAMPLE_SEAM_STATUS = 0x8C,
     MSG_MIDI_PRESSURE = 0x8D,  // E->D: channel pressure, independent of CC numbers
+    MSG_INST_ARP_OP = 0x8E,
+    MSG_INST_ARP_SYNC = 0x8F,
+    MSG_GLOBAL_LFO_OP = 0x90,
+    MSG_GLOBAL_LFO_SYNC = 0x91,
+    MSG_SEQ_LOCK_NOTICE = 0x92,
     MSG_ERROR = 0xFF
 };
 
@@ -944,6 +952,71 @@ enum SampleMetaFlags : uint8_t {
     SAMPLE_META_RESIDENT = 0x01,  // clear = the record is gone (an unload)
     SAMPLE_META_PINNED = 0x02,    // the user loaded it; only an unload frees it
 };
+
+// Recording operates on one owned take. ARM's request ID becomes the take ID;
+// later mutations must name that take. GET never replays a mutation.
+enum RecordSource : uint8_t { REC_CODEC_STEREO, REC_CODEC_LEFT, REC_CODEC_RIGHT, REC_INTERNAL_MIX };
+enum RecordOp : uint8_t {
+    REC_GET,
+    REC_ARM,
+    REC_START,
+    REC_STOP,
+    REC_SAVE,
+    REC_DISCARD,
+    REC_AUDITION
+};
+enum RecordState : uint8_t {
+    REC_IDLE,
+    REC_ARMED,
+    REC_CAPTURING,
+    REC_DRAINING,
+    REC_READY,
+    REC_SAVING
+};
+enum RecordError : uint8_t {
+    REC_OK,
+    REC_BUSY,
+    REC_STALE,
+    REC_BAD_STATE,
+    REC_NO_MEMORY,
+    REC_OVERFLOW,
+    REC_IO,
+    REC_EXISTS,
+    REC_BAD_NAME
+};
+struct RecordOpMessage {
+    uint32_t request_id = 0, take_id = 0;
+    uint32_t max_frames = 48000 * 30;
+    uint16_t preroll_ms = 100, threshold = 0;
+    uint8_t op = REC_GET, source = REC_CODEC_STEREO, monitor = 0, reserved = 0;
+    char name[FILE_NAME_MAX]{};
+} __attribute__((packed));
+struct RecordStatusMessage {
+    uint32_t request_id = 0, active_request_id = 0, completed_request_id = 0, take_id = 0;
+    uint32_t frames = 0, max_frames = 0;
+    uint16_t sample_id = 0, peak_l = 0, peak_r = 0, threshold = 0, preroll_ms = 0;
+    uint16_t rms_l = 0, rms_r = 0;
+    uint32_t clip_count = 0;
+    uint8_t state = REC_IDLE, source = REC_CODEC_STEREO, error = REC_OK, completed_op = REC_GET;
+    uint8_t capture_error = REC_OK, progress = 0, monitor = 0;
+    char path[BROWSE_PATH_MAX]{};
+} __attribute__((packed));
+inline uint8_t RecordChannels(uint8_t source) {
+    return source == REC_CODEC_LEFT || source == REC_CODEC_RIGHT ? 1 : 2;
+}
+inline bool IsValidRecordOp(const RecordOpMessage& m) {
+    return m.request_id && m.op <= REC_AUDITION && m.source <= REC_INTERNAL_MIX && m.monitor <= 1 &&
+           !m.reserved && m.preroll_ms <= 500 && m.threshold <= 32768 && m.max_frames >= 48000 &&
+           m.max_frames <= 48000u * 120u && (m.op == REC_GET || m.op == REC_ARM || m.take_id) &&
+           std::memchr(m.name, 0, sizeof(m.name));
+}
+inline bool IsValidRecordStatus(const RecordStatusMessage& m) {
+    return m.request_id && m.state <= REC_SAVING && m.source <= REC_INTERNAL_MIX &&
+           m.error <= REC_BAD_NAME && m.capture_error <= REC_BAD_NAME &&
+           m.completed_op <= REC_AUDITION && m.frames <= m.max_frames && m.progress <= 100 &&
+           m.monitor <= 1 && m.threshold <= 32768 && m.preroll_ms <= 500 &&
+           std::memchr(m.path, 0, sizeof(m.path));
+}
 
 enum SampleFileOp : uint8_t { SAMPLE_FILE_GET, SAMPLE_FILE_SAVE, SAMPLE_FILE_COPY };
 enum SampleFileError : uint8_t {
@@ -2570,6 +2643,63 @@ inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
            m.value.keytrack <= 1;
 }
 
+// Latest lock eviction, with a cumulative count so a burst is not hidden.
+struct SeqLockNoticeMessage {
+    uint32_t count = 0, epoch = 0;
+    uint8_t pattern = 0, track = 0, step = 0, removed = 0, added = 0;
+} __attribute__((packed));
+static_assert(sizeof(SeqLockNoticeMessage) == 13);
+inline bool IsValidSeqLockNotice(const SeqLockNoticeMessage& m) {
+    return m.count && m.epoch && m.pattern < 16 && m.track < 16 && m.step < 64 && m.removed &&
+           m.added;
+}
+
+// Performance-wide session LFO. Instrument/Bank saves do not own this state.
+struct GlobalLfoSettings {
+    float rate_hz = 1;
+    uint8_t wave = 0, sync_div = 0, restart = 0, reserved = 0;
+} __attribute__((packed));
+enum GlobalLfoOp : uint8_t { GLOBAL_LFO_GET, GLOBAL_LFO_SET, GLOBAL_LFO_RESET };
+struct GlobalLfoOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t op = GLOBAL_LFO_GET;
+    GlobalLfoSettings value;
+} __attribute__((packed));
+struct GlobalLfoSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 1;
+    uint8_t error = 0;  // 0 accepted, 1 stale revision
+    GlobalLfoSettings value;
+} __attribute__((packed));
+inline bool IsValidGlobalLfoSettings(const GlobalLfoSettings& v) {
+    return v.rate_hz >= LfoControl::kMinRateHz && v.rate_hz <= LfoControl::kMaxRateHz &&
+           v.wave <= 4 && LfoControl::ValidDivision(v.sync_div) && v.restart <= 2 && !v.reserved;
+}
+inline bool IsValidGlobalLfoOp(const GlobalLfoOpMessage& m) {
+    return m.request_id && m.op <= GLOBAL_LFO_RESET &&
+           (m.op == GLOBAL_LFO_GET || (m.revision && IsValidGlobalLfoSettings(m.value)));
+}
+static_assert(sizeof(GlobalLfoOpMessage) == 17);
+static_assert(sizeof(GlobalLfoSyncMessage) == 21);
+
+// Instrument-owned arpeggiator; revisions and Apply/Revert follow sound edits.
+enum InstArpOp : uint8_t { INST_ARP_GET, INST_ARP_SET };
+struct InstArpOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, op = INST_ARP_GET;
+    Arp::Config value;
+} __attribute__((packed));
+struct InstArpSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, valid = 0, busy = 0, error = 0;
+    Arp::Config value;
+} __attribute__((packed));
+static_assert(sizeof(InstArpOpMessage) == 18);
+static_assert(sizeof(InstArpSyncMessage) == 24);
+inline bool IsValidInstArpOp(const InstArpOpMessage& m) {
+    return m.request_id && m.track < 16 && m.op <= INST_ARP_SET &&
+           (m.op == INST_ARP_GET || (m.revision && Arp::Valid(m.value)));
+}
+
 // Two per-voice LFOs; append-only sync identities are in audio/lfo_config.hpp.
 // Pitch follow applies to Hz mode: one octave of rate per octave above C4.
 // Runtime Hz clamps to 0.01..100; the storage domain retains 0..1000.
@@ -2611,7 +2741,10 @@ static constexpr uint8_t INST_MOD_SOURCE_COUNT = 18;
 static constexpr uint8_t INST_MOD_RESONANCE = 5;
 static constexpr uint8_t INST_MOD_OSC1_PITCH = 6;
 static constexpr uint8_t INST_MOD_OSC2_PITCH = 7;
-static constexpr uint8_t INST_MOD_DEST_COUNT = 8;
+static constexpr uint8_t INST_MOD_OSC_MIX = 8;
+static constexpr uint8_t INST_MOD_LFO1_RATE = 9;
+static constexpr uint8_t INST_MOD_LFO2_RATE = 10;
+static constexpr uint8_t INST_MOD_DEST_COUNT = 11;
 struct InstEnvelopeSettings {
     float attack_s = 0.001f, decay_s = 0.05f, sustain = 0.8f, release_s = 0.1f;
 } __attribute__((packed));
@@ -3429,6 +3562,20 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_EDIT_OP";
         case MSG_INST_EDIT_SYNC:
             return "INST_EDIT_SYNC";
+        case MSG_GLOBAL_LFO_OP:
+            return "GLOBAL_LFO_OP";
+        case MSG_GLOBAL_LFO_SYNC:
+            return "GLOBAL_LFO_SYNC";
+        case MSG_SEQ_LOCK_NOTICE:
+            return "SEQ_LOCK_NOTICE";
+        case MSG_INST_ARP_OP:
+            return "INST_ARP_OP";
+        case MSG_INST_ARP_SYNC:
+            return "INST_ARP_SYNC";
+        case MSG_REC_OP:
+            return "REC_OP";
+        case MSG_REC_STATUS:
+            return "REC_STATUS";
         case MSG_INST_LFO_OP:
             return "INST_LFO_OP";
         case MSG_INST_LFO_SYNC:

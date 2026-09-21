@@ -2,6 +2,14 @@
 
 **Status**: Activated planning checkpoint, linked from Phase 2's callback-capacity section. No implementation, board port, or purchase is authorized by this planning update.
 **Activation gate**: The 2026-09-07 DaisySP comparison measured 89.6635% worst callback utilization with callback-resident work still outstanding, so the recurring gate is **UPGRADE**. The WaveX 24 dB path measured 65.8029% and remains the fallback. The measured workload and limits are recorded in `docs/callback-performance-log.md`.
+**Reconfirmed 2026-09-21:** the production WaveX path with eight Mono voices,
+expanded modulation and live lock capture reached **85.3713%**. After the
+authorized recording/arpeggiator continuation, the eight-Mono internal-capture
+screen reached **86.5040%**. The UPGRADE checkpoint now
+also applies to that workload, not just the earlier DaisySP comparison. See
+[the current DWT evidence](callback-performance-log.md#expanded-modulation-and-live-locks--2026-09-21).
+The short run is not a full acceptance soak; board selection reconciliation,
+port implementation and purchase remain separate decisions.
 **Scope decision (recorded)**: **Like-for-like.** The phyCORE-RT1170 replaces the Daisy Seed's role only — real-time audio engine, SD sample streaming, SDRAM sample RAM, CV/Gate output. The ESP32-P4 keeps the UI, display, touch, and MIDI I/O exactly as today. The inter-MCU UART link is ported, not redesigned.
 **Core split direction (2026-09-17)**: The user wants the M4 to own the ESP32 link and SD-card I/O where feasible, leaving audio processing on the M7. This supersedes the earlier M7-only end-state assumption; retain a simple M7-only bring-up baseline, then implement the bounded I/O service proposed in §11. No dual-core implementation or performance result exists yet. The board/module and user-reported external memory capacities still need reconciliation with the older PHYTEC assumptions below before a board port.
 **Software stack decision (recorded)**: **Bare-metal, no RTOS**, built directly against NXP's MCUXpresso SDK drivers (not PHYTEC's Zephyr BSP). This preserves `architecture.md` §4.2's documented rationale — the audio timebase is the DMA clock, not a scheduler — which an RTOS would reintroduce jitter risk against.

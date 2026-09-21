@@ -59,7 +59,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | Type | Value | Direction | Payload | Purpose |
 |---|---|---|---|---|
 | MSG_SYNC | 0x00 | both | `SyncMessage{timestamp_ms}` | keepalive/resync |
-| MSG_CONTROL_CHANGE | 0x01 | E→D | `ControlChangeMessage{param, channel, value}` | parameter set (see `ControlParameter` enum). **`channel` is the Track index** — filter and envelope belong to that Track's Instrument (`track-and-patch-model.md` §3.2), and the sounding-voice push is limited to it, so a knob on one Track cannot move another's held notes. Live ids are 0x01–0x0A; 0x0B–0x15 are reserved for `param-locks-and-modulation.md` §1. `PARAM_LFO_RATE`/`PARAM_LFO_DEPTH` sit at 0x16/0x17 — they used to duplicate `PARAM_PAN`/`PARAM_PITCH` at 0x08/0x09 in the same enum, dead but one wiring-up away from a mis-route. |
+| MSG_CONTROL_CHANGE | 0x01 | E→D | `ControlChangeMessage{param, channel, value}` | parameter set (see `ControlParameter` enum); supported voice controls also capture step locks while that Track is armed in playing Live rec mode. **`channel` is the Track index** — filter and envelope belong to that Track's Instrument (`track-and-patch-model.md` §3.2), and the sounding-voice push is limited to it, so a knob on one Track cannot move another's held notes. Live ids are 0x01–0x0A; 0x0B–0x15 are reserved for `param-locks-and-modulation.md` §1. `PARAM_LFO_RATE`/`PARAM_LFO_DEPTH` sit at 0x16/0x17 — they used to duplicate `PARAM_PAN`/`PARAM_PITCH` at 0x08/0x09 in the same enum, dead but one wiring-up away from a mis-route. |
 | MSG_NOTE_ON / OFF | 0x02/0x03 | E→D | `NoteMessage{note, velocity, channel}` | note events; note and velocity must be 0–127 and reserved address bits 4–6 must be zero. `channel` is an **addressing byte** (`track-and-patch-model.md` §2.2): bit 7 `NOTE_ADDR_TRACK` set → bits 0–3 are a Track index (Play grid, sequencer, arpeggiator — `inter_mcu_send_note_{on,off}_track()`); clear → bits 0–3 are the 0-based MIDI channel the event arrived on and the backend fans the note out to **every** Track whose `midi_in` matches (`inter_mcu_send_note_{on,off}_midi()`). Backward compatible: a build predating the flag masks `& 0x0F` and behaves as before, so `PROTOCOL_VERSION` does not move |
 | MSG_SAMPLE_LOAD | 0x04 | E→D | `SampleLoadMessage{sample_id, hints, path[BROWSE_PATH_MAX]}` | load sample from Daisy SD into the Sample Pool (path-based; metadata fields are hints, Daisy re-reads). `sample_id` is a request tag: the Pool assigns the resident id and reports it in `MSG_SAMPLE_STATUS` LOAD_COMPLETE/PROGRESS. An exact path already resident is a hit (no SD read, the id it had). Nothing is evicted: a full Pool or arena fails with `SampleLoadFailReason`; a concurrent instrument import returns `SAMPLE_LOAD_FAIL_BUSY` |
 | MSG_SAMPLE_DATA | 0x05 | E→D | raw chunk | sample bytes pushed from ESP32 (rare path; SD-local loads preferred) |
@@ -149,12 +149,12 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
 for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
-the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, 0x86–0x87 for allocation policy, 0x89–0x8A for standalone sample files, and 0xA0–0xAF for render jobs.
+the retained Instrument sound edit extension, 0x82–0x85 for Bank operations and Program Change, 0x86–0x87 for allocation policy, 0x89–0x8A for standalone sample files, 0x8E–0x8F for arp, 0x90–0x91 for global LFO and 0x92 for lock eviction, and 0xA0–0xAF for render jobs.
 Do not assign a new ID outside these blocks without updating this document and
 `protocol.h`.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
-- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live. `INST_OP_SET_MOD_SLOT` (also on 0x60) is now live end to end (ESP32 `inter_mcu_send_mod_slot()` → Daisy `SfzLoader::SetModSlot()`, instrument-scoped storage on `Instrument::mod_slots`) — no UI sends it yet (`param-locks-and-modulation.md` §7/§9 stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` now receive Track-routed CC1/channel pressure through complete foreground-to-callback snapshots; DIN and USB share the forwarding path. See `param-locks-and-modulation.md` §6 for reset/lifetime semantics.
+- **Phase 2.5:** recording, arp and global LFO are implemented below. Zone, mixer and Instrument matrix editing are live. `SRC_MODWHEEL`/`SRC_AFTERTOUCH` receive Track-routed CC1/channel pressure through foreground-to-callback snapshots.
 - **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
 - **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.
@@ -321,15 +321,18 @@ their stop/next-note boundaries.
 
 The matrix destination id `INST_MOD_RESONANCE` is 5; ids 0–4 remain unchanged
 and the oscillator pitch destinations use ids 6 (`OSC1_PITCH`) and 7
-(`OSC2_PITCH`). The destination count is 8; ids 8 and above are unsupported
-until assigned. The existing revisioned
+(`OSC2_PITCH`). IDs 8–10 append `OSC_MIX`, `LFO1_RATE` and `LFO2_RATE`;
+the destination count is 11 and higher IDs remain unsupported. The existing revisioned
 Instrument matrix snapshot and 34-byte request/112-byte sync payloads are
 unchanged. Resonance routes use a signed normalized offset, sum before
 clamping to `[-1, 1]`, and apply to the base value before the filter's
 `[0, 1]` clamp. This reuses the existing matrix preview, Apply/Revert and WXI
 save path. Pitch routes use the source oscillator identity and compose with
 the common pitch scale; full-depth source 1 spans ±2 semitones. This pitch
-checkpoint does not add sync, FM, mix or LFO-rate wire behavior.
+path also carries the mix and LFO-rate routes without changing payload shape.
+Mix uses an additive normalized offset; LFO rates span ±4 octaves with a
+one-block causal delay, as specified in [the modulation design](param-locks-and-modulation.md).
+Sync/FM remain separate work.
 
 The filter edit group supports four Instrument-owned modes: `LP` (0), `HP`
 (1), `BP` (2) and `Notch` (3). `INST_EDIT_FILTER_SETTINGS` (op 5) carries
@@ -400,7 +403,7 @@ instruments are not file-owned. Busy, invalid name, missing/duplicate file,
 I/O, invalid format, insufficient space and capture-busy errors are explicit. See
 [sequencer.md](sequencer.md#pattern-files-as-built) for storage and handoff
 behavior. These additive messages keep protocol version 6; both updated
-MCUs are needed for the new page. The arpeggiator's 0x58 reservation remains.
+MCUs are needed for the new page. The arpeggiator uses 0x8E/0x8F; 0x58 belongs to Song operations.
 
 ### Card maintenance
 
@@ -728,3 +731,30 @@ not an audible-quality verdict. A missing shared stereo crossing is an
 explicit result, with unchanged markers. There is no automatic retry of Snap.
 Frontend reception publishes one locked snapshot; only UI service touches LVGL.
 See [the stereo policy and crossfade semantics](offline-sample-editing.md#stereo-markers-seam-checks-and-playback-crossfade).
+
+## Recording, arpeggiator and performance controls
+
+These append-only messages retain protocol version 7 and use the current UART
+transport. Payload definitions and validation live in `protocol.h`.
+
+| Message | ID | Direction | Contract |
+|---|---|---|---|
+| `MSG_REC_OP` | 0x70 | E→D | `RecordOpMessage`: request/take identity; GET, ARM, START, STOP, SAVE, DISCARD, AUDITION; source, threshold, pre-roll, ceiling, monitoring and name |
+| `MSG_REC_STATUS` | 0x71 | D→E | `RecordStatusMessage`: correlated active/completed operation, take/Pool identity, capture state/error, frames, progress, selected-source RMS/peak/clips and saved path |
+| `MSG_INST_ARP_OP` | 0x8E | E→D | `InstArpOpMessage`: Track, GET/SET, expected Instrument revision and complete eight-field config |
+| `MSG_INST_ARP_SYNC` | 0x8F | D→E | `InstArpSyncMessage`: retained mutation outcome, revision, validity/busy and confirmed config |
+| `MSG_GLOBAL_LFO_OP` | 0x90 | E→D | `GlobalLfoOpMessage`: GET/SET/RESET, expected session revision and waveform/rate/sync/restart settings |
+| `MSG_GLOBAL_LFO_SYNC` | 0x91 | D→E | `GlobalLfoSyncMessage`: current session settings, revision and retained completed request/error |
+| `MSG_SEQ_LOCK_NOTICE` | 0x92 | D→E | `SeqLockNoticeMessage`: latest eviction's cumulative count, Pattern epoch/slot, Track/step and removed/added parameter |
+
+Record status preserves the RAM take after a failed save. Done is DISCARD on a
+saved take and releases only recorder ownership. Arp uses shared Instrument
+Apply/Revert and the optional WXI chunk; global LFO settings are session-owned.
+GET replies never acknowledge a different pending mutation. Callback-generated
+eviction notices cross a latest-value mailbox and retry link enqueue in the
+foreground; bursts retain the newest identity and cumulative count.
+
+Diagnostic MIDI note/CC/clock fields now report received channel-addressed
+messages per subscription interval. UI Track notes and generated notes are
+excluded. Subscription establishes fresh counter baselines; transport/tempo
+fields come from the authoritative callback playhead snapshot.

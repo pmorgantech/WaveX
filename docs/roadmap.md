@@ -8,10 +8,10 @@ Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
 bench procedures and results belong in [hardware-validation.md](hardware-validation.md).
 Code-complete features stay open there until their physical checks pass.
 
-**Next software work:** resolve SD write-error recovery, then continue the
-remaining Phase 2.5 tasks below while panel wiring is pending. Keep the
-[UI capture fixes](#ui-capture-follow-up) in the frontend backlog. Callback
-capacity and physical acceptance remain open; follow the checkpoint below.
+**Next work:** close recording/arpeggiator and global-LFO/held-lock physical
+acceptance (HV-030–HV-032), resolve callback capacity and SD recovery, and finish
+panel/MIDI integration. The user authorized the implemented continuation ahead
+of capacity remediation; the above-threshold callback findings and all release gates remain open.
 
 ## Contents
 
@@ -56,6 +56,16 @@ that region without a UI freeze.
 4. Complete the callback capacity and one-hour soak requirements below.
 
 ### 2.C — Callback capacity checkpoint
+
+**UPGRADE checkpoint, 2026-09-21:** eight Mono voices with extended modulation,
+live locks and a Pattern file cycle reached **85.3713%**. The implemented
+recording/arpeggiator continuation reached **86.5040%** in a short eight-Mono
+screen with 20 seconds of internal capture (zero sampled stream underruns). Four-stereo short screens below 70% do not clear this result.
+The user authorized sampling/recording and arpeggiator implementation ahead of
+remediation on 2026-09-21. This continuation exception does not raise
+[the recurring gate](performance_monitoring.md#callback-headroom-gate) thresholds
+or close acceptance. Keep [backend migration planning](rt1170-migration.md) and
+measured load remediation open.
 
 Use [callback-performance-log.md](callback-performance-log.md) for measured
 images and workloads. Investigate the unresolved 74.5896% mixed-channel
@@ -117,13 +127,16 @@ subject to the callback checkpoint:
    zero sampled stream underruns does not close this callback gate. See the
    [DWT evidence](callback-performance-log.md#melodic-chord-pressure--2026-09-20).
 3. **Remaining modulation.** Complete physical CC1/channel-pressure acceptance
-   ([HV-028](hardware-validation.md#hv-028--midi-expression)). Add further
-   destinations/UI and live lock recording. Analog/group lock lifetimes need
-   a separate ownership design.
-4. **Sampling/recording v1 and arpeggiator.** Rebuild recording against the
-   voice/streaming architecture with fixed allocations outside the callback.
-   Add admission-controlled concurrent streamed voices; the current SD/ring
-   path is singleton-only. Preserve resident playback during these operations.
+   ([HV-028](hardware-validation.md#hv-028--midi-expression)) and expanded
+   modulation/live-lock acceptance ([HV-029](hardware-validation.md#hv-029--expanded-modulation-and-live-locks)).
+   Validate global LFO controls, held-step encoder locks, eviction notices and
+   diagnostic counts (HV-032). Analog/group lock lifetimes need a separate ownership design.
+4. **Recording and arpeggiator acceptance.** Complete codec-input and internal
+   master-mix signal/listening, save/reboot/recovery and full-load recording
+   checks (HV-030). Complete arpeggiator physical MIDI-clock alignment, generated
+   note recording, persistence and pressure checks (HV-031). Add a direct
+   post-recording zone assignment shortcut. Add admission-controlled concurrent
+   streamed voices; the current SD/ring path is singleton-only.
 5. **Instrument browsing follow-up.** Add tag metadata/filtering.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build and
@@ -164,7 +177,7 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–028. Keep partial/deferred checks open
+image identities and results for HV-001–032. Keep partial/deferred checks open
 until all acceptance criteria pass. Complete the following validation work:
 
 | Area | Remaining verification |
@@ -214,16 +227,11 @@ Use HV-001–010 for storage, audio and composition checks; Scenes remain Phase 
 These follow-ups retain their phase dependencies. Unscheduled ideas are not
 accepted designs or permission to expand the current audio workload.
 
-### UI capture follow-up
+### Frontend follow-up
 
-The 2026-09-21 framebuffer review found weak contrast in Pad Map sample-picking
-and Save copy/Rename overlays (default bright controls and dark explanatory
-text), plus clipping of the Songs “Play from here” softkey. Apply the shared
-theme and fit the label, then recapture these views. Diagnostics / MIDI also
-still describes the sequencer as unimplemented; update that stale hint. The
-Main Menu list also disables scrolling, leaving its bottom entries off screen
-at eight items; retain visible touch/encoder access to every entry. Evidence is in
-`logs/ui-pages-20260921/index.html`; physical panel appearance remains unverified.
+Validate authoritative Diagnostics / MIDI counters and stale-state handling in
+HV-032. Physical contrast, touch/encoder menu scrolling and rendering under load remain in
+[HV-018](hardware-validation.md#hv-018--8-inch-display-bring-up).
 
 ### Sampler and synth architecture references
 
@@ -268,7 +276,9 @@ host tests or a short callback screen as the full Phase 2.5 gate.
   Sample Edit when changing them, including encoder/touch bursts and loading.
   Existing measurements are in [UI latency notes](ui-latency-notes.md).
   Investigate expensive first frames in Sample Edit/Record/Play; profile smaller
-  or filled waveforms before spreading construction across frames.
+  or filled waveforms before spreading construction across frames. Reduce the
+  measured 243.52 ms full refresh when entering held-step Locks; individual
+  held-lock encoder edits already remain partial.
 - **Compiler/placement experiments:** further optimizations remain deferred.
   Keep `-O2` as the accepted reference; global `-O3` was rejected. Measure LTO
   separately, including weak HAL symbols and placement. Benchmark remaining

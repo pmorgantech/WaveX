@@ -51,6 +51,10 @@ class SequencerTransport {
     SequencerTransport& operator=(const SequencerTransport&) = delete;
     void Init(uint32_t sample_rate, uint16_t block_size) {
         recorder_.Target(0, 0);
+        lock_dirty_ = false;
+        for (auto& track: lock_dirty_steps_)
+            for (auto& half: track)
+                half = 0;
         clock_out_.Init();
         output_control_.store(0);
         output_control_seen_ = 0;
@@ -351,8 +355,12 @@ class SequencerTransport {
             }
             case SEQ_OP_SET_PARAM_LOCK:
                 if (StepValid(m.track, m.step) && IsVoiceLockParameter(m.arg_u8))
-                    SetParamLock(
-                        pending_pattern_->tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
+                    NoteLockEviction(
+                        SetParamLock(
+                            pending_pattern_->tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16),
+                        m.arg_u8,
+                        m.track,
+                        m.step);
                 break;
             case SEQ_OP_CLEAR_TRACK:
                 if (m.track < kMaxTracks) {
@@ -424,6 +432,33 @@ class SequencerTransport {
             pending_pattern_dirty_ = true;
             ++pattern_revision_;
         }
+    }
+    // Motion capture uses the containing nominal step, independent of note
+    // quantization/swing. The callback owns both time and pending Pattern data.
+    // Epoch rejection prevents a queued knob event editing a replacement Pattern.
+    const Protocol::SeqLockNoticeMessage& LockNotice() const { return lock_notice_; }
+    bool RecordControl(const Protocol::ControlChangeMessage& control, uint32_t epoch) {
+        if (epoch != active_epoch_ || song_project_ ||
+            input_mode_ != Protocol::SEQ_INPUT_LIVE_RECORD || !IsPlaying() ||
+            control.channel != recorder_.Track() || control.channel >= kMaxTracks ||
+            !IsVoiceLockParameter(control.parameter))
+            return false;
+        const auto step_index =
+            static_cast<uint8_t>(static_cast<uint64_t>(scheduler_.PatternPositionTicks() /
+                                                       StepIntervalTicks(pending_pattern_->scale)) %
+                                 pending_pattern_->length);
+        auto& step = pending_pattern_->tracks[control.channel].steps[step_index];
+        for (const auto& lock: step.param_locks)
+            if (lock.param_id == control.parameter && lock.value == control.value)
+                return false;
+        NoteLockEviction(SetParamLock(step, control.parameter, control.value),
+                         control.parameter,
+                         control.channel,
+                         step_index);
+        lock_dirty_steps_[control.channel][step_index / 32] |= 1u << (step_index % 32);
+        lock_dirty_ = true;
+        ++pattern_revision_;
+        return true;
     }
     template <typename Released>
     void PruneRecording(Released released) {
@@ -531,8 +566,8 @@ class SequencerTransport {
     WAVEX_ITCM_CODE_NAMED("transport.Tick")
     size_t Tick(TriggerEvent* out_events, size_t max_events) {
         SyncRecorderEpoch();
-        if (!scheduler_.IsPlaying() && pending_pattern_dirty_) {
-            CommitPendingPattern();
+        if (!scheduler_.IsPlaying() && (pending_pattern_dirty_ || lock_dirty_)) {
+            CommitPendingPattern(false);
         }
         clock_frame_ += block_size_;
         clock_frame_published_.store(clock_frame_, std::memory_order_relaxed);
@@ -580,8 +615,8 @@ class SequencerTransport {
                 launch_cancelled_ = true;
             }
         }
-        if (pending_pattern_dirty_ && scheduler_.ProcessedStepBoundary()) {
-            CommitPendingPattern();
+        if ((pending_pattern_dirty_ || lock_dirty_) && scheduler_.ProcessedStepBoundary()) {
+            CommitPendingPattern(false);
         }
         return count;
     }
@@ -794,26 +829,41 @@ class SequencerTransport {
     }
     static uint8_t ClampVelocity(uint16_t v) { return v > 127 ? 127 : static_cast<uint8_t>(v); }
 
-    static void SetParamLock(Step& s, uint8_t param_id, uint16_t value) {
+    Protocol::SeqLockNoticeMessage lock_notice_;
+    void NoteLockEviction(uint8_t removed, uint8_t added, uint8_t track, uint8_t step) {
+        if (!removed)
+            return;
+        if (!++lock_notice_.count)
+            ++lock_notice_.count;
+        lock_notice_.epoch = active_epoch_;
+        lock_notice_.pattern = active_slot_;
+        lock_notice_.track = track;
+        lock_notice_.step = step;
+        lock_notice_.removed = removed;
+        lock_notice_.added = added;
+    }
+    static uint8_t SetParamLock(Step& s, uint8_t param_id, uint16_t value) {
         // Overwrite an existing lock for this param, else fill the first free
         // slot. Full + no match => drop the oldest (slot 0 shift), matching
         // the "oldest evicted" rule in param-locks-and-modulation.md §2.
         for (auto& lock: s.param_locks) {
             if (lock.param_id == param_id) {
                 lock.value = value;
-                return;
+                return 0;
             }
         }
         for (auto& lock: s.param_locks) {
             if (lock.param_id == 0) {
                 lock.param_id = param_id;
                 lock.value = value;
-                return;
+                return 0;
             }
         }
+        const uint8_t removed = s.param_locks[0].param_id;
         for (uint8_t i = 1; i < kMaxParamLocks; ++i)
             s.param_locks[i - 1] = s.param_locks[i];
         s.param_locks[kMaxParamLocks - 1] = ParamLock{param_id, value};
+        return removed;
     }
 
     void InstallSongEntry() {
@@ -851,10 +901,31 @@ class SequencerTransport {
         CommitPendingPattern();
     }
 
-    void CommitPendingPattern() {
-        active_pattern_ = *pending_pattern_;
-        pending_pattern_dirty_ = false;
-        scheduler_.SetPattern(&active_pattern_);
+    void CommitPendingPattern(bool force = true) {
+        if (force || pending_pattern_dirty_) {
+            active_pattern_ = *pending_pattern_;
+            scheduler_.SetPattern(&active_pattern_);
+        } else if (lock_dirty_) {
+            // Motion changes at most four locks in each touched step. Publish
+            // those bounded records, not the entire 16x64 Pattern at every
+            // knob update. The scheduler is between step evaluations here.
+            for (uint8_t track = 0; track < kMaxTracks; ++track)
+                for (uint8_t half = 0; half < 2; ++half) {
+                    uint32_t mask = lock_dirty_steps_[track][half];
+                    while (mask) {
+                        const auto bit = static_cast<uint8_t>(__builtin_ctz(mask));
+                        const auto step = static_cast<uint8_t>(half * 32 + bit);
+                        for (uint8_t slot = 0; slot < kMaxParamLocks; ++slot)
+                            active_pattern_.tracks[track].steps[step].param_locks[slot] =
+                                pending_pattern_->tracks[track].steps[step].param_locks[slot];
+                        mask &= mask - 1;
+                    }
+                }
+        }
+        pending_pattern_dirty_ = lock_dirty_ = false;
+        for (auto& track: lock_dirty_steps_)
+            for (auto& half: track)
+                half = 0;
     }
 
     const Project* song_project_ = nullptr;
@@ -875,6 +946,8 @@ class SequencerTransport {
     bool launch_cancelled_ = false;
     Pattern active_pattern_;
     bool pending_pattern_dirty_ = false;
+    bool lock_dirty_ = false;
+    uint32_t lock_dirty_steps_[kMaxTracks][2]{};
     uint32_t pattern_revision_ = 0, active_epoch_ = 1;
     SequencerScheduler scheduler_;
     TempoFollower follower_;

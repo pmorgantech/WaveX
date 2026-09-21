@@ -668,17 +668,16 @@ void UIDiagnosticsPage::buildMidiTab(lv_obj_t* tab) {
     for (int i = 0; i < 4; i++) {
         midi_cards[i] = makeCard(tab, kColX[i], kRowY[0], kCardW, titles[i], "wire", false, 0);
     }
-    // These fields exist on the wire but nothing fills them yet: the sequencer
-    // and tempo follower are Phase 2. Saying so beats four cards reading zero
-    // with no explanation, which looks like a fault rather than a gap.
-    midi_note = mkLabel(tab,
-                        kColX[0],
-                        kRowY[1] + 20,
-                        "MSG_DIAG_PUSH carries these fields, but the Daisy has no sequencer or\n"
-                        "tempo follower to fill them yet (Phase 2). They will read zero until\n"
-                        "those land - see docs/roadmap.md.",
-                        UI_FONT_SMALL,
-                        kColDimmer);
+    // The backend reports received channel-addressed events and its sequencer clock.
+    midi_note =
+        mkLabel(tab,
+                kColX[0],
+                kRowY[1] + 20,
+                "Notes and CCs count MIDI events received by the backend in each interval.\n"
+                "Play pads and generated sequencer/arp notes are excluded.\n"
+                "Configure Track MIDI input in Project.",
+                UI_FONT_SMALL,
+                kColDimmer);
 }
 
 void UIDiagnosticsPage::buildPanelTab(lv_obj_t* tab) {
@@ -1140,10 +1139,10 @@ void UIDiagnosticsPage::refreshMidiTab() {
     setCard(midi_cards[1], v, "BPM", sub, -1);
 
     snprintf(v, sizeof(v), "%u", d.midi_notes);
-    setCard(midi_cards[2], v, "", "this interval", -1);
+    setCard(midi_cards[2], v, "", "note on/off received this interval", -1);
 
     snprintf(v, sizeof(v), "%u", d.midi_ccs);
-    setCard(midi_cards[3], v, "", "this interval", -1);
+    setCard(midi_cards[3], v, "", "CCs received this interval", -1);
 }
 
 void UIDiagnosticsPage::refreshPanelTab() {

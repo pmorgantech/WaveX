@@ -36,6 +36,7 @@
 // Atomicity ("write <name>.tmp, f_close, f_rename") belongs to the FatFs
 // wrapper, exactly as it does for wxcf.hpp - nothing here knows about files.
 
+#include "audio/arp_config.hpp"
 #include "audio/note_policy.hpp"
 #include "wxcf/wxcf.hpp"
 #include <cstddef>
@@ -84,6 +85,7 @@ enum ChunkId : uint16_t {
     kChunkEnv3 = 0x0032,
     kChunkLfo1 = 0x0040,
     kChunkLfo2 = 0x0041,
+    kChunkArp = 0x0042,
     kChunkModm = 0x0050,
     // Reserved for the FX chain (§3.1, "Reserved, not fields yet"). Never
     // written today; a reader that meets one skips it. Reserving the id now
@@ -221,6 +223,7 @@ struct InstrumentFile {
     Amp amp;
     Adsr env[kNumEnvelopes];  // 0 = amp (hard-wired), 1 = filter, 2 = pitch
     LfoParams lfo[kNumVoiceLfos];
+    Arp::Config arp;
     ModSlot mod_slots[kMaxModSlots];
 };
 
@@ -591,6 +594,7 @@ inline uint32_t TotalFileSize(const InstrumentFile& doc) {
     n += chunk_hdr + kAmpWireSize;
     n += (chunk_hdr + kEnvWireSize) * kNumEnvelopes;
     n += (chunk_hdr + kLfoWireSize) * kNumVoiceLfos;
+    n += chunk_hdr + sizeof(Arp::Config);
     n += chunk_hdr + kModmHeaderWireSize + kModSlotWireSize * kMaxModSlots;
     return n;
 }
@@ -610,7 +614,7 @@ inline uint32_t TotalFileSize(const InstrumentFile& doc) {
 // what this build can hold, so a caller that leaves the array partly filled
 // cannot emit uninitialised paths.
 inline Result Write(Wxcf::IoContext io, const InstrumentFile& doc) {
-    if (!Allocation::Valid(doc.allocation))
+    if (!Allocation::Valid(doc.allocation) || !Arp::Valid(doc.arp))
         return Result::BadChunk;
     Wxcf::Writer w(io);
     uint8_t buf[kScratchBytes];
@@ -666,6 +670,8 @@ inline Result Write(Wxcf::IoContext io, const InstrumentFile& doc) {
             return Result::IoError;
     }
 
+    if (w.WriteChunk(kChunkArp, kChunkVersion, &doc.arp, sizeof(doc.arp)) != Wxcf::Result::Ok)
+        return Result::IoError;
     for (uint8_t i = 0; i < kNumVoiceLfos; ++i) {
         detail::EncodeLfo(doc.lfo[i], buf);
         const uint16_t id = static_cast<uint16_t>(kChunkLfo1 + i);
@@ -898,6 +904,14 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
                     r, ch.payload_len, buf, ch.payload_len >= kLfoWireSize ? kLfoWireSize : 15);
                 if (res == Result::Ok)
                     detail::DecodeLfo(buf, out.lfo[ch.chunk_id - kChunkLfo1]);
+                break;
+            case kChunkArp:
+                res = detail::ReadFixedPayload(r, ch.payload_len, buf, sizeof(Arp::Config));
+                if (res == Result::Ok) {
+                    std::memcpy(&out.arp, buf, sizeof(out.arp));
+                    if (!Arp::Valid(out.arp))
+                        return Result::BadChunk;
+                }
                 break;
             case kChunkModm:
                 res = detail::ReadModmChunk(r, ch.payload_len, out);

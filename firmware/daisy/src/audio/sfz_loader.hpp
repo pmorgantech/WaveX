@@ -75,6 +75,8 @@ Allocation::Override TrackAllocation(uint8_t track);
 WaveX::Protocol::AllocationSyncMessage ReadAllocationState(uint8_t track, uint8_t scope);
 bool OnAllocationOp(const WaveX::Protocol::AllocationOpMessage& request);
 bool OnEditOp(const WaveX::Protocol::InstEditOpMessage& request);
+WaveX::Protocol::InstArpSyncMessage ReadArpState(uint8_t track);
+bool OnArpOp(const WaveX::Protocol::InstArpOpMessage& request);
 bool OnLfoOp(const WaveX::Protocol::InstLfoOpMessage& request);
 WaveX::Protocol::InstLfoSyncMessage ReadLfoState(uint8_t track);
 bool OnModOp(const WaveX::Protocol::InstModOpMessage& request);

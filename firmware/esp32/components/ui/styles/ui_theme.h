@@ -96,6 +96,17 @@
 #define UI_COLOR_METER UI_COLOR_OK
 #define UI_COLOR_PEAK UI_COLOR_WARN
 
+// Recording and global modulation page geometry.
+#define UI_PERFORMANCE_TILE_HEIGHT 190
+#define UI_RECORD_METERS_Y 230
+#define UI_RECORD_METER_GAP 28
+#define UI_RECORD_METER_HEIGHT 14
+#define UI_RECORD_NAME_Y 300
+#define UI_RECORD_NAME_HEIGHT 64
+#define UI_RECORD_STATUS_Y 390
+#define UI_RECORD_KEYBOARD_HEIGHT 240
+#define UI_GLOBAL_LFO_STATUS_Y 240
+
 // ---------------------------------------------------------------------------
 // Type ladder
 //
@@ -178,6 +189,14 @@
 #define UI_SHIFT_CHIP_H 40
 #define UI_SHIFT_CHIP_Y ((UI_HEADER_HEIGHT - UI_SHIFT_CHIP_H) / 2)
 #define UI_SHIFT_CHIP_X (UI_SCREEN_WIDTH - UI_MARGIN_X - UI_SHIFT_CHIP_W)
+#define UI_HEADER_METER_COUNT 8
+#define UI_HEADER_METER_W 9
+#define UI_HEADER_METER_GAP 3
+#define UI_HEADER_CPU_W 90
+#define UI_HEADER_METERS_W \
+    (UI_HEADER_METER_COUNT * UI_HEADER_METER_W + (UI_HEADER_METER_COUNT - 1) * UI_HEADER_METER_GAP)
+#define UI_HEADER_STATUS_X \
+    (UI_SHIFT_CHIP_X - 2 * UI_HEADER_GAP - UI_HEADER_CPU_W - UI_HEADER_METERS_W)
 
 void ui_theme_apply_button_style(lv_obj_t* button, bool is_pressed_style);
 void ui_theme_apply_container_style(lv_obj_t* container, bool has_border);

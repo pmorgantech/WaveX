@@ -61,6 +61,10 @@ void UISongPage::onEnter(lv_obj_t* parent) {
         c.index = index;
         c.button = lv_button_create(root_);
         ui_theme_apply_button_style(c.button, false);
+        lv_obj_set_style_bg_color(c.button, UI_COLOR_CARD_ALT, LV_STATE_DISABLED);
+        lv_obj_set_style_border_color(c.button, UI_COLOR_LINE, LV_STATE_DISABLED);
+        lv_obj_set_style_recolor_opa(c.button, LV_OPA_TRANSP, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(c.button, LV_OPA_70, LV_STATE_DISABLED);
         lv_obj_set_pos(c.button, x, y);
         lv_obj_set_size(c.button, w, h);
         c.label = lv_label_create(c.button);
@@ -426,7 +430,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISongPage::getSoftkeys() {
                [this] { send(SEQ_SONG_REMOVE); },
                editable && !dirty_ && status_.length > 1,
                "Keep at least one section"};
-    keys[4] = {playing ? "Stop" : "Play from here",
+    keys[4] = {playing ? "Stop" : "Play here",
                [this, playing] { send(playing ? SEQ_SONG_STOP : SEQ_SONG_PLAY); },
                !pending_ && (playing || (editable && !dirty_)),
                "Read a Song and apply edits first"};

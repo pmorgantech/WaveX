@@ -651,3 +651,106 @@ TEST(SequencerTransportTest, HalfStepRecordUsesSharedOffsetAndPreservesReleaseDu
     EXPECT_EQ(reply.quantize, 2);
     EXPECT_TRUE(IsValidSeqNotes(reply));
 }
+
+TEST(SequencerTransportTest, LiveLocksCaptureContainingStepWithoutChangingNotes) {
+    auto t = MakeTransport();
+    t.ApplyPatternOp({SEQ_OP_RECORD_TARGET, 2, 7, 0, 0, 0});
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0});
+    RunTicks(t, 100);  // 19.2 ticks: note quantization would choose step 1.
+    const auto epoch = t.PatternEpoch();
+    EXPECT_TRUE(t.RecordControl({PARAM_FILTER_CUTOFF, 2, 12000}, epoch));
+    const auto& step = t.pattern().tracks[2].steps[0];
+    EXPECT_EQ(step.param_locks[0].param_id, PARAM_FILTER_CUTOFF);
+    EXPECT_EQ(step.param_locks[0].value, 12000);
+    EXPECT_FALSE(step.on);  // motion alone never creates notes or changes row mode
+    EXPECT_FALSE(t.pattern().tracks[2].melodic);
+    const auto revision = t.PatternRevision();
+    EXPECT_FALSE(t.RecordControl({PARAM_FILTER_CUTOFF, 2, 12000}, epoch));
+    EXPECT_EQ(t.PatternRevision(), revision);
+    EXPECT_TRUE(t.RecordControl({PARAM_FILTER_CUTOFF, 2, 13000}, epoch));
+    EXPECT_EQ(step.param_locks[0].value, 13000);
+    EXPECT_EQ(step.param_locks[1].param_id, 0);
+    RunTicks(t, 40);
+    EXPECT_TRUE(t.RecordControl({PARAM_PAN, 2, 44000}, epoch));
+    EXPECT_EQ(t.pattern().tracks[2].steps[1].param_locks[0].param_id, PARAM_PAN);
+    // Wrap around a short Pattern; this is relative Pattern time, not song time.
+    t.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 2, 0});
+    RunTicks(t, 125);
+    EXPECT_TRUE(t.RecordControl({PARAM_PAN, 2, 23000}, epoch));
+    EXPECT_EQ(t.pattern().tracks[2].steps[0].param_locks[1].value, 23000);
+}
+
+TEST(SequencerTransportTest, LiveLocksRejectInactiveWrongTrackAndStalePattern) {
+    auto t = MakeTransport();
+    const ControlChangeMessage control{PARAM_PAN, 0, 12345};
+    EXPECT_FALSE(t.RecordControl(control, t.PatternEpoch()));
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_STEP_RECORD, 1, 12000, 0});
+    EXPECT_FALSE(t.RecordControl(control, t.PatternEpoch()));
+    t.ApplyTransport(
+        {SEQ_TRANSPORT_CONFIGURE, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0});
+    EXPECT_FALSE(t.RecordControl({PARAM_PAN, 1, 12345}, t.PatternEpoch()));
+    EXPECT_FALSE(t.RecordControl({PARAM_VOLUME, 0, 12345}, t.PatternEpoch()));
+    EXPECT_FALSE(t.RecordControl(control, t.PatternEpoch() + 1));
+    EXPECT_TRUE(t.RecordControl(control, t.PatternEpoch()));
+    const auto epoch = t.PatternEpoch();
+    auto replacement = std::make_unique<WaveX::Sequencer::Pattern>();
+    t.ReplacePattern(*replacement);
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0});
+    EXPECT_FALSE(t.RecordControl(control, epoch));
+    t.StopForProject();
+    EXPECT_FALSE(t.RecordControl(control, t.PatternEpoch()));
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].param_locks[0].param_id, 0);
+}
+
+TEST(SequencerTransportTest, LiveLocksReplaceOldestSlotAndRemainIsolatedFromSong) {
+    auto t = MakeTransport();
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 0, 12000, 0});
+    for (uint8_t param = PARAM_FILTER_CUTOFF; param <= PARAM_ENVELOPE_SUSTAIN; ++param)
+        EXPECT_TRUE(t.RecordControl({param, 0, uint16_t(param * 100)}, t.PatternEpoch()));
+    const auto& step = t.pattern().tracks[0].steps[0];
+    EXPECT_EQ(step.param_locks[0].param_id, PARAM_FILTER_RESONANCE);
+    EXPECT_EQ(step.param_locks[3].param_id, PARAM_ENVELOPE_SUSTAIN);
+    t.StopForProject();
+    auto project = std::make_unique<WaveX::Sequencer::Project>();
+    project->patterns[0].used = true;
+    project->songs[0].used = true;
+    project->songs[0].length = 1;
+    project->songs[0].entries[0] = {0, 1};
+    ASSERT_TRUE(t.StartSong(project.get(), 0, 0, true));
+    EXPECT_FALSE(t.RecordControl({PARAM_PAN, 0, 12345}, t.PatternEpoch()));
+    EXPECT_EQ(project->patterns[0].pattern.tracks[0].steps[0].param_locks[0].param_id, 0);
+}
+
+TEST(SequencerTransportTest, EvictionNoticeIdentifiesOldestAndIgnoresUpdates) {
+    auto t = MakeTransport();
+    for (uint8_t param: {PARAM_FILTER_CUTOFF, PARAM_FILTER_RESONANCE, PARAM_PAN, PARAM_GAIN})
+        t.ApplyPatternOp({SEQ_OP_SET_PARAM_LOCK, 2, 3, param, 100, 0});
+    EXPECT_EQ(t.LockNotice().count, 0u);
+    t.ApplyPatternOp({SEQ_OP_SET_PARAM_LOCK, 2, 3, PARAM_PITCH, 200, 0});
+    EXPECT_EQ(t.LockNotice().count, 1u);
+    EXPECT_EQ(t.LockNotice().removed, PARAM_FILTER_CUTOFF);
+    EXPECT_EQ(t.LockNotice().added, PARAM_PITCH);
+    EXPECT_EQ(t.LockNotice().track, 2);
+    EXPECT_EQ(t.LockNotice().step, 3);
+    t.ApplyPatternOp({SEQ_OP_SET_PARAM_LOCK, 2, 3, PARAM_PITCH, 300, 0});
+    EXPECT_EQ(t.LockNotice().count, 1u);
+}
+
+TEST(SequencerTransportTest, LiveLockPublicationReachesPlaybackAndComposesWithOtherEdits) {
+    auto t = MakeTransport();
+    t.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 2, 0});
+    t.ApplyPatternOp({SEQ_OP_SET_STEP, 0, 0, 1, 100, 0});
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 0, 12000, 0});
+    RunTicks(t, 10);
+    ASSERT_TRUE(t.RecordControl({PARAM_PAN, 0, 12345}, t.PatternEpoch()));
+    auto events = RunTicks(t, 250);
+    ASSERT_EQ(events.size(), 1u);
+    ASSERT_EQ(events[0].param_lock_count, 1);
+    EXPECT_EQ(events[0].param_locks[0].value, 12345);
+    ASSERT_TRUE(t.RecordControl({PARAM_PAN, 0, 23456}, t.PatternEpoch()));
+    t.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 0, 0, 70, 0, 0});
+    events = RunTicks(t, 250);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].note, 70);
+    EXPECT_EQ(events[0].param_locks[0].value, 23456);
+}

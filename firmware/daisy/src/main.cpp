@@ -961,6 +961,7 @@ int main(void) {
         // SFZ inspection/loading is one bounded cooperative step per pass.
         // It follows the deadline-driven streaming refill; a LOAD closes the
         // audition first, while a lightweight PROBE yields between files.
+        WaveX::AudioEngine::PumpRecording();
         WaveX::AudioEngine::PumpProjectSession();
         WaveX::AudioEngine::PumpSampleFile();
         WaveX::AudioEngine::PumpInstrumentLoad();

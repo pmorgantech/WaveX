@@ -47,9 +47,9 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys, sharing note lifecycle and live parameters.
-- **Instrument:** Sample, Env, Amp, Filter, Mod, LFO.
+- **Instrument:** Sample, Env, Amp, Filter, Mod, LFO, Arp.
 - **Project:** eight Tracks per view, Instrument assignment, MIDI input, Track level, pan/balance and mute.
-- **Settings:** Display, Storage, MIDI, System, Calibrate.
+- **Settings:** Display, Storage, MIDI, System, Calibrate, Pots, Global LFO.
 
   Storage offers Format Card, followed by a separate **ALL CARD DATA WILL BE
   LOST** confirmation with Cancel and Erase all data. The backend owns the
@@ -259,7 +259,10 @@ Transfer scheduling is documented in
 Diagnostics keeps its existing live sample and sparkline cadence, while card
 text, warning colours and table cells update only when their displayed values
 change. The shared header similarly avoids resetting identical title/context
-text; geometry is recomputed when either string changes.
+text; geometry is recomputed when either string changes. Context stays on one
+line and ends with an ellipsis before the meters and CPU readout. Its bounded
+source-text cache is separate from the LVGL label because ellipsis rendering
+can modify the label text; unchanged backend updates must not trigger a redraw.
 
 ## Verification and remaining work
 
@@ -482,3 +485,22 @@ It displays six arrangement rows, a separate section/Pattern/repeat/tempo edit
 column, and the actual playing section. Draft edits require Apply/Revert; playback
 freezes arrangement edits. Widgets compare values before repainting on each poll.
 See [Song sequencing](features/song-sequencing.md) for operation and timing rules.
+
+### Recording and performance controls (as built, 2026-09-21)
+
+Sample → Record owns only the visible configuration/readback and keyboard.
+Capture continues on Daisy across navigation. Source meters, pending actions and
+take identity come from typed status; Save/Done selects the resulting Pool sample
+for existing editing and assignment. See [recording](features/sampling-and-recording.md).
+
+Instrument → Arp shares the page's revision and automatic preview Apply/Revert
+lifetime. Global LFO opens from Instrument → LFO and Settings, with independent
+session settings and reset; Instrument saves do not own it. Unchanged polling
+replies reuse tile values and do not rewrite status labels.
+
+Sequencer short taps toggle on release; long presses enter held-step lock mode
+without toggling. Encoder bindings target the four displayed slots only during
+the hold. Scoped Pattern identities reject stale edits. A callback-owned eviction
+notice crosses the frontend mailbox and is displayed in the header context for
+three seconds, then the normal page context returns. UI-task servicing owns all
+LVGL changes; transport callbacks only publish values.

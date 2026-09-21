@@ -5,6 +5,8 @@
 
 #include "../styles/ui_theme.h"
 #include "esp_lvgl_port.h"
+#include "inter_mcu.h"
+#include "ui/parameter_lock_model.h"
 #include "ui/ui_status_strip.h"
 
 #include <cstring>
@@ -70,6 +72,9 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         context_label_ = lv_label_create(header_);
         lv_obj_set_style_text_color(context_label_, UI_COLOR_DIM, LV_PART_MAIN);
         lv_obj_set_style_text_font(context_label_, UI_FONT_BODY, LV_PART_MAIN);
+        header_context_[0] = '\0';
+        lv_label_set_long_mode(context_label_, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(context_label_, lv_font_get_line_height(UI_FONT_BODY));
         lv_label_set_text(context_label_, "");
 
         // Output meters and engine CPU live in the header so they are visible
@@ -154,20 +159,44 @@ void UINavigator::setHeaderFor(UIPage* page) {
     if (!context_label_) {
         return;
     }
-    const char* ctx = page->contextLine();
+    const char* ctx = notice_[0] ? notice_ : page->contextLine();
     if (!ctx) {
         ctx = "";
     }
-    const bool context_changed = std::strcmp(lv_label_get_text(context_label_), ctx) != 0;
+    const bool context_changed =
+        std::strncmp(header_context_, ctx, sizeof(header_context_) - 1) != 0;
     if (context_changed) {
-        lv_label_set_text(context_label_, ctx);
+        std::strncpy(header_context_, ctx, sizeof(header_context_) - 1);
+        header_context_[sizeof(header_context_) - 1] = '\0';
+        lv_label_set_text(context_label_, header_context_);
     }
     if (title_changed || context_changed) {
         lv_obj_update_layout(title_label_);
         lv_obj_align_to(context_label_, title_label_, LV_ALIGN_OUT_RIGHT_MID, UI_HEADER_GAP, 0);
+        lv_obj_update_layout(context_label_);
+        const int width = UI_HEADER_STATUS_X - UI_HEADER_GAP - lv_obj_get_x(context_label_);
+        lv_obj_set_width(context_label_, width > 0 ? width : 0);
     }
 }
 
+void UINavigator::serviceNotices() {
+    WaveX::Protocol::SeqLockNoticeMessage notice;
+    if (inter_mcu_take_lock_notice(&notice)) {
+        lock_evictions_ = notice.count;
+        std::snprintf(notice_,
+                      sizeof(notice_),
+                      "Lock replaced: T%u S%u %s > %s",
+                      notice.track + 1,
+                      notice.step + 1,
+                      ParameterLocks::Name(notice.removed),
+                      ParameterLocks::Name(notice.added));
+        notice_at_ = lv_tick_get();
+        refreshContext();
+    } else if (notice_[0] && lv_tick_get() - notice_at_ >= 3000) {
+        notice_[0] = 0;
+        refreshContext();
+    }
+}
 void UINavigator::refreshContext() {
     if (active_) {
         setHeaderFor(active_.get());

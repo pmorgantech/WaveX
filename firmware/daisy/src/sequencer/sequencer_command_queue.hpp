@@ -21,6 +21,7 @@ enum class SequencerCommandType : uint8_t {
     NotesRequest,
     PatternRequest,
     MidiClock,
+    RecordControl,
     StopOnly,  // stop without importing potentially stale frontend session settings
 };
 
@@ -31,6 +32,8 @@ struct SequencerCommand {
     Protocol::SeqSlotEditMessage slot_edit{};
     Protocol::SeqPatternRequestMessage pattern_request{};
     Protocol::MidiClockEventMessage midi_clock{};
+    Protocol::ControlChangeMessage control{};
+    uint32_t pattern_epoch = 0;
 };
 
 template <uint32_t Capacity>

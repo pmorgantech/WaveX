@@ -12,6 +12,7 @@ class InstrumentSoundUndo {
         if (active_)
             return;
         allocation_ = ins.allocation;
+        arp_ = ins.arp;
         filter_ = ins.filter;
         std::copy_n(ins.env, 3, env_);
         std::copy_n(ins.lfo, 2, lfo_);
@@ -31,6 +32,7 @@ class InstrumentSoundUndo {
         if (!active_)
             return false;
         ins.allocation = allocation_;
+        ins.arp = arp_;
         ins.filter = filter_;
         std::copy_n(env_, 3, ins.env);
         std::copy_n(lfo_, 2, ins.lfo);
@@ -62,6 +64,7 @@ class InstrumentSoundUndo {
         bool mono = false;
     };
     Allocation::Policy allocation_;
+    Arp::Config arp_;
     InstrumentFilter filter_;
     InstrumentEnv env_[3];
     InstrumentLfo lfo_[2];

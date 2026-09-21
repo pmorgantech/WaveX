@@ -291,6 +291,18 @@ TEST(WxiCodec, RoundTripsEveryField) {
     ExpectDocEq(src, dst);
 }
 
+TEST(WxiCodec, ExtendedModulationDestinationsSurviveInstrumentSave) {
+    InstrumentFile src = MakeFullDoc();
+    src.mod_slots[0].dest = 8;
+    src.mod_slots[1].dest = 9;
+    src.mod_slots[2].dest = 10;
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), src), Result::Ok);
+    InstrumentFile dst;
+    ASSERT_EQ(Wxi::Read(io.AsReader(), dst), Result::Ok);
+    ExpectDocEq(src, dst);
+}
+
 TEST(WxiCodec, HeaderTotalLenMatchesBytesWritten) {
     const InstrumentFile src = MakeFullDoc();
     MemoryIo io;
@@ -888,4 +900,17 @@ TEST(WxiCodec, AllocationPolicyRoundTripAndLegacyDefaults) {
     PutChunk(m.buf, Wxi::kChunkAllocation, {0, 0, 2, 0});
     PutChunk(m.buf, Wxi::kChunkAllocation, {0, 0, 2, 0});
     EXPECT_EQ(Wxi::Read(m.AsReader(), out), Result::BadChunk);
+}
+
+TEST(WxiArpeggiator, OptionalChunkRoundTripAndValidation) {
+    InstrumentFile in;
+    in.arp = {1, 5, 4, 11, 99, 1, 2, 120};
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), in), Result::Ok);
+    InstrumentFile out;
+    ASSERT_EQ(Wxi::Read(io.AsReader(), out), Result::Ok);
+    EXPECT_TRUE(WaveX::Arp::Equal(in.arp, out.arp));
+    in.arp.octaves = 0;
+    MemoryIo invalid;
+    EXPECT_EQ(Wxi::Write(invalid.AsWriter(), in), Result::BadChunk);
 }

@@ -35,6 +35,7 @@ namespace {
 bool s_subscribed = false;
 uint32_t s_interval_ms = 500;  // 2 Hz default
 uint32_t s_last_push_ms = 0;
+uint32_t s_last_blocks = 0;
 
 // Clamped so a malformed or hostile subscription cannot ask the backend to
 // spend main-loop time it needs for the audio ring.
@@ -61,6 +62,9 @@ void DiagSubscribe(bool enable, uint8_t interval_hz) {
     // everything accumulated since boot as if it happened in one interval -
     // an alarming, entirely fictional spike on the first frame the user sees.
     if (enable) {
+        s_last_blocks = WaveX::AudioEngine::GetCallbackBlocks();
+        WaveX::Protocol::DiagPushMessage ignored;
+        WaveX::AudioEngine::TakeMidiDiagnostics(ignored);
         uint32_t pushes = 0, discards = 0, underruns = 0;
         WaveX::AudioEngine::TakeStreamCounters(pushes, discards, underruns);
         WaveX::AudioEngine::TakeRingLowWater();
@@ -70,7 +74,7 @@ void DiagSubscribe(bool enable, uint8_t interval_hz) {
         LinkPerfSample perf;
         TakeLinkPerf(perf);
 #endif
-        s_last_push_ms = 0;  // push immediately rather than after an interval
+        s_last_push_ms = 0;  // establish the first measured interval in Tick
     }
 }
 
@@ -82,7 +86,11 @@ void DiagPushTick(uint32_t now_ms) {
     if (!s_subscribed) {
         return;
     }
-    if (s_last_push_ms != 0 && (now_ms - s_last_push_ms) < s_interval_ms) {
+    if (!s_last_push_ms) {
+        s_last_push_ms = now_ms;
+        return;
+    }
+    if ((now_ms - s_last_push_ms) < s_interval_ms) {
         return;
     }
     const uint32_t interval_ms = s_last_push_ms ? (now_ms - s_last_push_ms) : s_interval_ms;
@@ -97,7 +105,6 @@ void DiagPushTick(uint32_t now_ms) {
     // separates "the engine stopped" from "the ring starved", and only the
     // measured rate can tell them apart - if the callback stops, the ring
     // stays full and no underrun is ever detected or logged.
-    static uint32_t s_last_blocks = 0;
     const uint32_t blocks = WaveX::AudioEngine::GetCallbackBlocks();
     const uint32_t block_delta = blocks - s_last_blocks;
     s_last_blocks = blocks;
@@ -187,10 +194,7 @@ void DiagPushTick(uint32_t now_ms) {
             (brk < &g_wavex_heap_limit) ? static_cast<uint32_t>(&g_wavex_heap_limit - brk) : 0;
     }
 
-    // MIDI and transport counters are left zero: the sequencer and tempo
-    // follower are Phase 2 work and none of those counters exist yet. Sending
-    // zeros is honest - the frontend labels the tab accordingly - where
-    // inventing plausible values would not be.
+    WaveX::AudioEngine::TakeMidiDiagnostics(m);
 
     LinkSend(WaveX::Protocol::MSG_DIAG_PUSH, &m, sizeof(m));
 }

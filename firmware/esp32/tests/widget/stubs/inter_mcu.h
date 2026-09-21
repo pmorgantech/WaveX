@@ -55,3 +55,10 @@ esp_err_t inter_mcu_send_sample_audition(uint16_t);
 esp_err_t inter_mcu_send_sample_stop_req();
 
 esp_err_t inter_mcu_request_sample_meta(uint16_t);
+
+esp_err_t inter_mcu_send_record_op(const WaveX::Protocol::RecordOpMessage&);
+bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage*);
+
+inline bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage*) {
+    return false;
+}

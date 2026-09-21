@@ -1125,3 +1125,17 @@ TEST_F(MessageDispatchTest, StereoSnapRejectsMalformedAndTruncatedRequests) {
     ASSERT_EQ(GetDispatchRecord().sample_seams.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().sample_seams[0].request_id, 99u);
 }
+
+TEST_F(MessageDispatchTest, RecordingRejectsTruncatedAndInvalidRequests) {
+    RecordOpMessage r;
+    r.request_id = 99;
+    for (size_t n = 0; n < sizeof(r); ++n)
+        ProcessInterMcuMessage(MSG_REC_OP, 1, reinterpret_cast<uint8_t*>(&r), n);
+    EXPECT_TRUE(GetDispatchRecord().record_ops.empty());
+    r.source = 4;
+    Dispatch(MSG_REC_OP, r);
+    EXPECT_TRUE(GetDispatchRecord().record_ops.empty());
+    r.source = REC_INTERNAL_MIX;
+    Dispatch(MSG_REC_OP, r);
+    ASSERT_EQ(GetDispatchRecord().record_ops.size(), 1u);
+}

@@ -63,6 +63,9 @@ enum ModDest : uint8_t {
     DEST_RESONANCE = Protocol::INST_MOD_RESONANCE,
     DEST_OSC1_PITCH = Protocol::INST_MOD_OSC1_PITCH,
     DEST_OSC2_PITCH = Protocol::INST_MOD_OSC2_PITCH,
+    DEST_OSC_MIX = Protocol::INST_MOD_OSC_MIX,
+    DEST_LFO1_RATE = Protocol::INST_MOD_LFO1_RATE,
+    DEST_LFO2_RATE = Protocol::INST_MOD_LFO2_RATE,
     DEST_COUNT
 };
 
@@ -143,12 +146,12 @@ struct ModSources {
     }
 };
 
-// Voice-owned memoization of the four exponential destination mappings.
+// Voice-owned memoization of the exponential destination mappings.
 // Keys are the final base-2 exponents, so changed routes/curves need no
 // separate invalidation and identical sums produce identical sound.
 struct ModScaleCache {
-    float exponent[4] = {};
-    float value[4] = {1, 1, 1, 1};
+    float exponent[6] = {};
+    float value[6] = {1, 1, 1, 1, 1, 1};
     float Scale(uint8_t index, float power) {
         if (power != exponent[index]) {
             exponent[index] = power;
@@ -173,6 +176,8 @@ struct ModDestinations {
     float oscillator_pitch_mul[2] = {1.0f, 1.0f};
     float pan_offset = 0.0f;
     float resonance_offset = 0.0f;
+    float oscillator_mix_offset = 0.0f;
+    float lfo_rate_mul[2] = {1.0f, 1.0f};
 };
 
 // Full-scale ranges. These are CHOSEN, not derived - the design fixes the
@@ -232,6 +237,8 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     float oscillator_pitch[2] = {};
     float pan = 0.0f;
     float resonance = 0.0f;
+    float oscillator_mix = 0.0f;
+    float lfo_rate[2] = {};
 
     if (slots) {
         if (count > kMaxModSlots) {
@@ -271,6 +278,15 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
                 case DEST_PAN:
                     pan += amount;
                     break;
+                case DEST_OSC_MIX:
+                    oscillator_mix += amount;
+                    break;
+                case DEST_LFO1_RATE:
+                    lfo_rate[0] += amount;
+                    break;
+                case DEST_LFO2_RATE:
+                    lfo_rate[1] += amount;
+                    break;
                 default:
                     break;
             }
@@ -300,6 +316,12 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     // Full signed depth spans the normalized resonance range. Sum routes
     // before clamping; the voice adds this to its own (possibly locked) base.
     out.resonance_offset = resonance < -1.f ? -1.f : (resonance > 1.f ? 1.f : resonance);
+    out.oscillator_mix_offset =
+        oscillator_mix < -1.f ? -1.f : (oscillator_mix > 1.f ? 1.f : oscillator_mix);
+    for (uint8_t i = 0; i < 2; ++i) {
+        const float amount = lfo_rate[i] < -1.f ? -1.f : (lfo_rate[i] > 1.f ? 1.f : lfo_rate[i]);
+        out.lfo_rate_mul[i] = scale(static_cast<uint8_t>(4 + i), amount * 4.f);
+    }
     return out;
 }
 

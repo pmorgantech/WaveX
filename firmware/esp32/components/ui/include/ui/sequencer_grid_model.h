@@ -87,6 +87,7 @@ class SequencerGridModel {
         message.edit = edit;
         return message;
     }
+    uint32_t Epoch() const { return epoch_; }
     uint8_t PatternSlot() const { return pattern_; }
 
     void InvalidateRow(uint8_t row) {

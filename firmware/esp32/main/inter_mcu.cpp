@@ -1511,6 +1511,62 @@ bool inter_mcu_get_modulator(WaveX::Protocol::InstModSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_global_lfo_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::GlobalLfoSyncMessage s_global_lfo;
+bool s_global_lfo_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_global_lfo(const WaveX::Protocol::GlobalLfoOpMessage& request) {
+    if (!WaveX::Protocol::IsValidGlobalLfoOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_GLOBAL_LFO_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_global_lfo(const WaveX::Protocol::GlobalLfoSyncMessage& state) {
+    taskENTER_CRITICAL(&s_global_lfo_lock);
+    s_global_lfo = state;
+    s_global_lfo_valid = true;
+    taskEXIT_CRITICAL(&s_global_lfo_lock);
+}
+bool inter_mcu_get_global_lfo(WaveX::Protocol::GlobalLfoSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_global_lfo_lock);
+    const bool valid = s_global_lfo_valid;
+    if (valid)
+        *out = s_global_lfo;
+    taskEXIT_CRITICAL(&s_global_lfo_lock);
+    return valid;
+}
+namespace {
+portMUX_TYPE s_instrument_arp_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstArpSyncMessage s_instrument_arp;
+bool s_instrument_arp_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_instrument_arp(const WaveX::Protocol::InstArpOpMessage& request) {
+    if (!WaveX::Protocol::IsValidInstArpOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_INST_ARP_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_instrument_arp(const WaveX::Protocol::InstArpSyncMessage& state) {
+    taskENTER_CRITICAL(&s_instrument_arp_lock);
+    s_instrument_arp = state;
+    s_instrument_arp_valid = true;
+    taskEXIT_CRITICAL(&s_instrument_arp_lock);
+}
+bool inter_mcu_get_instrument_arp(WaveX::Protocol::InstArpSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_instrument_arp_lock);
+    const bool valid = s_instrument_arp_valid;
+    if (valid)
+        *out = s_instrument_arp;
+    taskEXIT_CRITICAL(&s_instrument_arp_lock);
+    return valid;
+}
+namespace {
 portMUX_TYPE s_instrument_lfo_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstLfoSyncMessage s_instrument_lfo;
 bool s_instrument_lfo_valid = false;
@@ -2034,4 +2090,59 @@ bool inter_mcu_get_bank_status(WaveX::Protocol::BankStatusMessage* out) {
         *out = s_bank_status;
     taskEXIT_CRITICAL(&s_bank_lock);
     return valid;
+}
+
+namespace {
+portMUX_TYPE s_record_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::RecordStatusMessage s_record_status;
+bool s_record_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_record_op(const WaveX::Protocol::RecordOpMessage& request) {
+    if (!WaveX::Protocol::IsValidRecordOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_REC_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_record_status(const WaveX::Protocol::RecordStatusMessage& status) {
+    if (!WaveX::Protocol::IsValidRecordStatus(status))
+        return;
+    taskENTER_CRITICAL(&s_record_lock);
+    s_record_status = status;
+    s_record_valid = true;
+    taskEXIT_CRITICAL(&s_record_lock);
+}
+bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_record_lock);
+    const bool valid = s_record_valid;
+    if (valid)
+        *out = s_record_status;
+    taskEXIT_CRITICAL(&s_record_lock);
+    return valid;
+}
+
+namespace {
+portMUX_TYPE s_lock_notice_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SeqLockNoticeMessage s_lock_notice;
+bool s_lock_notice_pending = false;
+}  // namespace
+void inter_mcu_store_lock_notice(const WaveX::Protocol::SeqLockNoticeMessage& value) {
+    taskENTER_CRITICAL(&s_lock_notice_lock);
+    s_lock_notice = value;
+    s_lock_notice_pending = true;
+    taskEXIT_CRITICAL(&s_lock_notice_lock);
+}
+bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_lock_notice_lock);
+    const bool pending = s_lock_notice_pending;
+    if (pending) {
+        *out = s_lock_notice;
+        s_lock_notice_pending = false;
+    }
+    taskEXIT_CRITICAL(&s_lock_notice_lock);
+    return pending;
 }

@@ -15,15 +15,21 @@ void statusStripCreate(lv_obj_t*) {}
 namespace {
 uint16_t pixels[UI_SCREEN_WIDTH * UI_SCREEN_HEIGHT];
 uint32_t tick = 0;
+uint32_t flushes = 0;
 uint32_t Tick() {
     return tick;
 }
 void Flush(lv_display_t* display, const lv_area_t*, uint8_t*) {
+    ++flushes;
     lv_display_flush_ready(display);
 }
 class ShiftPage : public wavex_ui::UIPage {
    public:
     const char* name() const override { return "Shift test"; }
+    const char* contextLine() const override {
+        return "Track 1 / A long Instrument name / Edited / Slot 8 / "
+               "Save a WXI copy from Pad Map / Additional context beyond the meter boundary";
+    }
     void onEnter(lv_obj_t* parent) override { root_ = lv_obj_create(parent); }
     void onExit() override {
         lv_obj_delete(root_);
@@ -67,6 +73,19 @@ TEST(ShiftTouchTest, HeldShiftFiresAlternateAndReleaseDoesNotRelatch) {
     lv_obj_update_layout(lv_screen_active());
     auto* shift = FindShift(lv_screen_active());
     ASSERT_NE(shift, nullptr);
+    auto* header = lv_obj_get_parent(shift);
+    auto* context = lv_obj_get_child(header, 1);
+    ASSERT_TRUE(lv_obj_check_type(context, &lv_label_class));
+    EXPECT_EQ(lv_label_get_long_mode(context), LV_LABEL_LONG_DOT);
+    EXPECT_LE(lv_obj_get_x(context) + lv_obj_get_width(context),
+              UI_HEADER_STATUS_X - UI_HEADER_GAP);
+    EXPECT_EQ(lv_obj_get_height(context), lv_font_get_line_height(UI_FONT_BODY));
+    lv_refr_now(display);
+    flushes = 0;
+    nav.refreshContext();
+    lv_refr_now(display);
+    EXPECT_EQ(flushes, 0u);  // DOT text must not cause an identical refresh to repaint.
+
     lv_area_t area;
     lv_obj_get_coords(shift, &area);
     wavex_ui::TouchContact contacts[] = {{10, {(area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2}},

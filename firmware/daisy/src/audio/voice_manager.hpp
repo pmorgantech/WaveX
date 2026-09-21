@@ -141,6 +141,7 @@ struct VoiceSampleState {
     void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
 
     float source_level = 1.0f;
+    float unmixed_level = 1.0f, oscillator_mix = 0.0f;
     // Dry source properties survive a zero level/mix and repeated live edits.
     float dry_level = 1.0f, dry_increment = 1.0f, key_ratio = 1.0f;
     uint8_t oscillator = 0xFF;
@@ -172,6 +173,7 @@ struct Voice : VoiceSampleState {
     double sequence_gate_tick = 0;
     uint8_t sequence_lane = 0xff;
     uint16_t sequence_release_offset = UINT16_MAX;
+    bool preview = false;  // raw sample audition, independent of Track sound edits
     LiveNoteId live_note;  // empty for sequencer/audition triggers
 
     uint8_t render_channels = 1;  // reservation lasts through the release tail
@@ -206,6 +208,7 @@ struct Voice : VoiceSampleState {
     float mod_oscillator_pitch_mul[2] = {1.0f, 1.0f};
     float mod_pan_offset = 0.0f;
     float mod_resonance_offset = 0.0f;
+    float mod_oscillator_mix_offset = 0.0f;
 
     // Per-trigger modulation sources (SRC_VELOCITY/SRC_NOTE/SRC_RANDOM),
     // sampled once at Trigger() and held constant for the voice's lifetime -
@@ -229,6 +232,9 @@ struct Voice : VoiceSampleState {
         mod_oscillator_pitch_mul[1] = mods.oscillator_pitch_mul[1];
         mod_pan_offset = mods.pan_offset;
         mod_resonance_offset = mods.resonance_offset;
+        mod_oscillator_mix_offset = mods.oscillator_mix_offset;
+        lfo[0].SetRateMultiplier(mods.lfo_rate_mul[0]);
+        lfo[1].SetRateMultiplier(mods.lfo_rate_mul[1]);
     }
 
     float SourcePitchModulation(const VoiceSampleState& source) const {
@@ -236,6 +242,12 @@ struct Voice : VoiceSampleState {
         // oscillator identity. Unassigned/sample-preview sources stay common-only.
         return mod_pitch_mul *
                (source.oscillator < 2 ? mod_oscillator_pitch_mul[source.oscillator] : 1.f);
+    }
+    float SourceLevel(const VoiceSampleState& source) const {
+        if (source.oscillator >= 2 || mod_oscillator_mix_offset == 0.f)
+            return source.source_level;
+        const float mix = std::clamp(source.oscillator_mix + mod_oscillator_mix_offset, 0.f, 1.f);
+        return source.dry_level * source.unmixed_level * (source.oscillator ? mix : 1.f - mix);
     }
 };
 
@@ -251,6 +263,7 @@ struct VoiceSampleParams {
     uint32_t sample_frames = 0, sample_rate_hz = 0;
     uint8_t channels = 1, note = 60, root_note = 60;
     float pitch_ratio_mul = 1.0f, source_level = 1.0f;
+    float unmixed_level = 1.0f, oscillator_mix = 0.0f;
     float dry_pitch_ratio = 1.0f, dry_level = 1.0f;
     uint8_t oscillator = 0xFF, key_note = 60;
     bool keytrack = true, drum = false;
@@ -263,6 +276,7 @@ struct VoiceSampleParams {
     uint8_t loop_crossfade_ms = 0;
 };
 struct VoiceTriggerParams : VoiceSampleParams {
+    bool preview = false;
     double sequence_gate_tick = 0;
     uint8_t sequence_lane = 0xff;
     uint16_t sequence_release_offset = UINT16_MAX;
@@ -318,6 +332,7 @@ struct ModSlotResolver {
 struct VoiceInstrumentParams {
     struct Oscillator {
         float level = 1, tune_ratio = 1;
+        float unmixed_level = 1;
         bool keytrack = true;
     };
     bool enabled = false;
@@ -325,6 +340,7 @@ struct VoiceInstrumentParams {
     FilterTopology filter_topology = FilterTopology::WaveXSvf;
     FilterConfig filter_config;
     float gain = 1, pan = .5f;
+    float oscillator_mix = 0;
     Oscillator osc[2];
     VoiceAmpParams env[2];
     Protocol::InstLfoSettings lfo[Protocol::INST_LFO_COUNT];
@@ -440,6 +456,8 @@ class VoiceManager {
             live_pitch_scales_[p.track] = live_pitch_scale;
         }
         for (auto& v: voices_) {
+            if (v.preview)
+                continue;
             if (v.state != VoiceState::Playing)
                 continue;
             if (p.track != 0xFF && v.track != p.track)
@@ -652,8 +670,22 @@ class VoiceManager {
         return last_id;
     }
 
+    void StopGroup(uint64_t id) {
+        if (id)
+            for (auto& voice: voices_)
+                if (voice.group_id == id)
+                    voice.state = VoiceState::Idle;
+    }
+
     // Stale IDs are harmless after stealing, sample retirement or slot reuse.
     // As with keyboard note-off, a one-shot layer ignores a normal gate release.
+    void ReleaseGroupAt(uint64_t id, uint16_t offset) {
+        if (id)
+            for (auto& v: voices_)
+                if (v.state == VoiceState::Playing && v.group_id == id)
+                    v.sequence_release_offset = std::min(v.sequence_release_offset, offset);
+    }
+
     void ReleaseGroup(uint64_t id) {
         if (!id)
             return;
@@ -679,6 +711,7 @@ class VoiceManager {
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.start_offset_frames = params.start_offset_frames;
         v.track = params.track;
+        v.preview = params.preview;
         v.live_note = params.live_note;
         v.sequence_lane = params.sequence_lane;
         v.sequence_gate_tick = params.sequence_gate_tick;
@@ -705,6 +738,7 @@ class VoiceManager {
         v.mod_oscillator_pitch_mul[0] = v.mod_oscillator_pitch_mul[1] = 1.f;
         v.mod_pan_offset = 0.0f;
         v.mod_resonance_offset = 0.0f;
+        v.mod_oscillator_mix_offset = 0.0f;
 
         // Per-trigger modulation sources (§3): sampled once, held constant
         // for the voice's life. SRC_RANDOM reuses the sample-and-hold xorshift
@@ -946,7 +980,7 @@ class VoiceManager {
             // adding a stage to the sum.
             float pan = v.pan + v.mod_pan_offset;
             float gain = v.gain * v.mod_gain_mul;
-            if (track_mixer_) {
+            if (track_mixer_ && !v.preview) {
                 gain *= track_mixer_->GainFor(v.track);
                 // pan_offset is -1..+1 added onto a 0..1 voice pan, per the
                 // design. Clamped, so a hard offset pins rather than wrapping
@@ -959,6 +993,8 @@ class VoiceManager {
             const float left_gain = gain * (stereo ? std::min(1.f, 2.f * (1.f - pan)) : 1.f - pan);
             const float right_gain = gain * (stereo ? std::min(1.f, 2.f * pan) : pan);
             const bool dual = v.secondary.sample != nullptr;
+            const float source_level = v.SourceLevel(v);
+            const float second_level = dual ? v.SourceLevel(v.secondary) : 0.f;
             if (dual) {
                 const float rate = v.secondary.base_increment * VoicePitchScale(v) *
                                    v.SourcePitchModulation(v.secondary);
@@ -1019,13 +1055,13 @@ class VoiceManager {
                         s *= region_fade.Gain(frame);
                     if (fade2.Active())
                         s2 *= fade2.Gain(frame2);
-                    s = s * v.source_level + s2 * v.secondary.source_level;
+                    s = s * source_level + s2 * second_level;
                     if (!ended2)
                         v.secondary.AdvancePhase();
                 } else {
                     if (ended)
                         v.envelope.Release();
-                    s *= v.source_level;
+                    s *= source_level;
                     // The region fade shapes the SOURCE, before the filter,
                     // exactly as the dual path applies it. It used to sit
                     // after the filter and envelope, where a sample's
@@ -1180,7 +1216,7 @@ class VoiceManager {
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
-            const ModSlot* slots = resolver.Get(v.track);
+            const ModSlot* slots = v.preview ? nullptr : resolver.Get(v.track);
             ModSources sources = global;
             if (midi && v.track < midi->size()) {
                 sources.modwheel = (*midi)[v.track].wheel;
@@ -1209,6 +1245,8 @@ class VoiceManager {
             return;
         const auto& osc = p.osc[source.oscillator];
         source.source_level = source.dry_level * osc.level;
+        source.unmixed_level = osc.unmixed_level;
+        source.oscillator_mix = p.oscillator_mix;
         source.base_increment =
             source.dry_increment * osc.tune_ratio * (osc.keytrack ? source.key_ratio : 1.f);
     }
@@ -1221,6 +1259,8 @@ class VoiceManager {
         v.channel_mode =
             params.channels == 2 ? params.channel_mode : Protocol::SAMPLE_CH_AS_RECORDED;
         v.source_level = params.source_level;
+        v.unmixed_level = params.unmixed_level;
+        v.oscillator_mix = params.oscillator_mix;
         v.dry_level = params.dry_level;
         v.oscillator = params.oscillator;
         v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
@@ -1413,6 +1453,8 @@ class VoiceManager {
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
     float VoicePitchScale(const Voice& voice) const {
+        if (voice.preview)
+            return 1.f;
         return (voice.param_lock_mask & VoiceLockBit(Protocol::PARAM_PITCH))
                    ? voice.locked_pitch_scale
                    : LivePitchScale(voice.track);

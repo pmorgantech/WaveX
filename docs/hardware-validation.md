@@ -38,6 +38,10 @@ this document owns the runnable checks and their validation status.
 - [HV-026 — Stereo snap, seams and crossfade](#hv-026--stereo-snap-seams-and-crossfade)
 - [HV-027 — Sample playback channel selection](#hv-027--sample-playback-channel-selection)
 - [HV-028 — MIDI expression](#hv-028--midi-expression)
+- [HV-029 — Expanded modulation and live locks](#hv-029--expanded-modulation-and-live-locks)
+- [HV-030 — Codec and internal-mix recording](#hv-030--codec-and-internal-mix-recording)
+- [HV-031 — Arpeggiator](#hv-031--arpeggiator)
+- [HV-032 — Global LFO, held locks and diagnostics](#hv-032--global-lfo-held-locks-and-diagnostics)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -107,6 +111,10 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-026 | Stereo snap/seams and playback crossfade | Partial | Host policy/PCM/persistence checks pass; candidate callback comparison, listening and power-cycle checks remain open |
 | HV-027 | Sample playback channel selection | Partial | Automated channel/control/budget checks pass; listening, write recovery and full timing/soak remain open |
 | HV-028 | MIDI expression routing and reset | Partial | Host and console-injected board checks pass; physical MIDI, listening and full soak remain open |
+| HV-029 | Oscillator mix/LFO-rate routes and live locks | Partial | Host and live-lock HIL pass; 85.3713% Mono callback finding remains open; listening, panel and save/reboot acceptance remain open |
+| HV-030 | Codec/internal-mix recording | Partial | Two source workflows passed; later 25 MHz WAV write failed; signal, recovery and capacity remain open |
+| HV-031 | Instrument arpeggiator | Partial | Host timing and edit/generated-voice HIL pass; physical timing, persistence and soak remain open |
+| HV-032 | Global LFO, held locks and diagnostic counts | Partial | Four console-driven board tests pass; physical controls, listening and extended checks remain open |
 
 ## HV-001 — SD card formatting
 
@@ -1150,9 +1158,23 @@ Gallery: `logs/ui-pages-20260921/index.html`; portable bundle:
 `capture-info.json` records normal, profiling-disabled images matching HV-028.
 Serial image transfers with missing data were retried; final PNG dimensions
 and manifest references validate. Existing contrast, clipping, stale text and
-Main Menu scrolling issues are retained in the roadmap UI follow-up.
+Main Menu scrolling issues were subsequently fixed and recaptured below.
 This confirms framebuffer contents only; physical panel/touch/encoder checks
 and the phase gate remain open. No files were saved during capture.
+
+**UI polish recapture:** reviewed eleven affected views in
+`logs/ui-polish-20260921/index.html` (portable bundle:
+`logs/ui-polish-20260921.zip`): Main Menu first/last items, MIDI Diagnostics,
+Pad Map assignment/naming, Songs, all three new modulation destinations and
+Step Notes live-record instructions. Header context now ends before the meters;
+disabled Song controls and Pad Map dialogs retain the dark palette. MIDI cards
+explicitly disclose unavailable diagnostic fields; counter wiring was still open
+at this capture and is now implemented with acceptance tracked in HV-032.
+Manifest/PNG validation passes at 1280 × 800. `capture-info.json` records
+the per-image firmware identity: HV-029's HIL image, followed by its final
+Songs-only style correction. Both are profiling-disabled. Missing serial image
+data was retried. These captures establish framebuffer layout, not physical
+contrast, touch feel or rendering/audio behavior under load.
 
 ## HV-019 — Note-group allocation policy
 
@@ -2185,6 +2207,177 @@ Profiling is disabled. No physical checkbox is closed by these checks.
 
 Host/parser/forwarder and console-injected checks are partial evidence only;
 they do not establish physical MIDI timing or listening acceptance.
+
+## HV-029 — Expanded modulation and live locks
+
+**Introduced:** working changes after `90b7329`, 2026-09-21.
+**Gate:** [Phase 2.5](roadmap.md#phase-25--sampler-instrument-layer).
+**Behavior:** [modulation and live lock capture](features/param-locks-and-modulation.md).
+**Setup:** matching images, two distinguishable resident oscillator samples,
+MIDI wheel/channel pressure, panel controls, audio capture/listening and DWT logs.
+
+- [ ] Route wheel to Osc mix; sweep both extremes including a base mix of zero.
+  Confirm independent levels, zone gain and an OSC2-only primary source remain
+  correct. Clear routes and Apply/Revert without a retrigger or stuck mix.
+- [ ] Route envelopes/LFOs to each LFO rate. Check Hz and Sync, ±4-octave depth,
+  0.01–100 Hz limits, phase continuity and stable self/cross modulation. Save an
+  Instrument and power-cycle/reload; settings and audible movement must return.
+- [ ] Step Notes → Live rec → Play, then move Play-page cutoff/resonance/ADSR.
+  Inspect Locks for the armed Track: repeated parameters replace their slot;
+  the fifth distinct parameter evicts the first slot. Other Tracks, stopped
+  transport, Song playback and Play/Step/Erase modes must not capture motion.
+- [ ] Play back captured locks and compare with live motion. Save Pattern/Project,
+  power-cycle/reload and verify the overrides. Confirm that note gates, swing,
+  note quantization and a queued Pattern replacement remain correct.
+- [ ] Repeat the full callback workload, file operations and one-hour mixed-channel
+  soak on final images. Meet the unchanged capacity threshold and zero-underrun
+  requirements; short diagnostic runs do not pass this gate.
+
+**Partial evidence, 2026-09-21:** protocol destination/persistence tests and
+Daisy mapping, phase/lifetime, lock timing/ownership tests pass. The two-board
+`tests/hil/test_live_locks.py` check passed (9.74 s): captured five controls,
+confirmed UI feedback, four-slot eviction, wrong-Track/stopped protection and
+no added notes. Evidence: `logs/live-lock-hil.log`. This is console-injected
+control traffic, not physical knob or MIDI latency/listening evidence.
+
+**Final normal-image recheck:** both new HIL cases passed (15.93 s), covering
+live capture/readback and selection/preview/Apply/Revert of all three added
+modulation destinations. Evidence: `logs/modulation-ui-final-hil.log`.
+The complete container pre-commit suite passed both firmware builds and shared,
+ESP32 and Daisy host tests (476, 382 and 832 respectively). Stage B also compiled;
+it was not flashed. The subsequent header layout fix passes all 382 frontend
+tests and the ESP32 build (`logs/ui-header-checks-final.log`).
+
+HIL profiling-disabled image SHA256:
+Daisy `b01d214d3621a5f1ae05b667f4d385c7dcb218468b9ae543d87c2aa13de801bd`;
+ESP32 `b01c43e9b162dcf58e01cadecd0004155f51accdea989d27b0510779aa246ecd`.
+The final Songs-only disabled-style correction also passes the ESP32 build and
+all 382 frontend tests (`logs/ui-song-contrast-final-checks.log`). Final flashed
+ESP32 image: `f56a1b535240b5c370e694d9f1e18e16db488f01bd091223ef3cea323f39e91e`.
+Daisy is unchanged; this UI-only correction does not repeat the feature HIL.
+The sparse-publication DWT image was
+`1da8f16001f04a5e578f3ba32acec67b8d16aef2a6518aff22d333981af442c4`.
+
+DWT images, workload details and the over-threshold live-lock result are in
+[the callback report](callback-performance-log.md). Extended timing, physical
+controls, listening and save/reboot acceptance remain open.
+
+## HV-030 — Codec and internal-mix recording
+
+**Design:** [Sampling and recording](features/sampling-and-recording.md).
+**Status:** partial; implementation continuation authorized on 2026-09-21.
+
+Setup: matched normal images, writable card, a stereo codec-input test signal and
+resident sequenced material for internal resampling. Record tested image hashes.
+
+- [ ] For codec stereo, left, right and internal mix: arm manually and by threshold;
+  verify pre-roll chronology, selected-source RMS/peak/clip feedback, maximum
+  length and input monitoring without internal feedback.
+- [ ] Stop, audition within 100 ms, save under a unique name, Done, assign to an
+  Instrument/Track, sequence, reboot and reload. Verify stereo content and markers.
+- [ ] Inject full/failed media, allocation refusal, ring overflow, stale take IDs,
+  reconnect and delayed callback acknowledgements. Preserve the contiguous RAM
+  take on failure; no replayed mutation or freed sounding buffer.
+- [ ] Measure capture/save with eight Mono and four stereo voices, both oscillators,
+  modulation/locks and streaming. Complete capacity and zero-underrun soak gates.
+
+2026-09-21 partial: host capture, writer, ownership, protocol and UI checks pass.
+Both codec-stereo and internal-source board flows pass capture, audition, Save,
+Done, Track assignment and unload (`logs/recording-shorttemp-hil.log`, two tests).
+Long temporary names produced `FR_NO_FILE` at sidecar publication at both 25 and
+12.5 MHz; short transaction names passed with normal clock negotiation restored.
+A real-FatFs RAM-disk reproduction passed with long names, so the precise target
+cause is not established. A subsequent matched-image retry hit `FR_DISK_ERR`
+during WAV data write at 25 MHz (`logs/recording-task3-hil.log` and
+`logs/recording-task3-retry-hil.log`); the RAM take remained available.
+Full-workload short screens captured 960,000 frames per source: internal mix
+with eight Mono voices (peak 9,299, no clipped frames) and codec stereo with
+four stereo voices (background input peak 9). Both had zero capture errors and
+sampled stream underruns, plus one Pattern file cycle after discarding the take.
+A 90-second take was correctly refused for insufficient resident memory.
+See [DWT evidence](callback-performance-log.md#recording-arpeggiator-and-performance-controls--2026-09-21).
+Physical input signal/content, listening, reboot recovery, latency, loaded WAV
+saving and soak remain open. Final image evidence follows below.
+
+## HV-031 — Arpeggiator
+
+**Design:** [Arpeggiator](features/arpeggiator.md).
+**Status:** partial; host and selected board checks do not close physical acceptance.
+
+Setup: matched images, a gated keyboard Instrument, DIN/USB MIDI chord input and a
+DAW clock source; enable the Instrument Arp panel.
+
+- [ ] Hear every mode, octave range, division, gate, velocity and latch behavior;
+  repeated pitches and stale releases must preserve the current chord/group.
+- [ ] Verify Apply/Revert and Instrument/Bank/Project save/reload, rebind, disable,
+  Stop/Continue, reconnect and live recording of generated notes.
+- [ ] Run ten minutes against MIDI slave clock without grid drift; measure physical
+  note latency and full callback workload, then complete the one-hour soak.
+
+2026-09-21 host evidence: golden modes/latch/identity and ten-minute exact sample
+clock tests pass (`logs/arp-core-tests.log`, `logs/arp-runtime-tests.log`).
+
+2026-09-21 board evidence: Instrument Arp edits, shared Apply/Revert and generated
+voice admission pass (`logs/arpeggiator-hil.log`, one test). Physical MIDI,
+listening, generated-note recording and persistence combinations remain open.
+
+## HV-032 — Global LFO, held locks and diagnostics
+
+**Design:** [Modulation](features/param-locks-and-modulation.md) and
+[UI architecture](ui-architecture.md).
+**Status:** partial; selected console-driven checks do not close physical acceptance.
+
+Setup: matched images, a modulated Instrument, wired encoders, MIDI input and a
+one-step Pattern. Preserve image hashes and console/render logs.
+
+- [ ] Exercise global waveform/Hz/sync/restart/reset; navigate away and back,
+  Apply/Revert/Save an Instrument, and confirm the session settings stay separate.
+  Listen to free/transport/note restart and MIDI-tempo following.
+- [ ] Short-tap and hold steps; turn each encoder while held. No hold toggles a
+  note. Release/lost touch, Track change, navigation, reconnect and Pattern
+  replacement cancel the hold and reject stale edits. Check physical feel/latency.
+- [ ] Record five distinct controls into one step. Hear/inspect four resulting
+  locks and see the named eviction notice on Play and Sequencer; repeated updates
+  to one parameter do not report eviction. Check a burst and return to normal header.
+- [ ] Send known MIDI note/CC/clock counts per interval; compare diagnostics with
+  the source, excluding UI/generated notes. Reopen diagnostics without boot-count
+  spikes and disconnect without stale values. Verify clock/transport readback.
+- [ ] Capture changed pages and measure entry/idle/edit rendering; repeat the
+  callback workload and retain all capacity and soak requirements.
+
+2026-09-21 board evidence: four tests pass for global-LFO edit/reset/re-entry,
+held-step editing without toggling and cancellation on Track change, actual
+received MIDI counters, and fifth-lock eviction notice/readback
+(`logs/task3-controls-hil.log`). Console injection does not establish panel or
+physical MIDI behavior. Image and render evidence is recorded below.
+
+### Recording and controls image provenance — 2026-09-21
+
+Final normal, profiling-disabled images over `90b7329+`:
+
+- Daisy SHA256 `bb4502317c87549b523f402e60c5d7f0017869d3218b4b0337a8da73fd00f822`.
+- ESP32 SHA256 `af3073b1f3b0202962c1b131f737a9ce25d3fb84f57a5565a7e6c4a6b4076510`.
+
+484 shared, 863 Daisy and 388 ESP32 host tests pass; normal Stage A and alternate
+Stage B output/CV configurations compile. These are software checks, not whole
+phase gates. DWT and rendering use separate explicitly identified profile images.
+
+Normal-image HIL used ESP32
+`46202818710dd705337bd27b2b08a01d7cc8f8ab8e3af31a4bcb6c13060c2b52`
+before the final unit-label/recorder-help text cleanup. Five controls/arpeggiator
+tests pass; both recorder
+workflows capture and audition, then fail Save with `FR_DISK_ERR` (first at WAV
+header write, then directory setup). RAM take retention was confirmed and the
+bench take discarded afterward. Evidence: `logs/task3-final-hil.log`,
+`logs/hil-20260921-182530.log`. These failures keep HV-030 Save/recovery open.
+
+[Render measurements](ui-latency-notes.md#recording-and-performance-controls--2026-09-21)
+confirm partial individual edits and retain the 243.52 ms Locks-entry redraw
+as open follow-up. All 68 native gallery views were refreshed and their
+1280×800 PNG dimensions verified: `logs/ui-pages-20260921/index.html` and
+`logs/ui-pages-20260921.zip`. Final-image global-LFO edit/reset/re-entry passes
+(`logs/task3-final-global-hil.log`, one test); screenshots verify the corrected
+Global LFO unit labels and state-specific recording help.
 
 ## Recording a validation session
 

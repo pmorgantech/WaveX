@@ -125,6 +125,7 @@ struct TriggerEvent {
     uint8_t step = 0;
     uint8_t velocity = 0;
     uint8_t note = 60;
+    bool arp = false;        // Runtime-generated note, never serialized into a Pattern.
     bool is_retrig = false;  // false = the step's primary hit, true = a retrig repeat
     uint8_t param_lock_count = 0;
     ParamLock param_locks[kMaxParamLocks];

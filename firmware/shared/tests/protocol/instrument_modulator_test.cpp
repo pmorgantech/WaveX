@@ -86,7 +86,8 @@ TEST(InstrumentModulatorProtocol, RejectsInvalidIdentityRangesAndNonFiniteValues
 
 TEST(InstrumentModulatorProtocol, DestinationsRoundTripAndFutureIdsRemainRejected) {
     static_assert(INST_MOD_RESONANCE == 5 && INST_MOD_OSC1_PITCH == 6 && INST_MOD_OSC2_PITCH == 7 &&
-                  INST_MOD_DEST_COUNT == 8);
+                  INST_MOD_OSC_MIX == 8 && INST_MOD_LFO1_RATE == 9 && INST_MOD_LFO2_RATE == 10 &&
+                  INST_MOD_DEST_COUNT == 11);
     for (uint8_t destination = 0; destination <= 13; ++destination) {
         InstModOpMessage in;
         in.request_id = 1;

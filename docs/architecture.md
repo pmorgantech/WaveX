@@ -530,7 +530,13 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    imports on any number of Tracks share samples by path), pad mapping, WXI
    save/load, Banks, two oscillators, saved polyphony controls and Mono held-key
    fallback exist. Melodic lanes, gates and note recording are implemented;
-   hardware acceptance remains open. Audio sampling/recording remains Phase 2.5 work.
+   hardware acceptance remains open. Oscillator-mix and LFO-rate modulation
+   destinations and live Play-control lock capture are implemented, with
+   selected two-board checks recorded in HV-029. Codec-input and internal
+   post-master recording, Instrument arpeggiator, session-global LFO editing,
+   held-step locks and eviction notices are implemented (HV-030–HV-032).
+   The user authorized continuation ahead of measured callback remediation;
+   physical acceptance and the capacity checkpoint remain open.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the
    bounded render-job scheduler and destructive editing/mangling pipeline are
    unimplemented.
