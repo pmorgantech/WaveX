@@ -459,6 +459,13 @@ does not close it; add their runnable entries as those implementations arrive.
 
 ## HV-006 — Mixer controls and master
 
+- [ ] **Track pan regression (2026-09-22):** Hold a keyboard note, move Play pan,
+  then trigger more notes and a sequenced step. Held/new notes must agree;
+  another Track and sample preview must stay unchanged, and a step pan lock
+  must override the Track adjustment. Include noncentral zone/Instrument pan
+  and capture matched before/after DWT peaks. Physical/listening and timing
+  results are not yet recorded.
+
 **Status:** Open — host/compile checks only. No physical results recorded.
 **Gate:** [Mixer v1](features/output-routing-and-mixer.md),
 [Phase 2 timing](roadmap.md). Introduced by the audible master/readback change.

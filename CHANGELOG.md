@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Retain session Track pan for future notes as well as held voices, combining
+  it with Instrument/zone pan while preserving step locks and preview isolation.
+
 - Keep melodic Song gates alive by deriving callback cleanup from the playing
   Project pattern; pending editor changes no longer affect cleanup early.
 

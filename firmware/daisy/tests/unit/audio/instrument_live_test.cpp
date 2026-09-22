@@ -130,6 +130,39 @@ TEST_F(InstrumentLiveTest, ZonePanAndLocksSurviveOtherControlsAndOtherTracks) {
     EXPECT_FLOAT_EQ(vm.GetVoice(0).pan, 0);
     EXPECT_FLOAT_EQ(vm.GetVoice(2).pan, 1);
 }
+TEST_F(InstrumentLiveTest, TrackPanAppliesToHeldAndFutureNotesWithoutCompounding) {
+    zone.pan = .8f;
+    ins.trim_pan = .9f;  // unclamped base 1.2; Track pan offsets this before clamping
+    vm.Trigger(TriggerParams());
+    VoiceLiveParams live;
+    live.track = 0;
+    live.pan = .1f;
+    PrepareInstrumentLive(ins, live);
+    vm.ApplyLiveParams(live);
+    vm.Trigger(TriggerParams());
+    EXPECT_NEAR(vm.GetVoice(0).pan, .8f, 1e-6f);
+    EXPECT_NEAR(vm.GetVoice(1).pan, .8f, 1e-6f);
+    vm.ApplyLiveParams(live);
+    EXPECT_NEAR(vm.GetVoice(0).pan, .8f, 1e-6f);
+    auto p = TriggerParams();
+    p.track = 1;
+    vm.Trigger(p);
+    EXPECT_FLOAT_EQ(vm.GetVoice(2).pan, 1.f);
+    p.track = 0;
+    p.preview = true;
+    vm.Trigger(p);
+    EXPECT_FLOAT_EQ(vm.GetVoice(3).pan, 1.f);
+    p.preview = false;
+    WaveX::Sequencer::ParamLock lock{WaveX::Protocol::PARAM_PAN, 0};
+    ApplyParamLocks(p, &lock, 1);
+    vm.Trigger(p);
+    vm.ApplyLiveParams(live);
+    EXPECT_FLOAT_EQ(vm.GetVoice(4).pan, 0.f);
+    vm.Init(48000);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).pan, .5f);
+    vm.Trigger(TriggerParams());
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).pan, 1.f);
+}
 TEST_F(InstrumentLiveTest, ModulatorUpdatesPreserveEnvelopeAndLfoPhases) {
     ins.env[1] = {1, 0, 1, .1f};
     ins.env[2] = {1, 0, 1, .1f};

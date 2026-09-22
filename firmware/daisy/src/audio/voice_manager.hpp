@@ -158,6 +158,7 @@ struct Voice : VoiceSampleState {
     float lfo_pitch_ratio = 1;
     bool lfo_pitch_known = false;
     float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
+    float base_pan = 0.5f;             // before the session Track pan adjustment
     uint8_t note = 0;                  // MIDI note that triggered this voice
     uint16_t start_offset_frames = 0;  // consumed by the next Render() call
     uint8_t track = 0;                 // Track that owns this voice
@@ -405,6 +406,7 @@ class VoiceManager {
         note_pitch_.Init();
         SetTempo(120);
         live_pitch_scales_.fill(1.0f);
+        live_pan_offsets_.fill(0.0f);
         // DSP initialization belongs to startup, not every note-on. Trigger
         // only installs tuning and resets the active filter's integrators.
         for (auto& voice: voices_) {
@@ -452,8 +454,10 @@ class VoiceManager {
         const float live_pitch_scale = std::pow(2.0f, p.pitch_semitones / 12.0f);
         if (p.track == 0xFF) {
             live_pitch_scales_.fill(live_pitch_scale);
+            live_pan_offsets_.fill(p.pan - .5f);
         } else if (p.track < live_pitch_scales_.size()) {
             live_pitch_scales_[p.track] = live_pitch_scale;
+            live_pan_offsets_[p.track] = p.pan - .5f;
         }
         for (auto& v: voices_) {
             if (v.preview)
@@ -518,10 +522,11 @@ class VoiceManager {
                 for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
                     v.lfo[i].UpdateSettings(p.instrument.lfo[i], sample_rate_, v.lfo_pitch_ratio);
             }
-            if (unlocked(Protocol::PARAM_PAN))
-                v.pan = p.instrument.enabled && v.oscillator < 2
-                            ? std::clamp(v.zone_pan + p.instrument.pan + p.pan - 1.f, 0.f, 1.f)
-                            : p.pan;
+            if (unlocked(Protocol::PARAM_PAN)) {
+                if (p.instrument.enabled && v.oscillator < 2)
+                    v.base_pan = v.zone_pan + p.instrument.pan - .5f;
+                v.pan = std::clamp(v.base_pan + p.pan - .5f, 0.f, 1.f);
+            }
             // Multiply the note's own increment rather than overwrite it, so a
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
@@ -707,7 +712,13 @@ class VoiceManager {
         v.dry_gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.gain = v.dry_gain * params.instrument_gain;
         v.zone_pan = params.zone_pan;
-        v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
+        v.base_pan = params.pan;
+        const float pan_offset =
+            !params.preview && !(params.param_lock_mask & VoiceLockBit(Protocol::PARAM_PAN)) &&
+                    params.track < live_pan_offsets_.size()
+                ? live_pan_offsets_[params.track]
+                : 0.f;
+        v.pan = std::clamp(v.base_pan + pan_offset, 0.f, 1.f);
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.start_offset_frames = params.start_offset_frames;
         v.track = params.track;
@@ -1463,6 +1474,7 @@ class VoiceManager {
         return track < live_pitch_scales_.size() ? live_pitch_scales_[track] : 1.0f;
     }
     std::array<float, WaveX::Mix::kNumTracks> live_pitch_scales_{};
+    std::array<float, WaveX::Mix::kNumTracks> live_pan_offsets_{};
     // SRC_RANDOM sample-and-hold seed (lfo.hpp's xorshift idiom), advanced
     // once per Trigger(). Non-zero default MUST also be set in Init() -
     // see that function's comment.
