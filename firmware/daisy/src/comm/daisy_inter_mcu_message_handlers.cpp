@@ -73,6 +73,19 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+    // The engine owns busy refusal and echoes the typed request ID. Dispatch
+    // before broad storage gates so a rejected load still gets a correlated reply.
+    if (msg_type == MSG_SAMPLE_LOAD_REQ) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SampleLoadRequest request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSampleLoadRequest(request))
+                AudioEngine::OnSampleLoad(request.sample, request.request_id);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_SAMPLE_PLAYHEAD) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         SamplePlayheadRequest request;

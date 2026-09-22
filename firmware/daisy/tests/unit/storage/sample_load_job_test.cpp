@@ -273,3 +273,25 @@ TEST_F(SampleLoadJobTest, ResidentReuseSucceedsWithLessFreeRamThanFileSize) {
     EXPECT_EQ(after.largest_free_bytes, before.largest_free_bytes);
     memory.release(&occupied);
 }
+
+TEST_F(SampleLoadJobTest, CorrelationSurvivesResidentReuseFailureAndReplyBackpressure) {
+    ASSERT_TRUE(job.Begin(request, 0x12340001));
+    Finish();
+    const auto resident = job.Status().sample_id;
+    ASSERT_EQ(job.RequestId(), 0x12340001u);
+    EXPECT_FALSE(job.Begin(request, 0x12340002));
+    EXPECT_EQ(job.RequestId(), 0x12340001u);
+    job.ReplySent();
+    request.sample_id = 999;
+    ASSERT_TRUE(job.Begin(request, 0x12340002));
+    Finish();
+    EXPECT_EQ(job.RequestId(), 0x12340002u);
+    EXPECT_EQ(job.Status().sample_id, resident);
+    EXPECT_EQ(job.BytesRead(), 0u);
+    job.ReplySent();
+    std::strcpy(request.path, "/missing.wav");
+    ASSERT_TRUE(job.Begin(request, 0x12340003));
+    Finish();
+    EXPECT_EQ(job.Status().state, SAMPLE_STATUS_LOAD_FAILED);
+    EXPECT_EQ(job.RequestId(), 0x12340003u);
+}

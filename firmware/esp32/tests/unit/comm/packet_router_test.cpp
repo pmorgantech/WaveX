@@ -87,14 +87,15 @@ class PacketRouterTest : public ::testing::Test {
     // strong-override handlers. Used to assert "nothing was dispatched".
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
-        return cap.sample_file_status_calls + cap.seq_song_status_calls + cap.seq_slot_page_calls +
-               cap.seq_slot_status_calls + cap.project_status_calls + g_handlers.sync_calls +
-               g_handlers.error_calls + g_handlers.unknown_calls + cap.oscillator_calls +
-               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
-               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
-               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
-               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
-               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
+        return cap.sample_load_reply_calls + cap.sample_file_status_calls +
+               cap.seq_song_status_calls + cap.seq_slot_page_calls + cap.seq_slot_status_calls +
+               cap.project_status_calls + g_handlers.sync_calls + g_handlers.error_calls +
+               g_handlers.unknown_calls + cap.oscillator_calls + cap.instrument_map_calls +
+               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
+               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
+               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
+               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
+               cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -982,4 +983,31 @@ TEST_F(PacketRouterTest, RecordingStatusRejectsTruncatedAndInvalidReplies) {
     router_->route_packet(packet.data(), packet.size());
     EXPECT_EQ(GetInterMcuCapture().record_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().record_status.request_id, 19u);
+}
+
+TEST_F(PacketRouterTest, CorrelatedSampleLoadAcceptsOnlyExactValidReplies) {
+    SampleLoadReply reply;
+    reply.request_id = 0x12345678;
+    reply.status = SampleStatusMessage(91, SAMPLE_STATUS_LOAD_COMPLETE, 2, 48000, 5000);
+    router_->route_uart_message(
+        MSG_SAMPLE_LOAD_REPLY, reinterpret_cast<const uint8_t*>(&reply), sizeof(reply), 0, 1);
+    ASSERT_EQ(GetInterMcuCapture().sample_load_reply_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().sample_load_reply.request_id, reply.request_id);
+    EXPECT_EQ(GetInterMcuCapture().sample_load_reply.status.sample_id, 91);
+    for (size_t n = 0; n < sizeof(reply); ++n)
+        router_->route_uart_message(
+            MSG_SAMPLE_LOAD_REPLY, reinterpret_cast<const uint8_t*>(&reply), n, 0, 2);
+    reply.version = 2;
+    router_->route_uart_message(
+        MSG_SAMPLE_LOAD_REPLY, reinterpret_cast<const uint8_t*>(&reply), sizeof(reply), 0, 3);
+    reply.version = 1;
+    reply.request_id = 0;
+    router_->route_uart_message(
+        MSG_SAMPLE_LOAD_REPLY, reinterpret_cast<const uint8_t*>(&reply), sizeof(reply), 0, 4);
+    EXPECT_EQ(GetInterMcuCapture().sample_load_reply_calls, 1);
+    reply.request_id = 44;
+    auto frame =
+        ProtocolTestHelper::CreateWaveXPacket(MSG_SAMPLE_LOAD_REPLY, &reply, sizeof(reply));
+    router_->route_packet(frame.data(), frame.size());
+    EXPECT_EQ(GetInterMcuCapture().sample_load_reply_calls, 2);
 }

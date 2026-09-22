@@ -1098,6 +1098,23 @@ esp_err_t inter_mcu_send_sample_stop_req() {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+static WaveX::Comm::ListenerSlot<wavex_sample_load_cb_t> s_sample_load_listener;
+void inter_mcu_set_sample_load_listener(wavex_sample_load_cb_t cb, void* user_data) {
+    s_sample_load_listener.set(cb, user_data);
+}
+void inter_mcu_invoke_sample_load_callback(const WaveX::Protocol::SampleLoadReply& reply) {
+    s_sample_load_listener.invoke(reply);
+}
+esp_err_t inter_mcu_send_sample_load(const WaveX::Protocol::SampleLoadRequest& request) {
+    if (!s_initialized || s_suspended)
+        return ESP_ERR_INVALID_STATE;
+    if (!WaveX::Protocol::IsValidSampleLoadRequest(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SAMPLE_LOAD_REQ, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,
                                          uint16_t sample_rate,

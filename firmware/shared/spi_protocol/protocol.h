@@ -216,6 +216,8 @@ enum MessageType : uint8_t {
     MSG_SEQ_LOCK_NOTICE = 0x92,
     MSG_BROWSE_PAGE_REQ = 0x93,  // Correlated directory read, payload version 1
     MSG_BROWSE_PAGE_RESP = 0x94,
+    MSG_SAMPLE_LOAD_REQ = 0x95,  // Correlated resident load, payload version 1
+    MSG_SAMPLE_LOAD_REPLY = 0x96,
     MSG_ERROR = 0xFF
 };
 
@@ -845,6 +847,39 @@ struct SampleStatusMessage {
           sample_rate(sample_rate_),
           frames_played(frames_played_) {}
 } __attribute__((packed));
+
+// Resident load identity is separate from the Pool ID. Legacy LOAD/STATUS
+// remains supported for bench clients; the frontend uses this versioned pair.
+struct SampleLoadRequest {
+    uint32_t request_id = 0;
+    uint8_t version = 1;
+    SampleLoadMessage sample{};
+} __attribute__((packed));
+struct SampleLoadReply {
+    uint32_t request_id = 0;
+    uint8_t version = 1;
+    SampleStatusMessage status{};
+} __attribute__((packed));
+inline bool IsSampleLoadState(uint8_t state) {
+    return state == SAMPLE_STATUS_LOAD_COMPLETE || state == SAMPLE_STATUS_LOAD_PROGRESS ||
+           state == SAMPLE_STATUS_LOAD_FAILED;
+}
+inline bool IsValidSampleLoadRequest(const SampleLoadRequest& m) {
+    return m.request_id && m.version == 1 && m.sample.path[0] &&
+           memchr(m.sample.path, 0, sizeof(m.sample.path));
+}
+inline bool IsValidSampleLoadReply(const SampleLoadReply& m) {
+    if (!m.request_id || m.version != 1 || !IsSampleLoadState(m.status.state))
+        return false;
+    if (m.status.state == SAMPLE_STATUS_LOAD_COMPLETE)
+        return m.status.sample_id != 0;
+    if (m.status.state == SAMPLE_STATUS_LOAD_PROGRESS)
+        return m.status.frames_played <= 100;
+    return m.status.frames_played >= SAMPLE_LOAD_FAIL_NO_SDRAM &&
+           m.status.frames_played <= SAMPLE_LOAD_FAIL_BUSY;
+}
+static_assert(sizeof(SampleLoadRequest) == 5 + sizeof(SampleLoadMessage), "load request size");
+static_assert(sizeof(SampleLoadReply) == 17, "load reply size");
 
 // Display-only audio position, absolute source frames. Never an SD read pointer.
 struct SamplePlayheadRequest {
@@ -3505,6 +3540,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "HEARTBEAT";
         case MSG_ACK:
             return "ACK";
+        case MSG_SAMPLE_LOAD_REQ:
+            return "SAMPLE_LOAD_REQ";
+        case MSG_SAMPLE_LOAD_REPLY:
+            return "SAMPLE_LOAD_REPLY";
         case MSG_BROWSE_PAGE_REQ:
             return "BROWSE_PAGE_REQ";
         case MSG_BROWSE_PAGE_RESP:

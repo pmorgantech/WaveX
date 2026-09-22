@@ -272,6 +272,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     // Selection metadata below needs live widgets and may start an SFZ probe.
     is_initialized_ = true;
     inter_mcu_set_sample_status_listener(sample_status_callback, this);
+    inter_mcu_set_sample_load_listener(sample_load_callback, this);
     inter_mcu_set_inst_status_listener(instrument_status_callback, this);
     s_active_instance_ = this;
     // Load decides whether to ask before binding from the Track's state
@@ -325,6 +326,7 @@ void UISampleBrowser::onExit() {
     ESP_LOGI(TAG,
              "=== SAMPLE BROWSER ON_EXIT: Unregistering callback and clearing active instance");
     inter_mcu_set_sample_status_listener(nullptr, nullptr);
+    inter_mcu_set_sample_load_listener(nullptr, nullptr);
     inter_mcu_set_inst_status_listener(nullptr, nullptr);
     sample_replies_.Clear();
     instrument_replies_.Clear();
@@ -931,14 +933,9 @@ void UISampleBrowser::processDeferredUpdates_() {
         BusyOverlay::hide();
         updateStatus("Response overflow; refresh before continuing");
     }
-    WaveX::Protocol::SampleStatusMessage sample;
+    WaveX::Protocol::SampleLoadReply sample;
     for (unsigned i = 0; i < 16 && sample_replies_.Pop(sample); ++i)
-        applySampleStatus(sample.sample_id,
-                          sample.state,
-                          sample.sample_rate,
-                          sample.channels,
-                          sample.frames_played,
-                          this);
+        applySampleStatus(sample, this);
     WaveX::Protocol::InstStatusMessage instrument;
     for (unsigned i = 0; i < 16 && instrument_replies_.Pop(instrument); ++i)
         applyInstrumentStatus(instrument, this);
@@ -1337,9 +1334,23 @@ void UISampleBrowser::serviceSampleBinding() {
 
 void UISampleBrowser::sample_status_callback(
     uint16_t id, uint8_t state, uint32_t rate, uint8_t channels, uint32_t frames, void* user_data) {
+    // Legacy status is audition-only here. Uncorrelated load messages must
+    // never finish, fail or update progress for a typed frontend request.
+    if (WaveX::Protocol::IsSampleLoadState(state))
+        return;
+    auto* browser = static_cast<UISampleBrowser*>(user_data);
+    WaveX::Protocol::SampleLoadReply reply;
+    reply.status = {id, state, channels, rate, frames};
+    if (browser)
+        browser->sample_replies_.Push(reply);
+    wavex_ui_mark_content_changed();
+}
+
+void UISampleBrowser::sample_load_callback(const WaveX::Protocol::SampleLoadReply& reply,
+                                           void* user_data) {
     auto* browser = static_cast<UISampleBrowser*>(user_data);
     if (browser)
-        browser->sample_replies_.Push({id, state, channels, rate, frames});
+        browser->sample_replies_.Push(reply);
     wavex_ui_mark_content_changed();
 }
 
@@ -1351,12 +1362,13 @@ void UISampleBrowser::instrument_status_callback(const WaveX::Protocol::InstStat
     wavex_ui_mark_content_changed();
 }
 
-void UISampleBrowser::applySampleStatus(uint16_t sample_id,
-                                        uint8_t state,
-                                        uint32_t sample_rate,
-                                        uint8_t channels,
-                                        uint32_t frames_played,
+void UISampleBrowser::applySampleStatus(const WaveX::Protocol::SampleLoadReply& reply,
                                         void* user_data) {
+    const auto sample_id = reply.status.sample_id;
+    const auto state = reply.status.state;
+    const auto sample_rate = reply.status.sample_rate;
+    const auto channels = reply.status.channels;
+    const auto frames_played = reply.status.frames_played;
     // DEBUG, not INFO: LOAD_PROGRESS arrives about a hundred times per load,
     // and two lines each was enough to push everything else out of the log
     // ring before it could be read.
@@ -1371,6 +1383,9 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
              user_data);
 
     UISampleBrowser* browser = static_cast<UISampleBrowser*>(user_data);
+    if (WaveX::Protocol::IsSampleLoadState(state) &&
+        (!browser || !browser->persistent_state_.matchesLoad(reply.request_id)))
+        return;
 
     if (!browser) {
         ESP_LOGE(TAG, "=== CALLBACK ERROR: browser is NULL!");
@@ -1460,18 +1475,14 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
         wavex_ui_mark_content_changed();
         // Refresh display-only allocator diagnostics after a successful load.
         inter_mcu_request_sample_mem_status();
-        // The id in the request was only a tag: the Sample Pool assigns the
-        // resident id (a file already resident answers with the id it had),
-        // and this is where the frontend adopts it. One load is in flight at
-        // a time - the busy overlay sees to that - so a completion while a
-        // bind is pending is ours.
+        // The Pool assigns the resident ID (reuse returns its existing ID).
+        // Only a matching request can publish that identity. The check above
+        // excludes stale completions across navigation, failure and reuse.
         const int16_t bind_track = browser->bind_on_load_track_.load(std::memory_order_acquire);
-        const bool ours = bind_track >= 0 && browser->persistent_state_.completeLoad(sample_id);
+        const bool ours =
+            bind_track >= 0 && browser->persistent_state_.completeLoad(reply.request_id, sample_id);
         if (ours) {
-            browser->bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
             setCurrentSampleId(sample_id);
-        }
-        if (ours) {
             browser->bind_on_load_track_.store(-1, std::memory_order_release);
             browser->sample_binding_.Begin(
                 sample_id, static_cast<uint8_t>(bind_track), lv_tick_get());
@@ -1751,17 +1762,16 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     // WAV container bytes differ from PCM bytes, and cached free RAM can be stale.
     // A request tag, not the resident id: the Daisy's Sample Pool assigns
     // that and reports it with LOAD_COMPLETE, where the browser adopts it.
-    uint16_t sample_id = persistent_state_.allocateSampleId();
+    const uint32_t request_id = SampleBrowserState::allocateLoadRequestId();
     // Bind it to the selected Track when the Daisy says it is resident: the
     // bind is a separate message (MSG_SAMPLE_SELECT) and would be refused
     // for an id that is not loaded yet.
-    bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
     bind_on_load_track_.store(static_cast<int16_t>(getCurrentTrack()), std::memory_order_release);
     auto pending_entry = *entry;
     pending_entry.sample_rate = sample_rate;
     pending_entry.channels = channels;
     pending_entry.bits_per_sample = bits_per_sample;
-    persistent_state_.stageLoad(sample_id, pending_entry);
+    persistent_state_.stageLoad(request_id, pending_entry);
 
     {
         // The ESP32 is not blocked here - the Daisy does the SD read and
@@ -1781,12 +1791,10 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     // from the file); a rate that cannot fit degrades to 0 = unknown rather
     // than wrapping to a wrong-but-plausible value.
     const uint16_t rate_hint = sample_rate <= UINT16_MAX ? static_cast<uint16_t>(sample_rate) : 0;
-    esp_err_t result =
-        comm_interface_
-            ? inter_mcu_send_sample_load_req(
-                  sample_id, entry->size_bytes, rate_hint, channels, bits_per_sample, entry->path)
-            : ESP_FAIL;
-
+    WaveX::Protocol::SampleLoadRequest request;
+    request.request_id = request_id;
+    request.sample = {0, entry->size_bytes, rate_hint, channels, bits_per_sample, entry->path};
+    const esp_err_t result = comm_interface_ ? inter_mcu_send_sample_load(request) : ESP_FAIL;
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
         persistent_state_.cancelLoad();
@@ -1797,8 +1805,8 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     }
 
     ESP_LOGI(TAG,
-             "=== SAMPLE LOAD REQUEST SENT TO DAISY: id=%u path=%s ===",
-             (unsigned)sample_id,
+             "=== SAMPLE LOAD REQUEST SENT TO DAISY: request=%lu path=%s ===",
+             (unsigned long)request_id,
              entry->path);
     updateStatus("Sample load requested on Daisy");
 

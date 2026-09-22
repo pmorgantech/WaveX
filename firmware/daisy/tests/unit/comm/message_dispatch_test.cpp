@@ -1156,3 +1156,31 @@ TEST_F(MessageDispatchTest, CorrelatedBrowseRetainsRequestIdentityAndRejectsUnkn
     Dispatch(MSG_BROWSE_PAGE_REQ, request);
     EXPECT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, CorrelatedLoadRetainsIdentityAndRejectsMalformedRequests) {
+    SampleLoadRequest request;
+    request.request_id = 0x12345678;
+    std::strcpy(request.sample.path, "/kick.wav");
+    Dispatch(MSG_SAMPLE_LOAD_REQ, request);
+    ASSERT_EQ(WaveX::Test::GetDispatchRecord().sample_loads.size(), 1u);
+    EXPECT_EQ(WaveX::Test::GetDispatchRecord().sample_load_request_ids.back(), request.request_id);
+    request.version = 2;
+    Dispatch(MSG_SAMPLE_LOAD_REQ, request);
+    request.version = 1;
+    request.request_id = 0;
+    Dispatch(MSG_SAMPLE_LOAD_REQ, request);
+    request.request_id = 2;
+    std::memset(request.sample.path, 'x', sizeof(request.sample.path));
+    Dispatch(MSG_SAMPLE_LOAD_REQ, request);
+    EXPECT_EQ(WaveX::Test::GetDispatchRecord().sample_loads.size(), 1u);
+}
+
+TEST_F(MessageDispatchTest, CorrelatedLoadReachesEngineForBusyRefusalInsteadOfSilentDrop) {
+    SampleLoadRequest request;
+    request.request_id = 42;
+    std::strcpy(request.sample.path, "/kick.wav");
+    GetDispatchRecord().project_busy = true;
+    Dispatch(MSG_SAMPLE_LOAD_REQ, request);
+    ASSERT_EQ(GetDispatchRecord().sample_load_request_ids.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().sample_load_request_ids.back(), 42u);
+}

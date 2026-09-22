@@ -114,6 +114,8 @@ struct InterMcuCapture {
     WaveX::Protocol::EnvelopeChunkMessage envelope_header;
     std::vector<WaveX::Protocol::EnvelopeColumn> envelope_columns;
 
+    int sample_load_reply_calls = 0;
+    WaveX::Protocol::SampleLoadReply sample_load_reply{};
     int sample_status_calls = 0;
     uint16_t sample_status_id = 0;
     uint8_t sample_status_state = 0;

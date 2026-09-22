@@ -30,7 +30,6 @@ struct SampleBrowserState {
     bool is_playing = false;
     std::string playing_sample_path = "";
     uint32_t playing_sample_index = 0;
-    uint16_t next_sample_id = 1;
     uint16_t last_load_sample_id = 0;
     std::string last_load_sample_path = "";
 
@@ -47,12 +46,12 @@ struct SampleBrowserState {
 
     // A request tag is never a resident identity. Only completeLoad publishes
     // editor geometry/path; failed sends, load failure and exit discard pending.
-    void stageLoad(uint16_t tag, const wavex_file_entry_t& entry) {
+    void stageLoad(uint32_t tag, const wavex_file_entry_t& entry) {
         pending_tag_ = tag;
         pending_entry_ = entry;
     }
-    bool completeLoad(uint16_t resident_id) {
-        if (!pending_tag_ || !resident_id)
+    bool completeLoad(uint32_t request_id, uint16_t resident_id) {
+        if (!matchesLoad(request_id) || !resident_id)
             return false;
         last_load_sample_id = resident_id;
         last_load_sample_path = pending_entry_.path;
@@ -65,10 +64,11 @@ struct SampleBrowserState {
         return true;
     }
     void cancelLoad() { pending_tag_ = 0; }
+    bool matchesLoad(uint32_t request_id) const { return request_id && request_id == pending_tag_; }
     bool loading() const { return pending_tag_ != 0; }
 
    private:
-    uint16_t pending_tag_ = 0;
+    uint32_t pending_tag_ = 0;
     wavex_file_entry_t pending_entry_{};
 
    public:
@@ -124,13 +124,13 @@ struct SampleBrowserState {
         playing_sample_index = 0;
     }
 
-    // Skips 0, which is reserved as a sentinel.
-    uint16_t allocateSampleId() {
-        uint16_t id = next_sample_id++;
-        if (next_sample_id == 0) {
-            next_sample_id = 1;
-        }
-        return id;
+    // UI-domain sequence survives page/state destruction and reset. A newly
+    // constructed browser must not reuse a request still in flight on the wire.
+    static uint32_t allocateLoadRequestId() {
+        static uint32_t next = 0;
+        if (++next == 0)
+            ++next;
+        return next;
     }
 };
 
@@ -224,9 +224,10 @@ class UISampleBrowser : public UIPage {
 
     // RX owns only these queues. Listener deregistration precedes Clear and
     // page destruction; all state below is applied in the UI/LVGL domain.
-    WaveX::Comm::ValueQueue<WaveX::Protocol::SampleStatusMessage, 16> sample_replies_;
+    WaveX::Comm::ValueQueue<WaveX::Protocol::SampleLoadReply, 16> sample_replies_;
     WaveX::Comm::ValueQueue<WaveX::Protocol::InstStatusMessage, 16> instrument_replies_;
-    static void applySampleStatus(uint16_t, uint8_t, uint32_t, uint8_t, uint32_t, void*);
+    static void applySampleStatus(const WaveX::Protocol::SampleLoadReply&, void*);
+    static void sample_load_callback(const WaveX::Protocol::SampleLoadReply&, void*);
     static void applyInstrumentStatus(const WaveX::Protocol::InstStatusMessage&, void*);
 
     // Deferred widget presentation, now written and consumed only under LVGL.
@@ -272,7 +273,6 @@ class UISampleBrowser : public UIPage {
     // resident (SAMPLE_STATUS_LOAD_COMPLETE), and the id it must arrive with.
     // -1 = nothing pending. Owned by the UI domain.
     std::atomic<int16_t> bind_on_load_track_{-1};
-    std::atomic<uint16_t> bind_on_load_sample_id_{0};
     char sfz_probe_path_[96] = {};
     WaveX::Protocol::InstStatusMessage pending_inst_status_{};
     portMUX_TYPE inst_status_lock_ = portMUX_INITIALIZER_UNLOCKED;

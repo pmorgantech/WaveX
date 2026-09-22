@@ -12,10 +12,11 @@ namespace WaveX::Storage {
 using namespace AudioEngine;
 using namespace Protocol;
 
-bool SampleLoadJob::Begin(const SampleLoadMessage& request) {
+bool SampleLoadJob::Begin(const SampleLoadMessage& request, uint32_t request_id) {
     if (Busy() || reply_pending_)
         return false;
     request_ = request;
+    request_id_ = request_id;
     status_ = SampleStatusMessage{};
     status_.sample_id = request.sample_id;  // request identity until admission
     copied_ = 0;

@@ -223,3 +223,9 @@ bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage* out) {
 void inter_mcu_store_global_lfo(const WaveX::Protocol::GlobalLfoSyncMessage&) {}
 
 void inter_mcu_store_lock_notice(const WaveX::Protocol::SeqLockNoticeMessage&) {}
+
+void inter_mcu_invoke_sample_load_callback(const WaveX::Protocol::SampleLoadReply& reply) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.sample_load_reply_calls;
+    cap.sample_load_reply = reply;
+}

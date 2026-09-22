@@ -91,9 +91,10 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
 
     // The fixed-size envelope exposes padding as payload. This new fixed
     // message admits only zero padding; raw UART payloads stay exact-sized.
-    const size_t exact_size = msg_type == MSG_SEQ_CLOCK_OUT ? sizeof(SeqClockOutMessage)
-                              : msg_type == MSG_REC_STATUS  ? sizeof(RecordStatusMessage)
-                                                            : 0;
+    const size_t exact_size = msg_type == MSG_SEQ_CLOCK_OUT       ? sizeof(SeqClockOutMessage)
+                              : msg_type == MSG_REC_STATUS        ? sizeof(RecordStatusMessage)
+                              : msg_type == MSG_SAMPLE_LOAD_REPLY ? sizeof(SampleLoadReply)
+                                                                  : 0;
     if (exact_size && payload_size > exact_size) {
         for (size_t i = exact_size; i < payload_size; ++i)
             if (payload[i] != 0)
@@ -352,6 +353,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             break;
         }
 
+        case WaveX::Protocol::MSG_SAMPLE_LOAD_REPLY: {
+            WaveX::Protocol::SampleLoadReply reply;
+            if (payload_len == sizeof(reply) &&
+                CopyMessage(payload, payload_len, reply, "SAMPLE_LOAD_REPLY") &&
+                WaveX::Protocol::IsValidSampleLoadReply(reply))
+                inter_mcu_invoke_sample_load_callback(reply);
+            break;
+        }
         case WaveX::Protocol::MSG_SAMPLE_STATUS: {
             WaveX::Protocol::SampleStatusMessage msg;
             if (CopyMessage(payload, payload_len, msg, "SAMPLE_STATUS"))

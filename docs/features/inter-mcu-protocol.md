@@ -785,3 +785,19 @@ an active correlated UI read. Storage-loss notifications invalidate the UI read.
 Malformed replies are ignored. A manual refresh issues a new read; automatic
 wire-loss timeout/retry remains a roadmap follow-up. Directory capacity and
 path limits remain defined in `protocol.h`.
+
+### Correlated resident sample loading
+
+The frontend uses the additive versioned `MSG_SAMPLE_LOAD_REQ` /
+`MSG_SAMPLE_LOAD_REPLY` pair defined in `protocol.h`. The request ID is separate
+from the resident Pool ID and is echoed through progress, completion and failure,
+including immediate busy/unavailable refusals. The cooperative load job retains
+its request identity until its terminal reply enters the TX queue. Reusing an
+existing resident file returns its existing Pool ID with the new request ID.
+
+Legacy `MSG_SAMPLE_LOAD` / `MSG_SAMPLE_STATUS` remains supported for bench clients;
+legacy load notifications never satisfy a typed UI request. Audition statuses
+continue on the legacy status message. The payload version is 1 and the additive
+pair leaves `PROTOCOL_VERSION` unchanged. Deploy matching updated images to use
+correlated frontend loading. Navigation discards UI intent, not backend storage
+work: an old load may finish in the Pool but cannot select or bind a newer load.

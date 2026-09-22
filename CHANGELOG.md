@@ -623,6 +623,11 @@ versioning and release process.
 
 ### Fixed
 
+- Correlated frontend resident sample loads end-to-end with an additive versioned
+  request/reply pair. Delayed progress, failures and completions from a previous
+  browser visit cannot change a new load or bind the wrong sample. Legacy bench
+  loading remains supported; both updated images are required for UI loading.
+
 - UART initialization now rejects missing PacketRouter injection with an error
   instead of routing to a silent dummy. The router is fixed after initialization;
   an impossible missing-router dispatch fails explicitly.

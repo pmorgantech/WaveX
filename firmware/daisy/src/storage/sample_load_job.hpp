@@ -12,13 +12,14 @@ namespace WaveX::Storage {
 class SampleLoadJob {
    public:
     static constexpr uint32_t kReadBytes = 4096;
-    bool Begin(const Protocol::SampleLoadMessage& request);
+    bool Begin(const Protocol::SampleLoadMessage& request, uint32_t request_id = 0);
     void Pump(AudioEngine::SamplePool& pool,
               SampleMemMgr& memory,
               uint8_t* aligned_io,
               uint32_t io_bytes);
     void Cancel(SampleMemMgr& memory);
     bool Busy() const { return phase_ != Phase::Idle; }
+    uint32_t RequestId() const { return request_id_; }
     uint32_t BytesRead() const { return copied_; }
     const Protocol::SampleStatusMessage& Status() const { return status_; }
     bool ReplyPending() const { return reply_pending_; }
@@ -39,6 +40,7 @@ class SampleLoadJob {
     wxsamp_t handle_{};
     uint8_t* destination_ = nullptr;
     uint32_t copied_ = 0;
+    uint32_t request_id_ = 0;
     Phase phase_ = Phase::Idle;
     bool open_ = false, reply_pending_ = false;
 };

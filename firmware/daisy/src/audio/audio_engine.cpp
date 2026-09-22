@@ -3557,28 +3557,42 @@ void PumpInstrumentLoad() {
     }
 }
 
+// Preserve the legacy bench contract while correlated UI requests keep their
+// request identity independent of the resident Pool ID, including refusals.
+static int SendSampleLoadStatus(const SampleStatusMessage& status, uint32_t request_id) {
+    if (!request_id)
+        return Comm::LinkSend(MSG_SAMPLE_STATUS, &status, sizeof(status));
+    SampleLoadReply reply;
+    reply.request_id = request_id;
+    reply.status = status;
+    return Comm::LinkSend(MSG_SAMPLE_LOAD_REPLY, &reply, sizeof(reply));
+}
+
 // Tells the frontend a MSG_SAMPLE_LOAD is not going to complete, and why. Every
 // early return in OnSampleLoad() goes through here: a load that fails silently
 // leaves the frontend's spinner to time out with nothing to say.
-static void ReportSampleLoadFailed(uint16_t sample_id, SampleLoadFailReason reason) {
+static void ReportSampleLoadFailed(uint16_t sample_id,
+                                   SampleLoadFailReason reason,
+                                   uint32_t request_id) {
     SampleStatusMessage status{};
     status.sample_id = sample_id;
     status.state = SAMPLE_STATUS_LOAD_FAILED;
     status.frames_played = reason;
-    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+    SendSampleLoadStatus(status, request_id);
 }
 
 bool SampleLoadBusy() {
     return s_sample_load.Get().Busy() || s_sample_load.Get().ReplyPending();
 }
 
-void OnSampleLoad(const SampleLoadMessage& sl) {
+void OnSampleLoad(const SampleLoadMessage& sl, uint32_t request_id) {
     if (!s_sample_memory_available || !s_pool) {
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_NO_SDRAM);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_NO_SDRAM, request_id);
         return;
     }
-    if (StorageJobBusy() || Storage::CardService::Busy() || !s_sample_load.Get().Begin(sl)) {
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_BUSY);
+    if (StorageJobBusy() || Storage::CardService::Busy() ||
+        !s_sample_load.Get().Begin(sl, request_id)) {
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_BUSY, request_id);
         return;
     }
     if (!s_sample_load.Get().Busy())
@@ -3615,8 +3629,7 @@ void PumpSampleLoad() {
         }
     }
     // A full UART queue must not lose the terminal result and strand the UI.
-    if (job.ReplyPending() &&
-        Comm::LinkSend(MSG_SAMPLE_STATUS, &job.Status(), sizeof(job.Status())) >= 0)
+    if (job.ReplyPending() && SendSampleLoadStatus(job.Status(), job.RequestId()) >= 0)
         job.ReplySent();
 }
 

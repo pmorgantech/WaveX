@@ -2642,6 +2642,11 @@ fault/queue-pressure instrumentation. Record image identities and transport logs
   active without another load or duplicate mutation. Page exit and disconnect
   stop UI retries; reconnect cannot resubmit an admitted binding. Verify the
   actual Track state because an admitted mutation may already have applied.
+- [ ] Audit follow-up: delay load A progress/completion/failure, leave Browse,
+  reopen it and start load B. Deliver A's messages, including duplicates and
+  legacy uncorrelated statuses. B's progress, selected sample, overlay and Track
+  binding must remain unchanged until B's matching reply. Repeat with resident
+  reuse, busy refusal and TX pressure; capture the distinct request/Pool IDs.
 - [ ] Audit follow-up: in a diagnostic image omit router injection. Startup
   reports the missing dependency and fails before installing/starting UART.
   Restore normal injection and verify ordinary two-board message delivery.

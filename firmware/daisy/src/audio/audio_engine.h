@@ -52,7 +52,7 @@ void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 // measured; a new request replaces whatever was in flight.
 void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m);
 void PumpEnvelopeJob();
-void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
+void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& sl, uint32_t request_id = 0);
 void PumpSampleLoad();
 bool SampleLoadBusy();
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);

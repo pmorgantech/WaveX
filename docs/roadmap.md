@@ -267,21 +267,13 @@ coverage and hardware evidence (principles 13 and 15).
 
 The combined frontend reviews cover input, UART/router/listeners, response
 caches, browser ownership, Play note/control lifetime and feature-page request
-handling. Their physical acceptance remains open alongside the earlier audit
-follow-ups below.
+handling. Their physical acceptance remains open in HV-034.
 
 The user authorized review findings 1–8 on 2026-09-22. Their remaining physical
 acceptance is [HV-034](hardware-validation.md#hv-034--frontend-note-browser-and-load-recovery).
 Implementation and host/build results are recorded in the changelog; neither
-closes the Phase 2 hardware, capacity or recovery gates. Keep the remaining
-audit follow-ups independent:
-
-- [ ] **Correlate legacy sample-load completions.** The completion carries the
-  resident ID but not the initiating request tag. A delayed completion can be
-  mistaken for a new load after leaving and reopening the browser. Extend the
-  typed load reply before treating cancellation/restart across navigation as
-  fully recovered; directory-page and Track-binding correlation do not cover
-  this legacy message.
+closes the Phase 2 hardware, capacity or recovery gates. Audit follow-up
+hardware procedures remain in HV-034; unrelated maintenance stays below.
 
 The `ui_get_comm_interface()` global that two pages still reach through is
 already covered by the `ICommInterface` item under *UI and frontend

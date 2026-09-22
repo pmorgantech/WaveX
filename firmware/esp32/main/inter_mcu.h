@@ -218,6 +218,10 @@ void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChu
                                               const WaveX::Protocol::EnvelopeColumn* columns);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_invoke_storage_status_callback(bool mounted);
+typedef void (*wavex_sample_load_cb_t)(const WaveX::Protocol::SampleLoadReply&, void*);
+void inter_mcu_set_sample_load_listener(wavex_sample_load_cb_t cb, void* user_data);
+void inter_mcu_invoke_sample_load_callback(const WaveX::Protocol::SampleLoadReply& reply);
+esp_err_t inter_mcu_send_sample_load(const WaveX::Protocol::SampleLoadRequest& request);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint8_t state,

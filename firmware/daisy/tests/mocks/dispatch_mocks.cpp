@@ -170,7 +170,8 @@ void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m) {
     WaveX::Test::GetDispatchRecord().envelope_reqs.push_back(m);
 }
 
-void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m) {
+void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m, uint32_t request_id) {
+    WaveX::Test::GetDispatchRecord().sample_load_request_ids.push_back(request_id);
     WaveX::Test::GetDispatchRecord().sample_loads.push_back(m);
 }
 
