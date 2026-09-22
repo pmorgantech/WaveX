@@ -15,8 +15,10 @@ analog-board work, separating current behavior from experiments.
 - [What WaveX already has](#what-wavex-already-has)
 - [Lessons worth keeping](#lessons-worth-keeping)
 - [The ladder comparison that matters](#the-ladder-comparison-that-matters)
+- [Improving self-oscillation and analog character](#improving-self-oscillation-and-analog-character)
 - [Antialiasing without breaking the filter](#antialiasing-without-breaking-the-filter)
 - [Analog hardware implications](#analog-hardware-implications)
+- [Polyphony follows measured processing cost](#polyphony-follows-measured-processing-cost)
 - [Proposed evaluation order](#proposed-evaluation-order)
 - [Related and primary references](#related-and-primary-references)
 
@@ -95,6 +97,39 @@ Per-stage saturation is a separate sound/model change. The current SVF input
 drive deliberately avoids damping its resonant state; inserting a limiter
 there would change resonance and gain. Compare these choices independently.
 
+## Improving self-oscillation and analog character
+
+**Recommended direction:** retain today's filters as the compatible baseline
+and compare an optional, more expensive ladder model. Target a named circuit
+or documented reference before calling the result more accurate.
+
+| Desired improvement | Candidate and acceptance evidence |
+|---|---|
+| Natural onset and sustained oscillation | Measure resonance threshold, startup time, steady amplitude, pitch and decay after excitation stops across cutoff. Our wrapper's nominal threshold near 74% follows its loop-gain mapping; it is not proof of circuit-accurate onset across the range. |
+| Level-dependent resonance and distortion | Compare the solved single-nonlinearity reference, then a circuit-derived differential-pair/stage model. Measure harmonic balance and resonance suppression as input level rises. Arbitrary `tanh` calls after each stage do not establish circuit fidelity. |
+| Musical gain behavior | Compare our existing passband compensation with the reference's bass loss as resonance rises. Use level-matched listening, but also retain raw gain measurements so compensation cannot conceal a modeling error. |
+| Oscillation without a continuing sample | Test the filter alone with zero input after a known excitation. For an optional playable filter-oscillator mode, define excitation and amp lifetime explicitly; an exactly zero deterministic state does not spontaneously start. A tiny seeded perturbation is a possible explicit policy, not an unconditional noise source. |
+| Cleaner high notes and fast sweeps | Measure aliases separately from intended harmonics; compare bounded solving, antialiasing and modest oversampling independently. Add bias/asymmetry or slow component variation only for a specified reference behavior. |
+
+The [current renderer](../../firmware/daisy/src/audio/voice_manager.hpp) releases
+the amp when its sample sources end, filters through the release, then retires
+the voice when the amp becomes idle. A filter-oscillator mode must deliberately
+change that source-end rule, preserve note-off/steal behavior and keep reserving
+resources while it sounds. A silent looping source with an open amp is a useful
+bench setup; it is not a finished source-less Instrument design.
+
+[D'Angelo and Välimäki's 2013 paper](https://raw.githubusercontent.com/ddiakopoulos/MoogLadders/master/research/DAngeloValimaki.pdf)
+specifically compares distortion and self-oscillation against SPICE. Its digital
+implementation still adds delays; its examples use 96/384 kHz. It is evidence
+for useful circuit equations and tests, not a demonstrated 48 kHz WaveX drop-in.
+Their [2014 Part II](https://aaltodoc.aalto.fi/server/api/core/bitstreams/3bb99681-d732-4643-94ae-fd1eddfea381/content),
+§§III–V, provides a non-iterative alternative preserving the local linear
+response. Its evaluation also shows remaining self-oscillation differences and
+no universal winner under audio-rate modulation. Compare it with a converged
+implicit reference; nonlinear modeling does not mandate Newton iteration.
+Consult the author's [figure-caption erratum](https://dangelo.audio/assets/doc/errata_gladder2.pdf)
+when reading those plots.
+
 ## Antialiasing without breaking the filter
 
 The first contained experiment is **antiderivative antialiasing (ADAA) on the
@@ -148,6 +183,78 @@ Neither is a reason to add a general circuit solver to this callback. Neural
 models, oscillator BLEP/DPW work and additional filter families remain separate,
 unscheduled research.
 
+## Polyphony follows measured processing cost
+
+**User-requested direction, proposed on 2026-09-22:** exchange polyphony for
+filter quality. This can support eight inexpensive mono voices or four more
+expensive ones, provided measurements justify that exchange. Keep the fixed
+render storage and add a **DSP reservation budget** to the existing slot/channel
+and musical-group limits; do not change the global voice-count macro at runtime.
+
+The [whole-group planner](../../firmware/daisy/src/audio/note_group_admission.hpp)
+already plans bounded victims before committing a complete note. Extend that
+one authority, shared by live notes and sequencing, rather than giving filters
+their own allocator. The [allocation contract](project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
+continues to own Track identity, local caps, Mono fallback and stealing.
+
+| Proposed record | Ownership and invariant |
+|---|---|
+| Cost profile | Firmware-owned, measured for a specific backend/build and algorithm/quality configuration. Include rendering, retuning, maximum solver iterations and rate-conversion work. This is derived capacity data, never a value supplied by a patch. |
+| Layer reservation | Callback-owned DSP units plus existing slot/channel cost. Account for both source oscillators and charge the selected filter for each rendered channel. Reserve the supported worst case across drive, resonance and cutoff, including coming out of bypass. |
+| Group request/snapshot | Sum the remaining layers' reservations. Release/choke tails stay charged until retired. A musical note with several layers remains one indivisible admission/steal group. |
+| Plan | Accept only if local group caps, slots, channels and DSP units all fit after eligible whole-group victims. Failed admission has no partial steals or parameter changes. |
+
+Illustration only: suppose the **whole mono renderer** costs one unit in normal
+quality, two in expensive quality, and the measured voice-work allowance is
+eight units. This is not a measurement or permission to run eight current voices
+under the already failing full workload.
+
+| Single-layer voices sounding | DSP units | Render channels |
+|---|---:|---:|
+| 8 normal mono | 8 | 8 |
+| 4 expensive mono | 8 | 4 |
+| 2 expensive mono + 4 normal mono | 8 | 6 |
+| 2 expensive stereo | 8 | 4 |
+
+Stereo weights need measurement too; this example conservatively charges twice
+the mono cost. Two oscillators submix ahead of the filter, so they do not imply
+two filters per channel. Multilayer notes can consume several rows' worth of
+resources; eight channels never guaranteed eight musical notes.
+
+Calibrate units against **total callback peaks**, allowing separately for
+sequencer/admission bursts, recording, streaming, control work and a margin.
+Halving voice count does not halve fixed callback overhead. Validate mixtures
+and transitions, not just isolated filters or average CPU load. Use stable
+measured reservations rather than chasing live CPU readings, which would make
+voice availability depend on incidental timing (principles 1–2).
+
+For normal note admission, preserve Own only/Own first/Any and release-first,
+oldest-group ranking; retire enough eligible groups to satisfy all resources.
+Reject a layered note whose own cost exceeds the complete budget with clear
+feedback. A UI polyphony cap of four alone cannot enforce global DSP safety
+when several Tracks use expensive filters.
+
+**Held-note quality changes:** reserve the cost increase for every affected
+renderer before applying the new sound. For the first implementation, reject
+the whole edit if it cannot fit and leave the sounding configuration intact;
+the user can release notes and retry. Do not silently downgrade, partially
+apply the edit or cut unrelated Tracks as a knob moves. Any later crossfade
+must budget simultaneous old/new processing and state. Cheaper settings return
+capacity only when the old processing actually ends.
+
+Persist the chosen sound/quality, not a hardware-specific capacity number.
+Keep existing files on the current sound; expose confirmed capacity and
+admission refusals without promising a fixed note count for every Zone/Track
+mix. New model/quality fields require the centralized wire contract and saved
+format compatibility tests; retired topology values remain retired.
+
+Start with a measured optional four-mono-voice quality experiment, then derive
+the admission weights. Host checks must cover mixed costs, stereo/layers,
+release accounting, simultaneous events, rejected edits and stale note-offs.
+Device acceptance must include worst-case note bursts and the complete
+one-hour workload gate. Reduced polyphony is a viable design direction, not
+an exemption from the existing capacity checkpoint.
+
 ## Proposed evaluation order
 
 1. **Characterize the current filters.** Extend the existing
@@ -162,7 +269,9 @@ unscheduled research.
    the interpolation domain and coefficient derivation before implementing it;
    smoothing is not audio-rate modulation and must not blur step-lock intent.
 3. **Compare one change at a time.** Try SVF-input ADAA and the ladder reference
-   above independently. Use a convergence-checked high-rate reference with
+   above independently, followed by a circuit-derived ladder if it improves
+   the measured/listened result. Evaluate the quality/polyphony exchange above.
+   Use a convergence-checked high-rate reference with
    proper resampling to distinguish intended harmonics from alias energy.
    Test zero-state silence separately from impulse-seeded self-oscillation.
 4. **Require device acceptance before adoption.** Record matched QSPI-image
@@ -188,3 +297,11 @@ and [headroom gate](../performance_monitoring.md#callback-headroom-gate).
   chapters 3–6; the author's book hosted on its distribution mirror.
 - [DAFx 2016 antialiasing companion code](https://github.com/julian-parker/DAFX-AntiAliasing):
   numerical comparison material, not a drop-in embedded implementation.
+- [D'Angelo's Part II publication page](https://dangelo.audio/taslp-ladder-part2):
+  author links to the paper, erratum and Octave implementation. Relevant paper
+  sections and the erratum were reviewed; the Octave code was not evaluated.
+
+Research scope: the linked TPT/SVF derivations, antialiasing delay/feedback
+discussion, WDF/DK material and ladder evaluations informed this note. The
+supplied 2024–2025 neural-model claims and commercial-product implementation
+guesses remain unverified and are not design premises.

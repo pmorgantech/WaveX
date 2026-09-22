@@ -404,7 +404,10 @@ read failures at HV-023 before claiming recovery acceptance.
   to characterize sweep artifacts, aliasing and nonlinear ladder approximation
   error before comparing control smoothing, SVF-input ADAA or a bounded
   nonlinear solve. Adoption needs matched DWT/full-load and listening evidence;
-  the existing capacity checkpoint remains open. Korg35/diode-ladder candidates
+  the existing capacity checkpoint remains open. Evaluate circuit-derived
+  self-oscillation/drive and the user-proposed quality/polyphony exchange through
+  measured DSP reservations in the whole-group allocator; four expensive mono
+  voices is an experiment, not an accepted capacity limit. Korg35/diode-ladder candidates
   still require a separate design and measured capacity. Share inactive
   topology storage only if additional implementations justify it.
 - Verify Diagnostics with a populated Pool and Sample IDs above 255; the wire

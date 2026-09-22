@@ -189,6 +189,11 @@ Mono held-key fallback. Physical MIDI latency, audible transitions and the full
 capacity gate remain [HV-019](../hardware-validation.md#hv-019--note-group-allocation-policy).
 Per-pad caps remain a separate proposal; the global render budget is unchanged.
 
+The [filter-quality proposal](virtual-analog-filters.md#polyphony-follows-measured-processing-cost)
+would add measured DSP reservations alongside slot/channel limits, allowing
+fewer voices for more expensive filters. It remains unimplemented; existing
+group identity, local caps and stealing semantics stay authoritative here.
+
 ### Settings and ownership
 
 | Setting | Values | Meaning |

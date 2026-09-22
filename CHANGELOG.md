@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Extended filter research with self-oscillation and circuit-nonlinearity
+  comparisons, primary ladder-paper findings and a proposed DSP-cost admission
+  budget for trading polyphony for quality. Runtime behavior is unchanged.
+
 - Added virtual-analog filter design notes grounded in the existing TPT SVF,
   ZDF ladder and measured topology costs, with primary references and an
   unscheduled, capacity-gated plan for modulation and antialiasing comparisons.
