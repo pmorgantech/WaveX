@@ -10,6 +10,7 @@
 #include "ui/current_track.h"
 #include "ui/ui_allocation_page.h"
 #include "ui/ui_global_lfo_page.h"
+#include "ui/ui_instrument_tags_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_pad_map_page.h"
 #include "ui/ui_palette.h"
@@ -112,7 +113,7 @@ constexpr int kParamStep = 65535 / 64;
 // Tab bar labels, in the same order as UIInstrumentPage::Stage. Kept short because
 // the bar divides evenly - one long label shrinks every other tab's target.
 const char* const lfoFields[] = {"WAVE", "RATE", "SYNC", "RETRIGGER", "DELAY", "FADE", "FOLLOW"};
-const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod", "LFO", "Arp"};
+const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod", "LFO", "Arp", "Tags"};
 
 // Content geometry, from design turns 2c (Env) and 2d (Filter). Positions are
 // relative to the tab body, which the navigator has already inset by the
@@ -242,6 +243,8 @@ uint8_t UIInstrumentPage::currentTrack() const {
 void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
     display_track_ = getCurrentTrack();
+    if (tags_page_)
+        tags_page_->onTrackChanged();
     arp_.Reset(display_track_);
     lfo_.Reset(display_track_);
     sound_.Reset(display_track_);
@@ -324,6 +327,9 @@ bool UIInstrumentPage::canLeave() {
     return false;
 }
 void UIInstrumentPage::onExit() {
+    if (tags_page_)
+        tags_page_->onExit();
+    tags_page_.reset();
     encoder_strip_.Reset();
     if (timer_)
         lv_timer_delete(timer_);
@@ -413,6 +419,13 @@ lv_obj_t* UIInstrumentPage::buildCurvePane(lv_obj_t* parent,
 }
 
 void UIInstrumentPage::buildStageRows(int stage) {
+    if (stage == static_cast<int>(Stage::Tags)) {
+        if (!tags_page_) {
+            tags_page_ = createInstrumentTagsPage();
+            tags_page_->onEnter(tab_body_[stage]);
+        }
+        return;
+    }
     if (stage < 0 || stage >= kStageCount || stage_built_[stage] || !tab_body_[stage]) {
         return;
     }
@@ -709,6 +722,8 @@ void UIInstrumentPage::refreshHeader() {
 }
 
 void UIInstrumentPage::refreshParams() {
+    if (tagsStage())
+        return;
     if (arpStage()) {
         refreshArp();
         return;
@@ -818,6 +833,8 @@ void UIInstrumentPage::sendParam(const Param& p) {
 }
 
 EncoderBindings UIInstrumentPage::encoderBindings() {
+    if (tagsStage())
+        return {};
     EncoderBindings bindings;
     if (stage_ != static_cast<int>(Stage::Filter) && stage_ != static_cast<int>(Stage::Amp))
         return bindings;
@@ -1016,6 +1033,10 @@ void UIInstrumentPage::moveParam(int delta) {
 }
 
 void UIInstrumentPage::onInput(const InputEvent& evt) {
+    if (tagsStage() && tags_page_) {
+        tags_page_->onInput(evt);
+        return;
+    }
     switch (evt.type) {
         // steps() carries the direction, so neither case negates anything.
         // Negating `delta` here used to invert the value: the rotary encoder
@@ -1052,6 +1073,8 @@ void UIInstrumentPage::onInput(const InputEvent& evt) {
 }
 
 std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
+    if (tagsStage() && tags_page_)
+        return tags_page_->getSoftkeys();
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     // Moving BETWEEN PARAMS has no touch equivalent - unlike stage, which the
@@ -1142,6 +1165,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
 }
 
 std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
+    if (tagsStage() && tags_page_)
+        return tags_page_->getSoftkeys();
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     // The tab bar is also a touch route between stages; these are the same
@@ -1196,6 +1221,8 @@ void UIInstrumentPage::onTrackChanged() {
     }
     track_change_pending_ = false;
     display_track_ = getCurrentTrack();
+    if (tags_page_)
+        tags_page_->onTrackChanged();
     arp_.Reset(display_track_);
     lfo_.Reset(display_track_);
     if (arpStage())
@@ -1778,6 +1805,8 @@ void UIInstrumentPage::refreshModulator() {
 size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     len = AppendKvText(out, cap, len, "tab", kStageNames[stage_]);
+    if (tagsStage() && tags_page_)
+        return tags_page_->consoleState(out, cap, len);
     len = AppendKvInt(out, cap, len, "editready", alive_ && sound_.Ready());
     len = AppendKvInt(out, cap, len, "editdirty", sound_.Dirty());
     len = AppendKvInt(out, cap, len, "editpending", draftActive());
@@ -1846,6 +1875,8 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     return len;
 }
 bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap) {
+    if (tagsStage() && tags_page_ && std::strncmp(args, "TAB ", 4))
+        return tags_page_->consoleCommand(args, reply, cap);
     if (requested_action_ || track_change_pending_)
         return false;
     char name[16], extra;

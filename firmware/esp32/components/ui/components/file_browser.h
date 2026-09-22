@@ -95,6 +95,9 @@ void wavex_file_browser_destroy(wavex_file_browser_t* browser);
 bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* path);
 bool wavex_file_browser_navigate_up(wavex_file_browser_t* browser);
 bool wavex_file_browser_refresh(wavex_file_browser_t* browser);
+bool wavex_file_browser_set_filter(wavex_file_browser_t* browser,
+                                   WaveX::Protocol::BrowseFilter filter);
+bool wavex_file_browser_loading(wavex_file_browser_t* browser);
 
 void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t index);
 const wavex_file_entry_t* wavex_file_browser_get_selected(wavex_file_browser_t* browser);

@@ -42,6 +42,7 @@ this document owns the runnable checks and their validation status.
 - [HV-030 — Codec and internal-mix recording](#hv-030--codec-and-internal-mix-recording)
 - [HV-031 — Arpeggiator](#hv-031--arpeggiator)
 - [HV-032 — Global LFO, held locks and diagnostics](#hv-032--global-lfo-held-locks-and-diagnostics)
+- [HV-033 — Instrument tags and filtering](#hv-033--instrument-tags-and-filtering)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -115,6 +116,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-030 | Codec/internal-mix recording | Partial | Two source workflows passed; later 25 MHz WAV write failed; signal, recovery and capacity remain open |
 | HV-031 | Instrument arpeggiator | Partial | Host timing and edit/generated-voice HIL pass; physical timing, persistence and soak remain open |
 | HV-032 | Global LFO, held locks and diagnostic counts | Partial | Four console-driven board tests pass; physical controls, listening and extended checks remain open |
+| HV-033 | Instrument tags and filtering | Pending | Matched protocol-9 images; reliable card required for save/reboot |
 
 ## HV-001 — SD card formatting
 
@@ -2534,6 +2536,28 @@ as open follow-up. All 68 native gallery views were refreshed and their
 `logs/ui-pages-20260921.zip`. Final-image global-LFO edit/reset/re-entry passes
 (`logs/task3-final-global-hil.log`, one test); screenshots verify the corrected
 Global LFO unit labels and state-specific recording help.
+
+## HV-033 — Instrument tags and filtering
+
+**Status:** Pending; host tests and both firmware builds only (2026-09-21).
+**Behavior:** [Instrument tags](features/track-and-patch-model.md#34-tags).
+**Setup:** matched protocol-9 images, several WXI sounds with overlapping tags,
+SFZ imports, folders and more than one page of Instrument entries. Record image
+identities. SD save/reboot checks remain blocked by the unresolved write CRCs.
+
+- [ ] Stage multiple categories, Revert, then Apply while notes sound. Confirm
+  tags change only on Apply and sounding voices continue without interruption.
+- [ ] Save a new Instrument copy, reload it and reboot; categories must persist.
+- [ ] Cycle every browser filter; only matching WXI and folders remain, All
+  includes SFZ, and returning to the page preserves the chosen filter.
+- [ ] Browse beyond one page, select/load a matching sound and enter/leave a
+  folder; labels, selection, paging and loaded identity must agree. Account for
+  the documented 256-entry prefilter cap.
+- [ ] Change Track, replace its Instrument, disconnect/reconnect the peer and
+  delay replies while editing; stale edits must not overwrite the new sound.
+- [ ] Interrupt metadata reads with card loss, malformed WXI and a busy storage
+  job. No crash or audio underrun; filtering resumes or can be refreshed after
+  recovery, without loading sample PCM just to classify a sound.
 
 ## Recording a validation session
 

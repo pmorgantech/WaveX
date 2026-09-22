@@ -38,9 +38,21 @@ class UIInstrumentPage : public UIPage {
     const char* contextLine() const override { return context_line_; }
 
     // Tabs share the selected Instrument.
-    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, Lfo, Arp, kCount };
+    enum class Stage : uint8_t {
+        Oscillator = 0,
+        Envelopes,
+        Amp,
+        Filter,
+        Mod,
+        Lfo,
+        Arp,
+        Tags,
+        kCount
+    };
 
    private:
+    std::shared_ptr<UIPage> tags_page_;
+    bool tagsStage() const { return stage_ == static_cast<int>(Stage::Tags); }
     EncoderStrip encoder_strip_;
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
     // Oscillator selection plus five settings.
@@ -130,9 +142,10 @@ class UIInstrumentPage : public UIPage {
                stage_ == static_cast<int>(Stage::Mod);
     }
     bool draftActive() const {
-        return arp_.Dirty() || arp_.Pending() || lfo_.Dirty() || lfo_.Pending() ||
-               oscillator_.Dirty() || oscillator_.Pending() || modulator_.Dirty() ||
-               modulator_.Pending() || sound_.Outgoing() || sound_.Pending() || requested_action_;
+        return (tags_page_ && !tags_page_->canLeave()) || arp_.Dirty() || arp_.Pending() ||
+               lfo_.Dirty() || lfo_.Pending() || oscillator_.Dirty() || oscillator_.Pending() ||
+               modulator_.Dirty() || modulator_.Pending() || sound_.Outgoing() ||
+               sound_.Pending() || requested_action_;
     }
     OscillatorModel oscillator_;
     lv_timer_t* timer_ = nullptr;

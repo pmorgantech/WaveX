@@ -1237,3 +1237,17 @@ static void storage_status_callback(bool mounted, void* user_data) {
     ESP_LOGI(TAG, "Storage available - re-listing '%s'", browser->current_path);
     refresh_file_list(browser);
 }
+
+bool wavex_file_browser_loading(wavex_file_browser_t* browser) {
+    return browser && browser_pagination_in_progress(browser);
+}
+bool wavex_file_browser_set_filter(wavex_file_browser_t* browser, BrowseFilter filter) {
+    if (!browser || !BrowseFilterValid(filter) || browser_pagination_in_progress(browser))
+        return false;
+    const auto previous = browser->config.filter;
+    browser->config.filter = filter;
+    if (wavex_file_browser_refresh(browser))
+        return true;
+    browser->config.filter = previous;
+    return false;
+}

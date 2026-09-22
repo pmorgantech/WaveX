@@ -2866,3 +2866,42 @@ TEST_F(SfzLoaderTest, ArpRevisionUndoAndSavedInstrumentRecall) {
                                 static_cast<uint32_t>(io_.size())));
     EXPECT_TRUE(WaveX::Arp::Equal(SfzLoader::ReadArpState(0).value, m.value));
 }
+
+TEST_F(SfzLoaderTest, TagMetadataUsesRevisionAndNeverStopsVoices) {
+    auto before = Edit(INST_OP_NEW_KEYBOARD, 3, "Tagged keys");
+    ASSERT_EQ(before.error, INST_ERROR_NONE);
+    InstOpMessage request(91000, 3, INST_OP_SET_TAGS, "");
+    request.tags = 0x92;
+    request.revision = before.revision;
+    ASSERT_NE(request.revision, 0);
+    ASSERT_TRUE(SfzLoader::Begin(request));
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0xFF);
+    EXPECT_FALSE(SfzLoader::Busy());
+    auto after = Edit(INST_OP_GET_PAD_MAP, 3);
+    EXPECT_EQ(after.tags, 0x92);
+    EXPECT_NE(after.revision, before.revision);
+    request.request_id++;
+    request.tags = 1;
+    EXPECT_FALSE(SfzLoader::Begin(request));
+    auto rejected = Edit(INST_OP_GET_PAD_MAP, 3);
+    EXPECT_EQ(rejected.tags, 0x92);
+    EXPECT_EQ(rejected.error, INST_ERROR_BAD_FILE);
+}
+
+TEST_F(SfzLoaderTest, TagMetadataPersistsThroughInstrumentSaveAndRecall) {
+    ASSERT_TRUE(Load(0));
+    const auto before = Edit(INST_OP_GET_PAD_MAP, 0);
+    InstOpMessage request(91010, 0, INST_OP_SET_TAGS, "");
+    request.revision = before.revision;
+    request.tags = 0xA5;
+    ASSERT_TRUE(SfzLoader::Begin(request));
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Test Tags").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Test Tags.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    EXPECT_EQ(Edit(INST_OP_GET_PAD_MAP, 0).tags, 0xA5);
+}

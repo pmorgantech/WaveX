@@ -47,7 +47,7 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys, sharing note lifecycle and live parameters.
-- **Instrument:** Sample, Env, Amp, Filter, Mod, LFO, Arp.
+- **Instrument:** Sample, Env, Amp, Filter, Mod, LFO, Arp, Tags.
 - **Project:** eight Tracks per view, Instrument assignment, MIDI input, Track level, pan/balance and mute.
 - **Settings:** Display, Storage, MIDI, System, Calibrate, Pots, Global LFO.
 
@@ -350,6 +350,11 @@ lists WAV files. Saved opens /wavex/instruments, Root opens /. Selecting an
 Instrument inspects its referenced samples; Load asks for the target Track and
 confirmation before replacement. The kit HIL test recalls its saved WXI through
 this flow and checks cancellation and preserved pad overrides.
+
+Instrument → Tags stages the eight category bits with explicit Apply/Revert;
+Instrument Save persists them. Browser Shift selects All or one category using
+All tags / Tag < / Tag >. Folders stay visible, and SFZ imports appear under All.
+See [tag ownership and filtering bounds](features/track-and-patch-model.md#34-tags).
 
 ### Key Map (as built, 2026-09-11)
 

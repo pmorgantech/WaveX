@@ -7,8 +7,10 @@
 using namespace WaveX::Protocol;
 
 TEST(InstrumentEditorProtocol, NewPadSaveAndReadRequestsRoundTrip) {
-    for (uint8_t op = INST_OP_NEW; op <= INST_OP_GET_PAD_MAP; ++op) {
+    for (uint8_t op = INST_OP_NEW; op <= INST_OP_SET_TAGS; ++op) {
         InstOpMessage in(0x12345678, 15, op, "Bench kit");
+        in.tags = 0xA5;
+        in.revision = 0xABCDEF34;
         in.pad_index = 15;
         in.pad_choke = 7;
         in.pad_sample_id = 0x7654;
@@ -26,6 +28,8 @@ TEST(InstrumentEditorProtocol, PadIdentityAndMutationOutcomeRoundTrip) {
     in.request_id = 0x1234;
     in.completed_request_id = 0xABCD;
     in.track = 15;
+    in.tags = 0x93;
+    in.revision = 0xDCBA9876;
     in.loaded = 1;
     in.mode = 1;
     in.editable = 1;

@@ -24,6 +24,7 @@ namespace wavex_ui {
 struct SampleBrowserState {
     std::string current_directory_path = "/";
     uint32_t selected_file_index = 0;
+    uint8_t tag_filter = 0;  // 0 All, 1..8 fixed Instrument categories
     bool is_playing = false;
     std::string playing_sample_path = "";
     uint32_t playing_sample_index = 0;
@@ -122,11 +123,15 @@ class UISampleBrowser : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
     // UI task calls this to drain the deferred updates queued by the RX task.
     static void processDeferredUpdates();
 
    private:
+    void changeTagFilter(uint8_t tag);
+    bool tag_loading_ = false;
+    lv_obj_t* tag_filter_label_ = nullptr;
     lv_obj_t* browser_container_ = nullptr;
     lv_obj_t* info_panel_ = nullptr;
     lv_obj_t* status_label_ = nullptr;

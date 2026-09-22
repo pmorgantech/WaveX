@@ -329,7 +329,27 @@ Location: `0:/wavex/instruments/<name>.wxi`, Samples referenced by absolute card
 
 ### 3.4 Tags
 
-A fixed vocabulary, bitmask: `Drum, Bass, Lead, Pad, Keys, FX, Vocal, Loop`. Free-text tags need a string table, a search UI and a keyboard; a bitmask needs eight checkboxes and a filter row in the browser. Start there; the WXCF chunk can grow.
+**As built, 2026-09-21:** the fixed vocabulary is `Drum, Bass, Lead, Pad,
+Keys, FX, Vocal, Loop`. Instrument → Tags stages multiple categories with
+Apply/Revert. Apply checks the current Instrument revision and changes metadata
+without stopping voices; Instrument Save persists the existing WXI HEAD bitmask.
+A changed revision replaces a staged draft with authoritative tags. Leaving the
+page discards an unapplied draft; a pending mutation blocks navigation until
+confirmed, disconnected or timed out. Timeout rereads without replaying the edit.
+
+Instrument Browser → Shift → All tags / Tag < / Tag > selects All or one category.
+The choice survives page re-entry. Folders remain visible. Tagged listings inspect
+WXI metadata, excluding untagged files, malformed/unreadable WXI and SFZ imports;
+All includes SFZ, which can be tagged after import and saved as WXI.
+The existing directory cache admits at most 256 entries including folders **before**
+tag filtering. Filtered pagination uses that same compacted snapshot. Wider
+listings remain roadmap work.
+
+The Daisy foreground scans at most one 42-byte-or-smaller metadata read per pass,
+skips unrelated chunk payloads and closes the file before yielding. It pauses
+while streaming or another storage job owns the card. No sample PCM is loaded for
+filtering. Host tests cover metadata bounds, revision rejection, save/recall and
+real-LVGL Apply/Revert/stale-state behavior; hardware acceptance is HV-033.
 
 ### 3.5 Pattern and Song (the sequencer's nouns)
 

@@ -58,7 +58,7 @@ def setup(daisy, esp):
     def instrument_op(track, operation, name="", sample=0):
         return msg(
             0x60,
-            "<IBBH256sBBBhBBBBH",
+            "<IBBH256sBBBhBBBBH5x",
             4600000 + track * 10 + operation,
             track,
             operation,

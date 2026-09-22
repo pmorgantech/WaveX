@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added revision-checked Instrument Tags editing with Apply/Revert and WXI
+  persistence. Instrument Browser can filter the eight categories using bounded,
+  cooperative metadata reads without loading sample audio; wire protocol and
+  bench/HIL request encoders now use version 9.
+
 - Added Record → Shift → To pad / To keys: wait for the saved take's Done
   acknowledgment, then choose and explicitly assign a destination in the existing
   map editor. Failed/stale replies, link loss and navigation cannot assign a take.

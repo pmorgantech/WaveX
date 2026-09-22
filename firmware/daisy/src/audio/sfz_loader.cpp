@@ -525,6 +525,8 @@ void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
         s_zone_reply.error = s_edit_error[track];
         s_zone_reply.loaded = ins.origin != InstrumentOrigin::None;
         s_zone_reply.mode = static_cast<uint8_t>(ins.mode);
+        s_zone_reply.tags = ins.tags;
+        s_zone_reply.revision = s_key_revision[track];
         s_zone_reply.editable = KitEdit::Editable(ins);
         s_zone_reply.busy = s_phase != Phase::Idle;
         std::memcpy(s_zone_reply.name, ins.name, sizeof(ins.name));
@@ -945,7 +947,7 @@ bool Begin(const InstOpMessage& request) {
         s_bank_snapshot = false;
     if (s_project_bank && !s_in_project_step)
         return false;
-    if (request.op >= INST_OP_NEW && request.op <= INST_OP_NEW_KEYBOARD) {
+    if (request.op >= INST_OP_NEW && request.op <= INST_OP_SET_TAGS) {
         if (request.slot >= kNumTracks || request.request_id == 0) {
             QueueZoneReply(request.request_id, request.slot, INST_ERROR_BAD_FILE);
             return false;
@@ -972,6 +974,18 @@ bool Begin(const InstOpMessage& request) {
               !KitEdit::Editable(s_bank->At(request.slot).instrument)))) {
             FinishEdit(INST_ERROR_BAD_FILE);
             return false;
+        }
+        if (request.op == INST_OP_SET_TAGS) {
+            auto& ins = s_bank->At(request.slot).instrument;
+            if (ins.origin == InstrumentOrigin::None || !request.revision ||
+                request.revision != s_key_revision[request.slot]) {
+                FinishEdit(INST_ERROR_BAD_FILE);
+                return false;
+            }
+            ins.tags = request.tags;
+            BumpKeyRevision(request.slot);
+            FinishEdit();
+            return true;
         }
         if (request.op == INST_OP_SET_NAME) {
             auto& ins = s_bank->At(request.slot).instrument;

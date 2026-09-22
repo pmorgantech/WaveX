@@ -149,7 +149,7 @@ def test_sfz_load_refreshes_sequence_track_without_stopping_other_tracks(
     daisy.msg(
         0x60,
         struct.pack(
-            "<IBBH256sBBBhBB4x",
+            "<IBBH256sBBBhBB9x",
             2000,
             15,
             2,

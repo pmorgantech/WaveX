@@ -139,7 +139,8 @@ subject to the callback checkpoint:
    checks (HV-030). Complete arpeggiator physical MIDI-clock alignment, generated
    note recording, persistence and pressure checks (HV-031). Add admission-controlled concurrent
    streamed voices; the current SD/ring path is singleton-only.
-5. **Instrument browsing follow-up.** Add tag metadata/filtering.
+5. **Instrument browsing acceptance.** Validate tag editing, saved WXI filtering,
+   pagination and storage-error recovery in [HV-033](hardware-validation.md#hv-033--instrument-tags-and-filtering).
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build and
 save a 16-pad kit and a multisampled keyboard Instrument; load a Bank and recall

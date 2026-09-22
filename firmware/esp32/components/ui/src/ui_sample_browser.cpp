@@ -238,7 +238,19 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
-    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .filter = instruments_ ? WaveX::Protocol::BrowseFilter::Instruments : WaveX::Protocol::BrowseFilter::Samples, .max_entries = WaveX::Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT, .show_hidden = false, .comm_interface = comm_interface_};
+    if (instruments_) {
+        tag_filter_label_ = lv_label_create(info_panel_);
+        ui_theme_apply_label_style(tag_filter_label_, false);
+        lv_obj_set_style_text_font(tag_filter_label_, UI_FONT_SMALL, 0);
+        lv_obj_set_pos(tag_filter_label_, 16, kDetailStatusY - 30);
+        lv_obj_set_width(tag_filter_label_, kDetailW - 32);
+        lv_label_set_text_fmt(tag_filter_label_,
+                              "Filter: %s / Shift to change",
+                              persistent_state_.tag_filter
+                                  ? WaveX::InstrumentTags::kNames[persistent_state_.tag_filter - 1]
+                                  : "All");
+    }
+    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .filter = instruments_ ? static_cast<WaveX::Protocol::BrowseFilter>(2 + persistent_state_.tag_filter) : WaveX::Protocol::BrowseFilter::Samples, .max_entries = WaveX::Protocol::BROWSE_DIRECTORY_ENTRY_LIMIT, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 
@@ -302,6 +314,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
 }
 
 void UISampleBrowser::onExit() {
+    tag_filter_label_ = nullptr;
     // NOTE: onExit is called from UINavigator::push/pop which already holds LVGL lock
     // No need to acquire lock here
 
@@ -427,6 +440,35 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
     }
 }
 
+void UISampleBrowser::changeTagFilter(uint8_t tag) {
+    if (!instruments_ || !file_browser_ || tag > 8 || awaiting_track_)
+        return;
+    if (wavex_file_browser_set_filter(file_browser_,
+                                      static_cast<WaveX::Protocol::BrowseFilter>(2 + tag))) {
+        persistent_state_.tag_filter = tag;
+        if (tag_filter_label_)
+            lv_label_set_text_fmt(tag_filter_label_,
+                                  "Filter: %s / Shift to change",
+                                  tag ? WaveX::InstrumentTags::kNames[tag - 1] : "All");
+        refreshSoftkeys();
+    }
+}
+std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getShiftedSoftkeys() {
+    auto keys = getSoftkeys();
+    if (!instruments_ || awaiting_track_)
+        return keys;
+    const bool ready = file_browser_ && !wavex_file_browser_loading(file_browser_);
+    keys[3] = {"All tags", [this] { changeTagFilter(0); }, ready, "Reading directory"};
+    keys[4] = {"Tag <",
+               [this] { changeTagFilter((persistent_state_.tag_filter + 8) % 9); },
+               ready,
+               "Reading directory"};
+    keys[5] = {"Tag >",
+               [this] { changeTagFilter((persistent_state_.tag_filter + 1) % 9); },
+               ready,
+               "Reading directory"};
+    return keys;
+}
 std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     const wavex_file_entry_t* selected =
@@ -865,6 +907,11 @@ void UISampleBrowser::processDeferredUpdates_() {
     // lv_timer of its own: this already runs at the cadence a preview needs,
     // and one fewer timer is one fewer thing to tear down on exit.
     serviceWaveform();
+    const bool loading = file_browser_ && wavex_file_browser_loading(file_browser_);
+    if (instruments_ && loading != tag_loading_) {
+        tag_loading_ = loading;
+        refreshSoftkeys();
+    }
 
     if (status_update_pending_.load(std::memory_order_acquire) && status_label_) {
         lv_label_set_text(status_label_, pending_status_text_);
@@ -1687,6 +1734,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
 // still goes through the softkey.
 size_t UISampleBrowser::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
+    len = AppendKvInt(out, cap, len, "tagfilter", persistent_state_.tag_filter);
     len = AppendKvText(
         out, cap, len, "status", status_label_ ? lv_label_get_text(status_label_) : "");
     const wavex_file_entry_t* sel =
@@ -1711,6 +1759,15 @@ size_t UISampleBrowser::consoleState(char* out, size_t cap, size_t len) {
 }
 
 bool UISampleBrowser::consoleCommand(const char* args, char* reply, size_t cap) {
+    unsigned tag;
+    char extra;
+    if (instruments_ && std::sscanf(args, "TAGFILTER %u %c", &tag, &extra) == 1 && tag <= 8 &&
+        file_browser_ && !wavex_file_browser_loading(file_browser_) && !awaiting_track_) {
+        changeTagFilter(static_cast<uint8_t>(tag));
+        std::snprintf(reply, cap, "OK");
+        return true;
+    }
+
     using namespace WaveX::Debug;
     char verb[16];
     const char* p = args;

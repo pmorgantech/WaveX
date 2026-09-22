@@ -604,3 +604,12 @@ transfers larger than 4 KiB continue through the original path. `SDIO`'s `buf`
 is the caller address, while `SDIO REGS`'s `base` is the actual IDMA address,
 so a failed staged transfer can be distinguished from an untested direct one.
 Do not interpret a short pass as proof of card/wiring integrity or a driver fix.
+
+### Instrument tags and browser filters
+
+On Instrument → Tags, `PAGE TAG <0..7>` stages a category toggle; the ordinary
+Apply/Revert softkeys commit or discard it. STATE exposes `tags`, `tagsready` and
+`tagsdirty`. Instrument Browser accepts `PAGE TAGFILTER <0..8>` (All, then the
+canonical category order) and exposes `tagfilter`. Filter changes are rejected
+while a directory listing or target-Track picker is active. These commands use
+the same guarded handlers as touch/encoder controls.

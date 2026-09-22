@@ -240,7 +240,7 @@ mute setting. The wire shapes, sizes and bounds are centralized in
 firmware/shared/spi_protocol/protocol.h.
 
 
-## Instrument editor (protocol 5)
+## Instrument editor (introduced in protocol 5, extended in protocol 9)
 
 InstOpMessage appends explicit pad_index, pad_choke and pad_sample_id fields.
 Both images must use the current `PROTOCOL_VERSION` in `protocol.h`. Existing probe/load/modulation fields retain
@@ -260,6 +260,12 @@ retains the Track's completed mutation id/error, so retrying a read cannot
 mistake a lost or failed mutation for success. Repeated completed mutation
 ids return their outcome without repeating the mutation. Main-loop replies
 are retained on a full UART queue. The UI never changes LVGL objects on RX.
+
+Protocol 9 appends `tags` and `revision` to InstOpMessage and InstZoneSyncMessage.
+SET_TAGS requires a loaded Instrument and matching nonzero revision. Success
+updates only metadata and increments the shared map revision; stale requests
+return BAD_FILE. GET_PAD_MAP supplies authoritative tags/revision and the retained
+mutation result. Both images must be updated together. WXI HEAD is unchanged.
 
 The bounded debug MSG payload now accommodates the 512-byte packet class's
 payload, including these extended requests.
@@ -458,7 +464,8 @@ stage.
 ### Filtered browser requests (as built, 2026-09-11)
 
 MSG_BROWSE_REQ retains its legacy start-index byte and NUL-terminated directory
-path. An optional final BrowseFilter byte selects samples or instruments;
+path. An optional final BrowseFilter byte selects samples, instruments or an
+Instrument tag category;
 omitting it lists all supported files. The values and bounded encoder/decoder
 live in protocol.h. Directories remain visible, and the Daisy applies filtering
 before counting and pagination. Sample listings contain WAV; Instrument listings
@@ -467,6 +474,11 @@ requests are rejected without accessing a silently shortened path.
 The current listing limit is 256 entries, including the parent entry. Frontend
 capacity and the Daisy index cache share `BROWSE_DIRECTORY_ENTRY_LIMIT`; late
 pages remain selectable and index-based audition resolves the same listing.
+Protocol 9 adds the eight Instrument category filters. Metadata scanning keeps
+folders and matching WXI entries from the bounded cache, then paginates the
+compacted snapshot. SFZ and unreadable/malformed WXI are excluded from tagged
+listings. Small foreground reads yield between steps and pause during streaming
+or other storage jobs; the UI keeps filter changes disabled while awaiting a list.
 The 500-entry target requires a wider paging contract and remains open.
 
 ### Keyboard Key Map (as built, 2026-09-11)

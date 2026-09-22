@@ -6,8 +6,11 @@
 #include <cstring>
 using namespace WaveX::Protocol;
 TEST(BrowseRequestProtocol, LegacyAndFilteredRequestsRoundTripWithoutIndexChanges) {
-    for (BrowseFilter filter:
-         {BrowseFilter::All, BrowseFilter::Samples, BrowseFilter::Instruments}) {
+    for (BrowseFilter filter: {BrowseFilter::All,
+                               BrowseFilter::Samples,
+                               BrowseFilter::Instruments,
+                               BrowseFilter::Drum,
+                               BrowseFilter::Loop}) {
         std::array<uint8_t, 128> encoded{}, packet{}, decoded{};
         const size_t bytes =
             EncodeBrowseRequest(encoded.data(), encoded.size(), "/kits", 200, filter);
@@ -54,4 +57,15 @@ TEST(BrowseRequestProtocol, BrowserKindsClassifyOnlySupportedExtensions) {
     EXPECT_FALSE(BrowseFileMatches("Piano.wxi.tmp", BrowseFilter::All));
     EXPECT_FALSE(BrowseFileMatches("Piano", BrowseFilter::All));
     EXPECT_FALSE(BrowseFileMatches(nullptr, BrowseFilter::All));
+}
+
+TEST(BrowseRequestProtocol, TagFiltersNeverIncludeWavAndKeepEveryCategory) {
+    for (uint8_t tag = 0; tag < 8; ++tag) {
+        const auto filter = static_cast<BrowseFilter>(tag + 3);
+        EXPECT_TRUE(BrowseFilterValid(filter));
+        EXPECT_EQ(BrowseTagMask(filter), 1u << tag);
+        EXPECT_TRUE(BrowseFileMatches("Sound.wxi", filter));
+        EXPECT_FALSE(BrowseFileMatches("Sound.wav", filter));
+    }
+    EXPECT_EQ(BrowseTagMask(BrowseFilter::Instruments), 0);
 }

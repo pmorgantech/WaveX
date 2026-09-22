@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "audio/arp_config.hpp"
+#include "audio/instrument_tags.hpp"
 #include "audio/lfo_config.hpp"
 #include "audio/note_policy.hpp"
 #include <cstring>
@@ -25,7 +26,8 @@ namespace Protocol {
 // 5: InstOpMessage appends explicit pad index, choke and Sample Pool id fields.
 // 7: sample reserved bytes now carry loop_crossfade_ms (0..20); stereo seam requests.
 // 8: sample edit/seam requests append the playback channel mode.
-static const uint32_t PROTOCOL_VERSION = 8;
+// 9: Instrument tag edits/readback and tagged Instrument browse filters.
+static const uint32_t PROTOCOL_VERSION = 9;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -663,9 +665,25 @@ struct FileEntryWire {
 static constexpr size_t BROWSE_DIRECTORY_PATH_MAX = 96;
 // Current bounded listing, including the parent entry; every index fits on wire.
 static constexpr size_t BROWSE_DIRECTORY_ENTRY_LIMIT = 256;
-enum class BrowseFilter : uint8_t { All = 0, Samples = 1, Instruments = 2 };
+enum class BrowseFilter : uint8_t {
+    All = 0,
+    Samples = 1,
+    Instruments = 2,
+    Drum = 3,
+    Bass,
+    Lead,
+    Pad,
+    Keys,
+    Fx,
+    Vocal,
+    Loop
+};
+inline uint8_t BrowseTagMask(BrowseFilter filter) {
+    const auto value = static_cast<uint8_t>(filter);
+    return value >= 3 && value <= 10 ? InstrumentTags::Mask(value - 3) : 0;
+}
 inline bool BrowseFilterValid(BrowseFilter filter) {
-    return static_cast<uint8_t>(filter) <= static_cast<uint8_t>(BrowseFilter::Instruments);
+    return static_cast<uint8_t>(filter) <= static_cast<uint8_t>(BrowseFilter::Loop);
 }
 inline bool BrowseExtensionEquals(const char* name, const char* suffix) {
     if (!name || !suffix)
@@ -691,7 +709,7 @@ inline bool IsInstrumentFileName(const char* name) {
 inline bool BrowseFileMatches(const char* name, BrowseFilter filter) {
     if (!BrowseFilterValid(filter))
         return false;
-    return (filter != BrowseFilter::Instruments && BrowseExtensionEquals(name, ".wav")) ||
+    return (static_cast<uint8_t>(filter) < 2 && BrowseExtensionEquals(name, ".wav")) ||
            (filter != BrowseFilter::Samples && IsInstrumentFileName(name));
 }
 inline size_t EncodeBrowseRequest(uint8_t* out,
@@ -2469,6 +2487,7 @@ enum InstOpCode : uint8_t {
     // matrix slots this particular write targets. `path` is unused for
     // this op.
     INST_OP_SET_MOD_SLOT = 3,
+    INST_OP_SET_TAGS = 10,       // tags bitmask; metadata only, no voice changes
     INST_OP_NEW_KEYBOARD = 9,    // new empty keyboard Instrument; path carries name
     INST_OP_NEW = 4,             // new empty drum Instrument; path carries its name
     INST_OP_SAVE = 5,            // save a new .wxi copy; path carries the filename stem
@@ -2533,6 +2552,8 @@ struct InstOpMessage {
     uint8_t pad_index = 0;
     uint8_t pad_choke = 0;
     uint16_t pad_sample_id = 0;
+    uint8_t tags = 0;
+    uint32_t revision = 0;  // SET_TAGS expected Instrument revision
 
     InstOpMessage()
         : request_id(0),
@@ -2606,6 +2627,8 @@ struct InstZoneSyncMessage {
     uint8_t error = 0;
     char name[INST_NAME_BYTES] = {};
     InstPadState pads[INST_PAD_COUNT] = {};
+    uint8_t tags = 0;
+    uint32_t revision = 0;
 } __attribute__((packed));
 static_assert(sizeof(InstZoneSyncMessage) <= 122, "pad map fits a 128-byte packet");
 

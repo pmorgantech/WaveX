@@ -391,7 +391,7 @@ def main():
             send(
                 d,
                 0x60,
-                "<IBBH256sBBBhBBBBH",
+                "<IBBH256sBBBhBBBBH5x",
                 request,
                 track,
                 9,

@@ -26,7 +26,7 @@ def _instrument(daisy, request, op, name="", sample=0):
     daisy.msg(
         0x60,
         struct.pack(
-            "<IBBH256sBBBhBBBBH",
+            "<IBBH256sBBBhBBBBH5x",
             request,
             0,
             op,

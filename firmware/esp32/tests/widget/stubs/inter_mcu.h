@@ -62,3 +62,6 @@ bool inter_mcu_get_record_status(WaveX::Protocol::RecordStatusMessage*);
 inline bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage*) {
     return false;
 }
+
+esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage&);
+bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage*);

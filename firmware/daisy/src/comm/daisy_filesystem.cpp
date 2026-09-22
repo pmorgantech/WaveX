@@ -28,6 +28,7 @@
 
 #include "browse_response_outbox.hpp"
 #include "wav/wav_header_parser.hpp"
+#include "wxi/tag_scan.hpp"
 
 // Hardware instance (shared with UART link) - accessed via WaveX::Comm::s_hw
 
@@ -49,6 +50,13 @@ static char s_current_directory[96] = "/";
 static WaveX::Storage::FileEntry s_current_file_entries[BROWSE_DIRECTORY_ENTRY_LIMIT];
 static size_t s_current_file_count = 0;
 static bool s_directory_state_valid = false;
+static BrowseFilter s_directory_filter = BrowseFilter::All;
+static struct {
+    bool active = false, started = false;
+    size_t cursor = 0, kept = 0, start = 0;
+    uint8_t max_entries = 20, mask = 0;
+    WaveX::Wxi::TagScan scan;
+} s_tag_filter;
 static WaveX::Comm::BrowseResponseOutbox s_browse_response;
 // Keep FIL off the stack and aligned; place in default BSS (cache managed by driver).
 alignas(32) static FIL s_metadata_file;
@@ -265,6 +273,7 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 
 namespace WaveX {
 namespace Comm {
+void ReplyBrowsePage(size_t start_index, uint8_t max_entries);
 
 void ProcessBrowseRequest(const char* path,
                           size_t start_index,
@@ -279,96 +288,51 @@ void ProcessBrowseRequest(const char* path,
                (uint32_t)start_index,
                max_entries);
 
+    if (start_index && s_directory_state_valid && s_directory_filter == filter &&
+        std::strcmp(path, s_current_directory) == 0) {
+        ReplyBrowsePage(start_index, max_entries);
+        return;
+    }
     // Cache the directory state for index-based lookups
     strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
     s_current_directory[sizeof(s_current_directory) - 1] = '\0';
 
-    // Response staging. Static, not stack (review H6): together with the
-    // wire-entry and payload buffers below this path used ~11 KB of locals
-    // (plus ListDir's own page buffer) on the shared main-loop stack.
-    // Main-loop-only and non-reentrant, like the rest of this file.
-    // kMaxBrowseEntries is derived from the payload capacity: the old
-    // hard-coded clamp of 50 would have overflowed browse_payload at 32+
-    // entries (50 x 65 B + 5 > 2048) - only the callers' max_entries=20
-    // kept it safe.
-    static FileEntry entries[50];
-    static constexpr size_t kBrowsePayloadCapacity = BrowseResponseOutbox::kCapacity;
-    static constexpr size_t kMaxBrowseEntries =
-        (kBrowsePayloadCapacity - sizeof(uint32_t) - sizeof(uint8_t)) /
-        sizeof(WaveX::Protocol::FileEntryWire);  // = 31 today
-    static_assert(kMaxBrowseEntries <= 50, "browse staging arrays sized for 50 entries");
-    size_t actual_max_entries = (max_entries > kMaxBrowseEntries) ? kMaxBrowseEntries : max_entries;
-
-    size_t total_count = 0;
-    size_t entries_written = 0;
-    // A new request supersedes an older unsent page, even if listing fails.
-    uint8_t* browse_payload = s_browse_response.Begin();
-
-    // Get directory listing from FatFS
-    // OPTIMIZATION: If this is the first page (start_index == 0), get all entries first for
-    // caching, then extract the paginated subset. This avoids calling ListDir twice.
-    size_t all_entries_count = 0;
-
-    if (start_index == 0) {
-        // Cache the complete bounded listing so late-page audition indices resolve.
-        s_directory_state_valid = false;
-        s_current_file_count = 0;
-        uint32_t listdir_start_ms = daisy::System::GetNow();
-        bool success = ListDir(path,
-                               s_current_file_entries,
-                               BROWSE_DIRECTORY_ENTRY_LIMIT,
-                               total_count,
-                               0,
-                               all_entries_count,
-                               filter);
-        uint32_t listdir_end_ms = daisy::System::GetNow();
-        uint32_t listdir_duration_ms = listdir_end_ms - listdir_start_ms;
-
-        if (WaveX::Comm::s_hw) {
-            WaveX::Log::PrintLine("DAISY: ListDir completed: t=%lu ms, duration=%lu ms",
-                                  (unsigned long)listdir_end_ms,
-                                  (unsigned long)listdir_duration_ms);
-        }
-
-        if (!success) {
-            WAVEX_LOGE(STORAGE, "Failed to list directory: %s", path);
-            return;
-        }
-
-        s_current_file_count = all_entries_count;
-        s_directory_state_valid = true;
-
-        // Extract paginated subset for response
-        entries_written = 0;
-        size_t end_index =
-            (all_entries_count < actual_max_entries) ? all_entries_count : actual_max_entries;
-        for (size_t i = 0; i < end_index; i++) {
-            entries[entries_written++] = s_current_file_entries[i];
-        }
-
-        if (WaveX::Comm::s_hw) {
-            WaveX::Log::PrintLine(
-                "DAISY: Cached directory state: %lu entries from '%s' (sending %lu)",
-                (unsigned long)s_current_file_count,
-                path,
-                (unsigned long)entries_written);
-        }
-    } else {
-        // For subsequent pages, just get the paginated entries (no caching needed)
-        bool success = ListDir(
-            path, entries, actual_max_entries, total_count, start_index, entries_written, filter);
-
-        if (!success) {
-            WAVEX_LOGE(STORAGE, "Failed to list directory: %s", path);
-            return;
-        }
+    // A new listing cancels only its own metadata scan. Files are read-only.
+    s_tag_filter = {};
+    s_directory_state_valid = false;
+    s_current_file_count = 0;
+    s_directory_filter = filter;
+    s_browse_response.Begin();
+    size_t total = 0;
+    if (!ListDir(path,
+                 s_current_file_entries,
+                 BROWSE_DIRECTORY_ENTRY_LIMIT,
+                 total,
+                 0,
+                 s_current_file_count,
+                 BrowseTagMask(filter) ? BrowseFilter::Instruments : filter))
+        return;
+    if (BrowseTagMask(filter)) {
+        s_tag_filter.active = true;
+        s_tag_filter.mask = BrowseTagMask(filter);
+        s_tag_filter.start = start_index;
+        s_tag_filter.max_entries = max_entries;
+        return;
     }
+    s_directory_state_valid = true;
+    ReplyBrowsePage(start_index, max_entries);
+}
 
-    WAVEX_LOGD(STORAGE,
-               "Directory listing: total=%u written=%u",
-               (uint32_t)total_count,
-               (uint32_t)entries_written);
-
+void ReplyBrowsePage(size_t start_index, uint8_t max_entries) {
+    static constexpr size_t kMaxBrowseEntries =
+        (BrowseResponseOutbox::kCapacity - 5) / sizeof(FileEntryWire);
+    const size_t available =
+        start_index < s_current_file_count ? s_current_file_count - start_index : 0;
+    const size_t entries_written =
+        std::min(available, std::min(size_t(max_entries), kMaxBrowseEntries));
+    const auto* entries = s_current_file_entries + std::min(start_index, s_current_file_count);
+    const size_t total_count = s_current_file_count;
+    auto* browse_payload = s_browse_response.Begin();
     // Convert FileEntry to FileEntryWire for transmission
     static FileEntryWire wire_entries[50];  // static: see staging note above
     for (size_t i = 0; i < entries_written && i < 50; i++) {
@@ -415,10 +379,66 @@ void ProcessBrowseRequest(const char* path,
 
     // In range: payload_size <= kBrowsePayloadCapacity (2048) by construction.
     s_browse_response.Commit(payload_size);
-    PumpBrowseResponse();
 }
 
 void PumpBrowseResponse() {
+    if (s_tag_filter.active && !WaveX::AudioEngine::IsWavPlaying() &&
+        !WaveX::AudioEngine::StorageJobBusy()) {
+        auto& job = s_tag_filter;
+        if (job.cursor == s_current_file_count) {
+            job.active = false;
+            s_current_file_count = job.kept;
+            s_directory_state_valid = true;
+            ReplyBrowsePage(job.start, job.max_entries);
+        } else {
+            const auto& entry = s_current_file_entries[job.cursor];
+            if (entry.is_dir) {
+                s_current_file_entries[job.kept++] = entry;
+                ++job.cursor;
+            } else if (!Protocol::BrowseExtensionEquals(entry.name, ".wxi")) {
+                ++job.cursor;  // SFZ has no WaveX tag metadata; available under All.
+            } else {
+                // No file handle survives a main-loop pass: format/unmount and
+                // other storage owners cannot inherit an open metadata file.
+                char path[Protocol::BROWSE_PATH_MAX];
+                std::snprintf(
+                    path,
+                    sizeof(path),
+                    "0:%s%s%s",
+                    s_current_directory,
+                    s_current_directory[std::strlen(s_current_directory) - 1] == '/' ? "" : "/",
+                    entry.name);
+                if (f_open(&s_metadata_file, path, FA_READ | FA_OPEN_EXISTING) != FR_OK) {
+                    ++job.cursor;
+                    job.started = false;
+                } else {
+                    if (!job.started) {
+                        job.scan.Begin(f_size(&s_metadata_file));
+                        job.started = true;
+                    }
+                    if (!job.scan.Done()) {
+                        UINT read = 0;
+                        const auto bytes = job.scan.Size();
+                        if (f_lseek(&s_metadata_file, job.scan.Offset()) != FR_OK ||
+                            f_read(&s_metadata_file, s_metadata_buf, bytes, &read) != FR_OK ||
+                            read != bytes)
+                            job.scan.Fail();
+                        else
+                            job.scan.Accept(s_metadata_buf, read);
+                    }
+                    if (f_close(&s_metadata_file) != FR_OK)
+                        job.scan.Fail();
+                    if (job.scan.Done()) {
+                        if (job.scan.Valid() && (job.scan.Tags() & job.mask))
+                            s_current_file_entries[job.kept++] = entry;
+                        ++job.cursor;
+                        job.started = false;
+                    }
+                }
+            }
+        }
+    }
+
     // Do not block, dispatch recursively, or inflate overflow counters while
     // the queue drains. Main calls this before background status producers.
     if (LinkTxIdle()) {
@@ -434,6 +454,8 @@ void PumpBrowseResponse() {
 // Daisy falls silent while the ESP32 still shows "Playing" over a file list
 // it can no longer open.
 void NotifyStorageLost() {
+    s_tag_filter = {};
+
     using namespace WaveX::Protocol;
     s_directory_state_valid = false;
     s_current_file_count = 0;

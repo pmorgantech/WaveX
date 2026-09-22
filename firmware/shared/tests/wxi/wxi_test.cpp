@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "wxi/tag_scan.hpp"
 #include <cstring>
 #include <string>
 #include <vector>
@@ -913,4 +914,56 @@ TEST(WxiArpeggiator, OptionalChunkRoundTripAndValidation) {
     in.arp.octaves = 0;
     MemoryIo invalid;
     EXPECT_EQ(Wxi::Write(invalid.AsWriter(), in), Result::BadChunk);
+}
+
+TEST(WxiTagScan, ReadsRealWriterOutputWithBoundedReadsAndRejectsTruncation) {
+    auto doc = MakeFullDoc();
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), doc), Result::Ok);
+    Wxi::TagScan scan;
+    scan.Begin(io.buf.size());
+    size_t steps = 0;
+    while (!scan.Done()) {
+        ASSERT_LE(scan.Size(), Wxi::kHeadWireSize);
+        ASSERT_LE(scan.Offset() + scan.Size(), io.buf.size());
+        scan.Accept(io.buf.data() + scan.Offset(), scan.Size());
+        ASSERT_LT(++steps, 100u);
+    }
+    ASSERT_TRUE(scan.Valid());
+    EXPECT_EQ(scan.Tags(), doc.tags);
+    for (size_t bytes = 0; bytes < 80; ++bytes) {
+        scan.Begin(bytes);
+        while (!scan.Done()) {
+            if (scan.Offset() + scan.Size() > bytes)
+                scan.Fail();
+            else
+                scan.Accept(io.buf.data() + scan.Offset(), scan.Size());
+        }
+        EXPECT_FALSE(scan.Valid());
+    }
+}
+TEST(WxiTagScan, SkipsLargeUnknownChunksAndAllowsHeadAfterThem) {
+    MemoryIo io;
+    Wxcf::Writer writer(io.AsWriter());
+    ASSERT_EQ(writer.WriteHeader(Wxi::kFileType, Wxi::kFileVersion, 0), Wxcf::Result::Ok);
+    std::vector<uint8_t> unknown(8192, 0xCC);
+    ASSERT_EQ(writer.WriteChunk(999, 0x100, unknown.data(), unknown.size()), Wxcf::Result::Ok);
+    uint8_t head[Wxi::kHeadWireSize]{};
+    head[24] = 0x81;
+    ASSERT_EQ(writer.WriteChunk(Wxi::kChunkHead, 0x100, head, sizeof(head)), Wxcf::Result::Ok);
+    Wxi::TagScan scan;
+    scan.Begin(io.buf.size());
+    size_t bytes_read = 0;
+    while (!scan.Done()) {
+        bytes_read += scan.Size();
+        scan.Accept(io.buf.data() + scan.Offset(), scan.Size());
+    }
+    EXPECT_TRUE(scan.Valid());
+    EXPECT_EQ(scan.Tags(), 0x81);
+    EXPECT_LT(bytes_read, 100u);
+    io.buf[16] = io.buf[17] = io.buf[18] = io.buf[19] = 255;
+    scan.Begin(io.buf.size());
+    while (!scan.Done())
+        scan.Accept(io.buf.data() + scan.Offset(), scan.Size());
+    EXPECT_FALSE(scan.Valid());
 }
