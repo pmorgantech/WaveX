@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F4: pending sample-load tags and geometry no longer
+  replace the confirmed resident editor selection. Failed sends/loads and page
+  exit preserve the previous sample; success adopts the backend-assigned ID.
+
 - Fixed frontend review F3: browser responses cross synchronized bounded value
   queues; RX no longer writes directory entries, selection, persistent strings
   or status buffers. Added concurrent handoff and deferred-application tests.

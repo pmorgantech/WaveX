@@ -272,8 +272,6 @@ one entry does not resolve the remaining cross-task browser ownership issue.
 
 The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- **F4 — Sample identity:** separate pending load tags from confirmed resident
-  selection; failure must preserve the previous editor sample.
 - **F5 — Browse correlation:** see the single owning transport item below;
   delayed pages must never enter a new directory listing.
 - **F6 — Play controls:** read authoritative per-Track values before relative

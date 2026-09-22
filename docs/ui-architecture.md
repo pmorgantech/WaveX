@@ -218,7 +218,9 @@ press counts are retained, and a pending release blocks a same-address retrigger
 This covers Play and DIN/USB forwarding; it guarantees retry of rejected enqueue
 attempts, not acknowledgment of arbitrary wire loss. Rejected note-ons are never
 replayed. Browser audition streams a file; loading and binding a resident sample makes
-it playable through an Instrument.
+it playable through an Instrument. Pending load tags/geometry are separate from
+the confirmed resident editor selection. Only successful completion adopts the
+Daisy-assigned ID; failure or navigation discards the pending selection.
 
 ## Cross-task updates
 

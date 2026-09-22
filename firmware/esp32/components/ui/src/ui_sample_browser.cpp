@@ -334,6 +334,7 @@ void UISampleBrowser::onExit() {
     awaiting_track_ = false;
     pending_load_ = PendingLoad::None;
     bind_on_load_track_.store(-1, std::memory_order_release);
+    persistent_state_.cancelLoad();
     // Detach before the widgets go: it drops the chunk listener first, so
     // the RX task cannot write through a freed page, and releases the cache's
     // run in flight, which would otherwise block every later waveform in the
@@ -923,6 +924,7 @@ void UISampleBrowser::processDeferredUpdates_() {
         sample_replies_.Clear();
         instrument_replies_.Clear();
         bind_on_load_track_.store(-1);
+        persistent_state_.cancelLoad();
         load_request_id_.store(0);
         probe_request_id_.store(0);
         BusyOverlay::hide();
@@ -1423,9 +1425,8 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
         // a time - the busy overlay sees to that - so a completion while a
         // bind is pending is ours.
         const int16_t bind_track = browser->bind_on_load_track_.load(std::memory_order_acquire);
-        const bool ours = bind_track >= 0;
+        const bool ours = bind_track >= 0 && browser->persistent_state_.completeLoad(sample_id);
         if (ours) {
-            browser->persistent_state_.last_load_sample_id = sample_id;
             browser->bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
             setCurrentSampleId(sample_id);
         }
@@ -1461,6 +1462,7 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
             ESP_LOGW(TAG, "=== SAMPLE LOAD COMPLETE: Skipping UI update - not initialized ===");
         }
     } else if (state == WaveX::Protocol::SAMPLE_STATUS_LOAD_FAILED) {
+        browser->persistent_state_.cancelLoad();
         // frames_played carries a SampleLoadFailReason. Before this state
         // existed a failed load left the spinner to time out; now it says why.
         browser->bind_on_load_track_.store(-1, std::memory_order_release);
@@ -1671,6 +1673,10 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
+    if (persistent_state_.loading()) {
+        updateStatus("A sample load is already pending");
+        return false;
+    }
     ESP_LOGI(TAG, "=== SAMPLE LOAD OPERATION: Loading sample: %s ===", entry->name);
 
     // Gracefully fall back if metadata isn't available from the backend yet.
@@ -1726,20 +1732,16 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     // A request tag, not the resident id: the Daisy's Sample Pool assigns
     // that and reports it with LOAD_COMPLETE, where the browser adopts it.
     uint16_t sample_id = persistent_state_.allocateSampleId();
-    persistent_state_.last_load_sample_id = sample_id;
     // Bind it to the selected Track when the Daisy says it is resident: the
     // bind is a separate message (MSG_SAMPLE_SELECT) and would be refused
     // for an id that is not loaded yet.
     bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
     bind_on_load_track_.store(static_cast<int16_t>(getCurrentTrack()), std::memory_order_release);
-    persistent_state_.last_load_sample_path = entry->path;
-    setCurrentSampleId(sample_id);
-    // Capture the geometry too - the edit page has no other source for it.
-    persistent_state_.last_load_sample_rate = sample_rate;
-    persistent_state_.last_load_duration_ms = entry->duration_ms;
-    persistent_state_.last_load_channels = channels;
-    persistent_state_.last_load_bits = bits_per_sample;
-    persistent_state_.last_load_size_bytes = entry->size_bytes;
+    auto pending_entry = *entry;
+    pending_entry.sample_rate = sample_rate;
+    pending_entry.channels = channels;
+    pending_entry.bits_per_sample = bits_per_sample;
+    persistent_state_.stageLoad(sample_id, pending_entry);
 
     {
         // The ESP32 is not blocked here - the Daisy does the SD read and
@@ -1767,6 +1769,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
 
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
+        persistent_state_.cancelLoad();
         bind_on_load_track_.store(-1, std::memory_order_release);
         BusyOverlay::hide();
         updateStatus("Error: Load request failed");

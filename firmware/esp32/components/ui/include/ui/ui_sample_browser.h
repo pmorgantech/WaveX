@@ -44,11 +44,39 @@ struct SampleBrowserState {
     uint16_t last_load_bits = 0;
     uint32_t last_load_size_bytes = 0;
 
+    // A request tag is never a resident identity. Only completeLoad publishes
+    // editor geometry/path; failed sends, load failure and exit discard pending.
+    void stageLoad(uint16_t tag, const wavex_file_entry_t& entry) {
+        pending_tag_ = tag;
+        pending_entry_ = entry;
+    }
+    bool completeLoad(uint16_t resident_id) {
+        if (!pending_tag_ || !resident_id)
+            return false;
+        last_load_sample_id = resident_id;
+        last_load_sample_path = pending_entry_.path;
+        last_load_sample_rate = pending_entry_.sample_rate;
+        last_load_duration_ms = pending_entry_.duration_ms;
+        last_load_channels = pending_entry_.channels;
+        last_load_bits = pending_entry_.bits_per_sample;
+        last_load_size_bytes = pending_entry_.size_bytes;
+        cancelLoad();
+        return true;
+    }
+    void cancelLoad() { pending_tag_ = 0; }
+    bool loading() const { return pending_tag_ != 0; }
+
+   private:
+    uint16_t pending_tag_ = 0;
+    wavex_file_entry_t pending_entry_{};
+
+   public:
     SampleBrowserState() = default;
     SampleBrowserState(const SampleBrowserState&) = default;
     SampleBrowserState& operator=(const SampleBrowserState&) = default;
 
     void reset() {
+        cancelLoad();
         current_directory_path = "/";
         selected_file_index = 0;
         is_playing = false;
