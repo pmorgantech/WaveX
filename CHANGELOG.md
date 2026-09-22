@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Match streamed audition to resident sample gain across -24 through +12 dB:
+  retain attenuation at the minimum, amplify positive settings with saturating
+  CMSIS q15 scaling, and preserve bit-exact unity playback.
+
 - Correct sequencer probability weighting: a 50% step now fires near 50%,
   rather than 58.6%, with bounded deterministic random-number scaling.
 

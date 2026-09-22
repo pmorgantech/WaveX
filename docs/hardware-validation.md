@@ -2275,6 +2275,13 @@ was interrupted, corrected to use an empty Track, and excluded from timings.
 
 ## HV-027 — Sample playback channel selection
 
+- [ ] **Gain parity regression (2026-09-22):** Use a quiet reference tone,
+  compare streamed audition with unity-velocity resident playback at -24,
+  -12, 0, +6 and +12 dB, then repeat with a full-scale signal. Expect matching
+  gain before output clipping, no mute at -24 dB, and saturation without wrap
+  at positive gain. Measure refill duration and callback DWT peaks before/after
+  the foreground CMSIS scale change. Physical listening/timing remain unrun.
+
 **Introduced:** 2026-09-21. **Gate:** [Phase 1.5](roadmap.md#phase-15--sample-editing).
 **Design:** [playback channels](features/offline-sample-editing.md#playback-channels).
 **Setup:** matching protocol-8 images; asymmetric stereo PCM16 sample and a mono

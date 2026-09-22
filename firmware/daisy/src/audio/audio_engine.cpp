@@ -7,6 +7,7 @@
 #include "audio/parameter_locks.hpp"
 #include "audio/recording_session.hpp"
 #include "audio/sample_channels.hpp"
+#include "audio/sample_gain.hpp"
 #include "audio/sample_loop.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
@@ -17,14 +18,6 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "../memory.h"
 #include "../memory_sections.h"  // For WAVEX_DTCM_DATA
 #include "../sdram_layout.h"
-
-#include "../bss_static.hpp"
-// q15_t was CMSIS-DSP's name for a 16-bit sample; the engine keeps the name
-// (it says "audio sample, not a count") but no longer links the library - its
-// one used routine, arm_copy_q15, was a plain copy loop, and memcpy is at
-// least as fast. docs/daisy_rt_audio_coding_guide.md §8 says when the
-// library IS worth linking.
-using q15_t = int16_t;
 #include "audio_engine.h"
 #include "comm/mcu_link.h"
 #include "config/hardware_config.h"
@@ -36,6 +29,7 @@ using q15_t = int16_t;
 #include "storage/sd_sdio.h"
 #include "sys/dma.h"  // For cache management
 
+#include "../bss_static.hpp"
 #include "../cv/cv_cal_store.hpp"
 #include "../cv/cv_group_router.hpp"
 #include "../sequencer/sequencer_transport.hpp"
@@ -659,7 +653,7 @@ struct WavState {
 #if WAVEX_DEBUG_HARNESS_ENABLED
     uint32_t rewinds;
 #endif
-    q15_t gain_q15;  // 32767 = unity
+    int16_t gain_q13;  // 8192 = unity; supports the metadata range through +12 dB
 
     // Region fades (roadmap 1.5.6 item 3), in FRAMES at the file's own rate.
     // Held in frames rather than bytes because the fade position is compared
@@ -864,8 +858,7 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     ref.channel_mode = m.channel_mode;
     // gain_mul is linear and multiplies the velocity gain, so the dB figure
     // has to be converted here rather than passed through.
-    ref.gain_mul =
-        (m.gain_db_x10 == 0) ? 1.0f : std::pow(10.0f, static_cast<float>(m.gain_db_x10) / 200.0f);
+    ref.gain_mul = SampleGainLinear(m.gain_db_x10);
     return ref;
 }
 
@@ -1077,7 +1070,8 @@ StreamDebugState DebugStreamState() {
     state.loop_end = (s_wav.loop_end - s_wav.data_start) / bpf;
     state.loop = s_wav.loop_enabled;
     state.rewinds = s_wav.rewinds;
-    state.gain_q15 = s_wav.gain_q15;
+    // Keep the console's legacy unity=32767 scale, widened for positive gain.
+    state.gain_q15 = (static_cast<int32_t>(s_wav.gain_q13) * 32767 + 4096) / 8192;
     return state;
 }
 
@@ -1420,27 +1414,9 @@ static void ApplyWavCrossfade(q15_t* buf, uint32_t frames, uint32_t first) {
                            s_wav.crossfade_step);
 }
 
-// Playback gain, applied once on the converted block. Written out rather than
-// calling arm_scale_q15: CMSIS-DSP is not linked, and this is a two-line
-// multiply.
-//
-// Saturating on purpose. A wrapping multiply turns a hot sample into
-// full-scale noise at the exact moment the user pushes gain up, which is the
-// worst possible failure mode for a gain control - clipping is merely loud.
+// Playback gain is applied on the foreground's converted block, before refill.
 static void ApplyWavGain(q15_t* buf, uint32_t samples) {
-    if (s_wav.gain_q15 == 32767 || samples == 0) {
-        return;  // unity: skip the pass entirely
-    }
-    const int32_t g = s_wav.gain_q15;
-    for (uint32_t i = 0; i < samples; ++i) {
-        int32_t v = (static_cast<int32_t>(buf[i]) * g) >> 15;
-        if (v > 32767) {
-            v = 32767;
-        } else if (v < -32768) {
-            v = -32768;
-        }
-        buf[i] = static_cast<q15_t>(v);
-    }
+    ApplySampleGain(buf, samples, s_wav.gain_q13);
 }
 
 // Region fade / de-click, applied to the converted block before resampling
@@ -4715,23 +4691,6 @@ static constexpr uint32_t kMinLoopFrames = 256;
 
 struct LoadedSampleInfo;
 
-// dB -> q15 linear, clamped. Table-free: this runs once per edit message, not
-// per sample, so powf is affordable and exact beats fast here.
-static q15_t GainDbToQ15(int16_t db_x10) {
-    if (db_x10 <= -240) {
-        return 0;  // -24 dB and below reads as silence on this control
-    }
-    if (db_x10 > 120) {
-        db_x10 = 120;
-    }
-    const float lin = std::pow(10.0f, static_cast<float>(db_x10) / 200.0f);
-    const float scaled = lin * 32767.0f;
-    if (scaled >= 32767.0f) {
-        return 32767;
-    }
-    return static_cast<q15_t>(scaled);
-}
-
 void OnSampleSeam(const SampleSeamRequest& request) {
     if (!IsValidSampleSeamRequest(request))
         return;
@@ -4884,7 +4843,7 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
     s_wav.loop_start = s_wav.data_start + m.loop_start * file_bpf;
     s_wav.loop_end = s_wav.data_start + m.loop_end * file_bpf;
     s_wav.loop_enabled = m.loop_enabled != 0;
-    s_wav.gain_q15 = GainDbToQ15(m.gain_db_x10);
+    s_wav.gain_q13 = SampleGainQ13(m.gain_db_x10);
     s_wav.channel_mode = m.channel_mode;
     s_wav.region_start_frame = m.start_frame;
     s_wav.region_end_frame = m.end_frame;

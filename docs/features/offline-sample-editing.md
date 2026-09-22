@@ -21,6 +21,11 @@ Time-stretch, pitch-shift, granular processing, and even simple normalize-over-a
 
 ### Standalone edits (as-built)
 
+Sample gain follows the same dB law in resident playback and streamed audition:
+-24 dB attenuates rather than mutes, 0 dB is unity, and +12 dB amplifies.
+The streaming producer uses the vendored CMSIS q15 scale kernel with a Q13
+coefficient and saturates PCM overflow; the callback does no gain conversion.
+
 Sample Edit's shifted **Save** opens a confirmation screen and stores trim,
 loop, crossfade, gain, fades and the metadata channel mode in `<complete WAV filename>.wxs`
 (for example, `Kick.wav.wxs`). **Save As** asks for a new basename and copies

@@ -93,6 +93,7 @@ include_directories(
 
 # Test the same portable sine kernel/table used by the device.
 add_library(wavex_lfo_math_host OBJECT
+    ../libs/libDaisy/Drivers/CMSIS-DSP/Source/BasicMathFunctions/arm_scale_q15.c
     ../libs/libDaisy/Drivers/CMSIS-DSP/Source/SupportFunctions/arm_float_to_q15.c
     ../libs/libDaisy/Drivers/CMSIS-DSP/Source/FastMathFunctions/arm_sin_f32.c
     ../libs/libDaisy/Drivers/CMSIS-DSP/Source/CommonTables/arm_common_tables.c
@@ -102,6 +103,7 @@ target_include_directories(wavex_lfo_math_host SYSTEM PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../libs/libDaisy/Drivers/CMSIS_5/CMSIS/Core/Include
 )
 target_compile_definitions(wavex_lfo_math_host PRIVATE
+    __GNUC_PYTHON__ # CMSIS portable intrinsics for host-side saturating q15 scaling
     ARM_DSP_CONFIG_TABLES ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32
 )
 target_compile_options(wavex_lfo_math_host PRIVATE -w)

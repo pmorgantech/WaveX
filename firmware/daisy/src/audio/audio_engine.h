@@ -273,7 +273,7 @@ uint8_t DebugActiveVoices();
 struct StreamDebugState {
     uint16_t sample_id = 0;
     uint32_t start = 0, end = 0, loop_start = 0, loop_end = 0, rewinds = 0;
-    int16_t gain_q15 = 0;
+    int32_t gain_q15 = 0;
     bool open = false, loop = false;
 };
 StreamDebugState DebugStreamState();
