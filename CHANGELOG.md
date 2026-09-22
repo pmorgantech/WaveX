@@ -623,6 +623,12 @@ versioning and release process.
 
 ### Fixed
 
+- Fix a use-after-free in the Sample Browser's deferred metadata update. The
+  queued update held a pointer into the file browser's entry array and survived
+  leaving the page, so re-entering the browser replayed it against the freed
+  array. The entry is now copied by value and every deferred flag is cleared on
+  page exit.
+
 - Make resident sample loading cooperative so UART notes, releases, controls
   and MIDI clock are serviced between bounded payload reads. Keep incomplete
   PCM private, reject conflicting storage work, release failed allocations,

@@ -263,6 +263,59 @@ Finish reference consistency checks against live transport/parameter behavior
 across platform and feature guides. Preserve the distinction between host
 coverage and hardware evidence (principles 13 and 15).
 
+### ESP32 frontend audit — 2026-09-22
+
+Read-through of `firmware/esp32` against the
+[ESP32-P4 coding guide](esp32p4_coding_guide.md) §14 checklist. Covered: the
+PCNT/panel input path, the UART link and frame scanner, the packet router and
+statistics/listener plumbing, the inter-MCU response caches, the file browser
+and Sample Browser deferred-update paths, `ui_task`, the panel LED/pot
+services, `log_ring` and the screenshot path. Not covered, and still owed a
+pass: the larger feature pages (Instrument, Sequencer, Sample Edit, Pad Map,
+Mixer, Play), `ui_console`, and the envelope cache/fetcher.
+
+The cross-core discipline the guide asks for is, in general, present and
+documented at the point of use. The items below are what the pass turned up.
+
+- [x] **Sample Browser deferred metadata use-after-free.** `updateMetadata()`
+  published a pointer into the file browser's entry array for
+  `processDeferredUpdates_()` to render a UI pass later. The RX task rewrites
+  that array as pagination pages land, and `onExit()` frees it outright while
+  leaving the pending flag raised — and the navigator keeps page objects on
+  its stack, so re-entering the browser replayed the queued update against
+  freed memory. Reachable by highlighting a file, pushing a sub-page and
+  coming back. Fixed: the entry is copied by value, matching the status and
+  metadata text buffers beside it, and every deferred flag is cleared on page
+  exit.
+- [ ] **UART link overflow counter has two writers and one lock.**
+  `queue_overflows` is incremented from the link task's RX path without the TX
+  mutex and from the send path while holding it, so the read-modify-write
+  races across cores and the counter can under-report exactly when it matters.
+  Diagnostics-only, but it is the pattern §14 asks us not to ship. Split the RX
+  and TX overflow counters, or make them atomic.
+- [ ] **`uart_link_stop()` leaves the mutex allocated when driver teardown
+  fails.** It returns early on that path, so `s_uart_mutex` stays non-null and
+  a later `uart_link_init()` takes its "already initialised" early return
+  without reinstalling the driver — a silently dead link. Currently latent:
+  nothing calls `uart_link_stop()`. Either finish the teardown on the error
+  path or drop the unused stop entry point.
+- [ ] **Dead packet-router singleton.** `packet_router.cpp` defines a
+  file-scope `PacketRouter` and an accessor with no callers anywhere in the
+  tree; the routing path uses the instance injected from `ApplicationContext`.
+  It costs a static-init `std::function` construction for nothing. Remove with
+  the unused-frontend-API sweep already listed under *UI and frontend
+  maintenance*.
+- [ ] **The link's router fallback fails silently.** When no router has been
+  injected, the getter returns a function-local throwaway instance, so every
+  inbound message would be parsed, counted and discarded with no diagnostic.
+  Make the fallback say so once, or assert — an unreachable state should look
+  unreachable.
+
+The `ui_get_comm_interface()` global that two pages still reach through is
+already covered by the `ICommInterface` item under *UI and frontend
+maintenance*; the PCNT counter re-centre window is already covered by the
+watch-point item in the same section. Neither is restated here.
+
 ### Melodic follow-ups
 
 The [as-built melodic contract](features/melodic-sequencing.md) resolves gate,

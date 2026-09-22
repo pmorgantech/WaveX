@@ -203,7 +203,17 @@ class UISampleBrowser : public UIPage {
     std::atomic<bool> metadata_update_pending_{false};
     char pending_status_text_[256] = {0};
     char pending_metadata_text_[512] = {0};
-    const wavex_file_entry_t* pending_metadata_entry_ = nullptr;
+    // Held by value, like the two buffers above, rather than as a pointer into
+    // the file browser's entry array. That array is rewritten page by page by
+    // the RX task and freed outright by onExit()'s
+    // wavex_file_browser_destroy(), while this update is consumed a UI pass
+    // later - so a pointer here outlived what it pointed at every time the
+    // page was left with an update still queued.
+    // `_valid_` is payload under metadata_update_pending_, same as the text
+    // buffers: written before the flag's release-store, read after its
+    // acquire-load.
+    wavex_file_entry_t pending_metadata_entry_ = {};
+    bool pending_metadata_entry_valid_ = false;
 
     // Playback bar position, published as a percentage by the status callback.
     std::atomic<bool> play_bar_update_pending_{false};

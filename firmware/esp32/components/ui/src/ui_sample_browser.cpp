@@ -348,6 +348,19 @@ void UISampleBrowser::onExit() {
     // Mark as not initialized to prevent any stray callbacks
     is_initialized_ = false;
 
+    // Drop anything still queued for the UI task. These flags outlive a single
+    // visit - the navigator keeps the page object on its stack and calls
+    // onEnter() again on the same instance - so an update left raised here was
+    // replayed on re-entry against the previous visit's freed widgets and
+    // entry array.
+    metadata_update_pending_.store(false, std::memory_order_relaxed);
+    pending_metadata_entry_valid_ = false;
+    pending_metadata_text_[0] = '\0';
+    status_update_pending_.store(false, std::memory_order_relaxed);
+    selection_metadata_pending_.store(false, std::memory_order_relaxed);
+    play_bar_update_pending_.store(false, std::memory_order_relaxed);
+    softkey_refresh_pending_.store(false, std::memory_order_relaxed);
+
     // NOTE: Do NOT stop playback when navigating away - allow playback to continue
     // This allows users to browse other pages while audio plays in the background
 
@@ -692,7 +705,7 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     browser->probe_request_id_.store(0, std::memory_order_release);
 
     strcpy(browser->pending_metadata_text_, "Select a file to view metadata");
-    browser->pending_metadata_entry_ = nullptr;
+    browser->pending_metadata_entry_valid_ = false;
     browser->metadata_update_pending_.store(true, std::memory_order_release);
     wavex_ui_mark_content_changed();
 
@@ -795,8 +808,11 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
     }
     refreshSoftkeys();
 
-    // Store entry pointer for deferred update (may be called from non-LVGL context)
-    pending_metadata_entry_ = entry;
+    // Copy the entry for the deferred update (may be called from non-LVGL
+    // context). A pointer would dangle: the browser's entry array is rewritten
+    // per browse page by the RX task and freed by onExit().
+    pending_metadata_entry_ = *entry;
+    pending_metadata_entry_valid_ = true;
     metadata_update_pending_.store(true, std::memory_order_release);
     wavex_ui_mark_content_changed();
     ESP_LOGD(TAG, "Metadata update queued for: %s", entry->name);
@@ -959,8 +975,8 @@ void UISampleBrowser::processDeferredUpdates_() {
     if (metadata_update_pending_.load(std::memory_order_acquire) && metadata_label_) {
         char info_text[512];
 
-        if (pending_metadata_entry_) {
-            const wavex_file_entry_t* entry = pending_metadata_entry_;
+        if (pending_metadata_entry_valid_) {
+            const wavex_file_entry_t* entry = &pending_metadata_entry_;
 
             if (entry->is_directory) {
                 ESP_LOGD(TAG,
@@ -994,7 +1010,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                     }
                     lv_label_set_text(metadata_label_, info_text);
                     metadata_update_pending_.store(false, std::memory_order_relaxed);
-                    pending_metadata_entry_ = nullptr;
+                    pending_metadata_entry_valid_ = false;
                     return;
                 }
 
@@ -1097,7 +1113,7 @@ void UISampleBrowser::processDeferredUpdates_() {
             lv_label_set_text(metadata_label_, info_text);
 
             metadata_update_pending_.store(false, std::memory_order_relaxed);
-            pending_metadata_entry_ = nullptr;
+            pending_metadata_entry_valid_ = false;
             ESP_LOGD(TAG, "Metadata label updated for: %s", entry->name);
         } else if (strlen(pending_metadata_text_) > 0) {
             lv_label_set_text(metadata_label_, pending_metadata_text_);
