@@ -575,7 +575,9 @@ class SequencerScheduler {
         rng_state_ ^= rng_state_ << 25;
         rng_state_ ^= rng_state_ >> 27;
         uint64_t result = rng_state_ * 0x2545F4914F6CDD1DULL;
-        return static_cast<uint8_t>((result >> 56) % 100);
+        // Scale 32 uniform bits into 100 buckets in fixed work. Modulo on an
+        // eight-bit value overweighted 0..55 (50% actually fired 58.6%).
+        return static_cast<uint8_t>(((result >> 32) * 100u) >> 32);
     }
 
     uint32_t run_epoch_ = 0;

@@ -309,6 +309,26 @@ TEST(SequencerSchedulerTest, SeededProbabilityIsDeterministic) {
     EXPECT_GT(a.size(), 0u);
 }
 
+TEST(SequencerSchedulerTest, ProbabilityTracksPercentAcrossTheWholeRange) {
+    for (uint8_t probability: {1, 25, 50, 75, 99}) {
+        Pattern pattern;
+        pattern.length = 1;
+        pattern.tracks[0].steps[0].on = true;
+        pattern.tracks[0].steps[0].probability = probability;
+        SequencerScheduler scheduler;
+        scheduler.Init(48000, 6000);
+        scheduler.SetPattern(&pattern);
+        scheduler.SetTempo(120);
+        scheduler.Start();
+        TriggerEvent events[64];
+        unsigned hits = 0;
+        for (unsigned i = 0; i < 100000; ++i)
+            hits += static_cast<unsigned>(scheduler.Process(events, 64));
+        EXPECT_NEAR(hits / 100000.0, probability / 100.0, .005)
+            << "probability " << static_cast<unsigned>(probability);
+    }
+}
+
 // Different seeds produce different probability sequences (otherwise the
 // seed parameter would be decorative).
 TEST(SequencerSchedulerTest, DifferentSeedsProduceDifferentSequences) {

@@ -426,6 +426,11 @@ the already recorded ten-minute captures do not satisfy the one-hour gate.
 
 ## HV-005 — Phase 2 timing and soak gate
 
+- [ ] **Probability regression (2026-09-22):** Capture repeated 25/50/75%
+  steps over a long run and compare hit rates to their settings. Verify seeded
+  restart repeatability and collect matched before/after DWT peaks for the
+  probability workload. Host distribution tests do not close device timing.
+
 - [ ] **Retrigger edit regression (2026-09-22):** Loop a retriggered drum step
   while editing another Track. Capture both repeats at their original offsets;
   then mute the source row, switch it melodic, and move its next boundary

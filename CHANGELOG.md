@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Correct sequencer probability weighting: a 50% step now fires near 50%,
+  rather than 58.6%, with bounded deterministic random-number scaling.
+
 - Preserve already-scheduled drum retriggers across unrelated live Pattern
   edits; mute/melodic changes cancel them and earlier boundaries clip them.
 
