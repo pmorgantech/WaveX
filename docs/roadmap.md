@@ -272,8 +272,6 @@ one entry does not resolve the remaining cross-task browser ownership issue.
 
 The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- **F7 — Resident admission:** let the backend decide RAM admission, including
-  reuse of an already resident file without another allocation.
 - **F8 — Load binding:** retain rejected binding sends and confirm the resulting
   Track binding before claiming the sample is playable there.
 

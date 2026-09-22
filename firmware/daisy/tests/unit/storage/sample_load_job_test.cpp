@@ -247,3 +247,29 @@ TEST_F(SampleLoadJobTest, FullPoolAndMissingPathRejectWithoutEviction) {
     EXPECT_EQ(pool.FindByPath(request.path), nullptr);
 }
 }  // namespace
+
+TEST_F(SampleLoadJobTest, ResidentReuseSucceedsWithLessFreeRamThanFileSize) {
+    ASSERT_TRUE(job.Begin(request));
+    Finish();
+    ASSERT_EQ(job.Status().state, SAMPLE_STATUS_LOAD_COMPLETE);
+    const auto resident_id = job.Status().sample_id;
+    job.ReplySent();
+    wxsamp_stats_t before{};
+    memory.stats(&before);
+    wxsamp_t occupied{};
+    ASSERT_GT(before.largest_free_bytes, 8192u);
+    ASSERT_TRUE(memory.alloc(before.largest_free_bytes - 8192, &occupied));
+    memory.stats(&before);
+    ASSERT_LT(before.largest_free_bytes, wave.size());
+    request.sample_id = 321;
+    ASSERT_TRUE(job.Begin(request));
+    Finish();
+    EXPECT_EQ(job.Status().state, SAMPLE_STATUS_LOAD_COMPLETE);
+    EXPECT_EQ(job.Status().sample_id, resident_id);
+    EXPECT_EQ(job.BytesRead(), 0u);
+    wxsamp_stats_t after{};
+    memory.stats(&after);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+    EXPECT_EQ(after.largest_free_bytes, before.largest_free_bytes);
+    memory.release(&occupied);
+}

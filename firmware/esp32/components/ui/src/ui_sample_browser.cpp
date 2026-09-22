@@ -260,8 +260,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
         return;
     }
 
-    // Warm the allocator view so the first load's fit check has real numbers
-    // rather than a zeroed cache (which the check reads as "unknown, allow").
+    // Refresh display-only allocator diagnostics; the backend owns admission.
     inter_mcu_request_sample_mem_status();
 
     wavex_file_browser_set_file_selected_callback(file_browser_, file_selected_callback, this);
@@ -1416,8 +1415,7 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
         BusyOverlay::requestHide();
         wavex_ui_mark_content_changed();
-        // Refresh the allocator view so the next load's fit check is against
-        // what is actually free now, not what was free before this one.
+        // Refresh display-only allocator diagnostics after a successful load.
         inter_mcu_request_sample_mem_status();
         // The id in the request was only a tag: the Sample Pool assigns the
         // resident id (a file already resident answers with the id it had),
@@ -1709,26 +1707,8 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
-    // Will it fit? The Daisy reports its allocator state in
-    // SampleMemStatusMessage, cached here from the last status. Checking the
-    // LARGEST FREE BLOCK, not total free: the allocator hands out contiguous
-    // extents, so a fragmented pool with plenty of total space still cannot
-    // take a big sample.
-    wavex_sample_mem_status_t mem{};
-    inter_mcu_get_sample_mem_status(&mem);
-    if (mem.largest_free_bytes > 0 && entry->size_bytes > mem.largest_free_bytes) {
-        char warn[192];
-        snprintf(warn, sizeof(warn), "%.1f MB sample, largest free block is %.1f MB", static_cast<float>(entry->size_bytes) / (1024.0f * 1024.0f), static_cast<float>(mem.largest_free_bytes) / (1024.0f * 1024.0f));
-        ESP_LOGW(TAG, "Sample will not fit: %s", warn);
-        // A refusal, not an operation: show() would spin over it and then,
-        // when its timeout fired, rewrite it as "No response from backend".
-        BusyOverlay::notice("Sample will not fit", warn);
-        // Editing requires the complete resident sample. Never truncate or
-        // evict another Track implicitly to make this load fit.
-        updateStatus("Error: sample too large for free sample RAM");
-        return false;
-    }
-
+    // The backend owns admission: resident reuse needs no new PCM allocation,
+    // WAV container bytes differ from PCM bytes, and cached free RAM can be stale.
     // A request tag, not the resident id: the Daisy's Sample Pool assigns
     // that and reports it with LOAD_COMPLETE, where the browser adopts it.
     uint16_t sample_id = persistent_state_.allocateSampleId();

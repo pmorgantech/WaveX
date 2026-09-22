@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F7: sample-load RAM admission is backend-owned, allowing
+  resident reuse when the file exceeds the remaining free block. Added a loader
+  regression proving reuse preserves identity and performs no allocation/read.
+
 - Fixed frontend review F6: Play filter/envelope controls start from correlated
   per-Track Instrument readback and wait for confirmation after edits. Stale,
   disconnected and out-of-range values cannot cause default-based jumps.

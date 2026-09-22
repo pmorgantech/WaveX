@@ -152,6 +152,11 @@ These checks do not close the larger Phase 1.5 gate.
 
 ### Oversized samples
 
+The Daisy owns resident admission. The frontend does not refuse a load by
+comparing container size with cached free RAM: resident path reuse needs no new
+PCM allocation, file headers are not PCM, and the allocator can change before
+a request arrives. Free-memory telemetry remains diagnostic.
+
 Resident loading is all-or-nothing. Never report a truncated prefix as the
 complete sample, evict another Track implicitly, or reinterpret absolute
 markers relative to a partial buffer. If the complete allocation cannot be
