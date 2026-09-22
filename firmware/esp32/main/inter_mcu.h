@@ -39,6 +39,9 @@ esp_err_t inter_mcu_send_midi_pressure(const WaveX::Protocol::MidiPressureMessag
 esp_err_t inter_mcu_send_midi_program(const WaveX::Protocol::MidiProgramMessage& message);
 esp_err_t inter_mcu_send_midi_clock(const WaveX::Protocol::MidiClockEventMessage& message);
 
+// Ordinary UI-task service; releases persist independently of page lifetime.
+void inter_mcu_service_note_releases();
+
 // Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
 

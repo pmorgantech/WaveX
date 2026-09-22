@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F2: the inter-MCU client retains releases for admitted
+  Play/DIN/USB presses through queue pressure and page exit, with bounded retry
+  and ordered retriggers. Play no longer marks rejected presses as held.
+
 - Fixed frontend review F1: held Play notes retain their originating Track across
   selection changes. Added a real-LVGL regression; physical acceptance is HV-034.
 

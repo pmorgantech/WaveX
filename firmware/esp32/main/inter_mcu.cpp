@@ -7,7 +7,9 @@
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "comm/listener_slot.h"
+#include "comm/note_delivery.h"
 #include "comm/statistics.h"
+#include "comm/task_mutex.h"
 #include "ui/mixer_solo.h"
 #if WAVEX_SPI_LINK_ENABLED
 #include "links/esp_spi_link.h"
@@ -175,22 +177,30 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
 // encoded - either a raw MIDI channel or NoteChannelForTrack(track) - so the
 // addressing decision is made by the caller-facing wrappers below and never
 // re-derived here.
+static WaveX::Comm::TaskMutex s_note_mutex;
+static WaveX::Comm::NoteDelivery s_notes;
+
+static bool send_note_packet(uint8_t type, const WaveX::Protocol::NoteMessage& message) {
+    return s_initialized && !s_suspended && send_link_message(type, &message, sizeof(message)) >= 0;
+}
+
+void inter_mcu_service_note_releases() {
+    WaveX::Comm::TaskLock lock(s_note_mutex);
+    if (lock)
+        s_notes.Service(send_note_packet);
+}
+
 static esp_err_t send_note(uint8_t msg_type,
                            uint8_t note,
                            uint8_t velocity,
                            uint8_t addressed_channel) {
-    if (!s_initialized || s_suspended) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
     WaveX::Protocol::NoteMessage msg;
     msg.note = note;
     msg.velocity = velocity;
     msg.channel = addressed_channel;
     msg.reserved = 0;
-
-    int result = send_link_message(msg_type, &msg, sizeof(msg));
-    return result >= 0 ? ESP_OK : ESP_FAIL;
+    WaveX::Comm::TaskLock lock(s_note_mutex);
+    return lock && s_notes.Send(msg_type, msg, send_note_packet) ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_note_on_midi(uint8_t note, uint8_t velocity, uint8_t channel) {

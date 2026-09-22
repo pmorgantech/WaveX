@@ -211,7 +211,13 @@ LVGL's points when geometry changes or a new line widget needs its array.
 Pads and Keys must release notes on release, `PRESS_LOST`, exit and changes
 that invalidate their held-note map. Latch and panic share that lifecycle. Each accepted press retains its note and
 originating Track; changing selection never redirects its release.
-Browser audition streams a file; loading and binding a resident sample makes
+The inter-MCU client reserves one of 128 fixed note-address slots before
+admitting a press. Matching releases survive page exit and link queue pressure;
+the UI service retries up to eight per pass, stopping at backpressure. Repeated
+press counts are retained, and a pending release blocks a same-address retrigger.
+This covers Play and DIN/USB forwarding; it guarantees retry of rejected enqueue
+attempts, not acknowledgment of arbitrary wire loss. Rejected note-ons are never
+replayed. Browser audition streams a file; loading and binding a resident sample makes
 it playable through an Instrument.
 
 ## Cross-task updates

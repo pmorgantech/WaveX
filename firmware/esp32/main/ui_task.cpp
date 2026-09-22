@@ -283,6 +283,7 @@ void UITask::run() {
         // Dispatch queued input events to current context. processAll() takes
         // the LVGL port lock around each event itself (see input_dispatcher.cpp
         // for why per event and not around the drain), so no lock here.
+        inter_mcu_service_note_releases();
         wavex_ui::InputDispatcher::instance().processAll();
 
         // The screen blanker records touch activity from the LVGL task and

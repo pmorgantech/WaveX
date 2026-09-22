@@ -11,6 +11,7 @@ uint16_t pixels[1280 * 800];
 uint32_t ticks = 0;
 std::vector<uint8_t> on_notes, off_notes;
 std::vector<uint8_t> on_tracks, off_tracks;
+esp_err_t on_result = ESP_OK, off_result = ESP_OK;
 uint32_t Tick() {
     return ticks;
 }
@@ -46,6 +47,7 @@ class PlayPageTest : public ::testing::Test {
             wavex_ui::UINavigator::instance().push(std::make_shared<EmptyPage>());
             initialized = true;
         }
+        on_result = off_result = ESP_OK;
         on_notes.clear();
         off_notes.clear();
         on_tracks.clear();
@@ -89,12 +91,12 @@ esp_err_t inter_mcu_send_control_change(uint8_t, uint8_t, uint16_t) {
 esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t, uint8_t track) {
     on_notes.push_back(note);
     on_tracks.push_back(track);
-    return ESP_OK;
+    return on_result;
 }
 esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t track) {
     off_notes.push_back(note);
     off_tracks.push_back(track);
-    return ESP_OK;
+    return off_result;
 }
 TEST_F(PlayPageTest, DeferredKeysBuildOnceAndTabSwitchReleasesHeldNotes) {
     ASSERT_NE(tabs, nullptr);
@@ -131,4 +133,27 @@ TEST_F(PlayPageTest, ReleaseRetainsTrackAcrossSelectionChange) {
     EXPECT_EQ(on_tracks, std::vector<uint8_t>({0}));
     EXPECT_EQ(off_tracks, on_tracks);
     EXPECT_EQ(off_notes, on_notes);
+}
+
+TEST_F(PlayPageTest, AllOffRetriesRejectedRelease) {
+    Select(1);
+    auto* key = FindType(lv_obj_get_child(lv_tabview_get_content(tabs), 1), &lv_button_class);
+    lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
+    off_result = -1;
+    lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
+    off_result = ESP_OK;
+    page->getShiftedSoftkeys()[5].onPress();
+    EXPECT_EQ(off_notes.size(), 2u);
+}
+TEST_F(PlayPageTest, RejectedPressDoesNotBecomeHeld) {
+    Select(1);
+    auto* key = FindType(lv_obj_get_child(lv_tabview_get_content(tabs), 1), &lv_button_class);
+    on_result = -1;
+    lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
+    lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
+    EXPECT_TRUE(off_notes.empty());
+    on_result = ESP_OK;
+    lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
+    lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
+    EXPECT_EQ(off_notes.size(), 1u);
 }

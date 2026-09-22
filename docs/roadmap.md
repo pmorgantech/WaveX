@@ -272,9 +272,6 @@ one entry does not resolve the remaining cross-task browser ownership issue.
 
 The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- **F2 — Release delivery:** retain rejected Play/DIN/USB note-offs beyond page
-  lifetime, order them before retriggers, and keep All Off effective under TX
-  backpressure. Test queue-full recovery without replaying rejected note-ons.
 - **F3 — Browser ownership:** deliver complete bounded responses to the UI domain;
   stop UART callbacks mutating directory, selection, strings and metadata.
 - **F4 — Sample identity:** separate pending load tags from confirmed resident
