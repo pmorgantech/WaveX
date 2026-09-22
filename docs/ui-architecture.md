@@ -209,7 +209,8 @@ base colour. Instrument curves keep page-owned point arrays and only reset
 LVGL's points when geometry changes or a new line widget needs its array.
 
 Pads and Keys must release notes on release, `PRESS_LOST`, exit and changes
-that invalidate their held-note map. Latch and panic share that lifecycle.
+that invalidate their held-note map. Latch and panic share that lifecycle. Each accepted press retains its note and
+originating Track; changing selection never redirects its release.
 Browser audition streams a file; loading and binding a resident sample makes
 it playable through an Instrument.
 

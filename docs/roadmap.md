@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-21.
+**Last updated:** 2026-09-22.
 
 This document tracks remaining implementation, open decisions and phase gates.
 Completed work belongs in [CHANGELOG.md](../CHANGELOG.md) and git history;
@@ -265,28 +265,33 @@ coverage and hardware evidence (principles 13 and 15).
 
 ### ESP32 frontend audit — 2026-09-22
 
-Read-through of `firmware/esp32` against the
-[ESP32-P4 coding guide](esp32p4_coding_guide.md) §14 checklist. Covered: the
-PCNT/panel input path, the UART link and frame scanner, the packet router and
-statistics/listener plumbing, the inter-MCU response caches, the file browser
-and Sample Browser deferred-update paths, `ui_task`, the panel LED/pot
-services, `log_ring` and the screenshot path. Not covered, and still owed a
-pass: the larger feature pages (Instrument, Sequencer, Sample Edit, Pad Map,
-Mixer, Play), `ui_console`, and the envelope cache/fetcher.
+The combined frontend reviews cover input, UART/router/listeners, response
+caches, browser ownership, Play note/control lifetime and feature-page request
+handling. The earlier metadata-pointer fix is retained in the changelog; copying
+one entry does not resolve the remaining cross-task browser ownership issue.
 
-The cross-core discipline the guide asks for is, in general, present and
-documented at the point of use. The items below are what the pass turned up.
+The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- [x] **Sample Browser deferred metadata use-after-free.** `updateMetadata()`
-  published a pointer into the file browser's entry array for
-  `processDeferredUpdates_()` to render a UI pass later. The RX task rewrites
-  that array as pagination pages land, and `onExit()` frees it outright while
-  leaving the pending flag raised — and the navigator keeps page objects on
-  its stack, so re-entering the browser replayed the queued update against
-  freed memory. Reachable by highlighting a file, pushing a sub-page and
-  coming back. Fixed: the entry is copied by value, matching the status and
-  metadata text buffers beside it, and every deferred flag is cleared on page
-  exit.
+- **F2 — Release delivery:** retain rejected Play/DIN/USB note-offs beyond page
+  lifetime, order them before retriggers, and keep All Off effective under TX
+  backpressure. Test queue-full recovery without replaying rejected note-ons.
+- **F3 — Browser ownership:** deliver complete bounded responses to the UI domain;
+  stop UART callbacks mutating directory, selection, strings and metadata.
+- **F4 — Sample identity:** separate pending load tags from confirmed resident
+  selection; failure must preserve the previous editor sample.
+- **F5 — Browse correlation:** see the single owning transport item below;
+  delayed pages must never enter a new directory listing.
+- **F6 — Play controls:** read authoritative per-Track values before relative
+  input becomes an absolute CC; reject stale readback after Track/link changes.
+- **F7 — Resident admission:** let the backend decide RAM admission, including
+  reuse of an already resident file without another allocation.
+- **F8 — Load binding:** retain rejected binding sends and confirm the resulting
+  Track binding before claiming the sample is playable there.
+
+Physical acceptance for all eight findings is [HV-034](hardware-validation.md#hv-034--frontend-note-browser-and-load-recovery).
+Completed implementation leaves this list and is recorded in the changelog.
+Keep the following earlier audit follow-ups independent:
+
 - [ ] **UART link overflow counter has two writers and one lock.**
   `queue_overflows` is incremented from the link task's RX path without the TX
   mutex and from the send path while holding it, so the read-modify-write
@@ -354,7 +359,7 @@ host tests or a short callback screen as the full Phase 2.5 gate.
   bursts and repeated polling; coalesce replaceable telemetry where justified.
   Rejected enqueue attempts are not automatically lost musical events.
 - **Browse request correlation:** the legacy directory reply has no request/path
-  identity. Add a versioned correlated read before supporting safe cancellation
+  identity. F5 requires a versioned correlated read before supporting safe cancellation
   of overlapping directory changes and automatic retry after arbitrary lost or
   delayed replies. Serializing bench requests is not proof of that behavior.
 - **Backend upgrade planning:** retain the [RT1170 plan](rt1170-migration.md),

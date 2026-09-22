@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "inter_mcu.h"
+#include "ui/current_track.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_play_page.h"
 
@@ -9,6 +10,7 @@ namespace {
 uint16_t pixels[1280 * 800];
 uint32_t ticks = 0;
 std::vector<uint8_t> on_notes, off_notes;
+std::vector<uint8_t> on_tracks, off_tracks;
 uint32_t Tick() {
     return ticks;
 }
@@ -46,6 +48,9 @@ class PlayPageTest : public ::testing::Test {
         }
         on_notes.clear();
         off_notes.clear();
+        on_tracks.clear();
+        off_tracks.clear();
+        wavex_ui::setCurrentTrack(0);
         page = wavex_ui::createPlayPage();
         wavex_ui::UINavigator::instance().push(page);
         Draw();
@@ -81,12 +86,14 @@ bool inter_mcu_get_sample_meta(uint16_t, WaveX::Protocol::SampleMetadata*) {
 esp_err_t inter_mcu_send_control_change(uint8_t, uint8_t, uint16_t) {
     return ESP_OK;
 }
-esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t, uint8_t) {
+esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t, uint8_t track) {
     on_notes.push_back(note);
+    on_tracks.push_back(track);
     return ESP_OK;
 }
-esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t) {
+esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t track) {
     off_notes.push_back(note);
+    off_tracks.push_back(track);
     return ESP_OK;
 }
 TEST_F(PlayPageTest, DeferredKeysBuildOnceAndTabSwitchReleasesHeldNotes) {
@@ -110,5 +117,18 @@ TEST_F(PlayPageTest, DeferredKeysBuildOnceAndTabSwitchReleasesHeldNotes) {
     lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
     lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
     EXPECT_EQ(on_notes.size(), 2u);
+    EXPECT_EQ(off_notes, on_notes);
+}
+
+TEST_F(PlayPageTest, ReleaseRetainsTrackAcrossSelectionChange) {
+    Select(1);
+    auto* key = FindType(lv_obj_get_child(lv_tabview_get_content(tabs), 1), &lv_button_class);
+    ASSERT_NE(key, nullptr);
+    lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
+    wavex_ui::setCurrentTrack(1);
+    page->onTrackChanged();
+    lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
+    EXPECT_EQ(on_tracks, std::vector<uint8_t>({0}));
+    EXPECT_EQ(off_tracks, on_tracks);
     EXPECT_EQ(off_notes, on_notes);
 }

@@ -97,6 +97,7 @@ class UIPlayPage : public UIPage {
         // send Note Off for a note that was never started and leave the real
         // one hanging.
         uint8_t sent_note = 0;
+        uint8_t sent_track = 0;
     };
 
     static void keyEventCb(lv_event_t* e);

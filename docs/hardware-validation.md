@@ -2615,6 +2615,36 @@ identities. SD save/reboot checks remain blocked by the unresolved write CRCs.
   job. No crash or audio underrun; filtering resumes or can be refreshed after
   recovery, without loading sample PCM just to classify a sound.
 
+## HV-034 — Frontend note, browser and load recovery
+
+**Status:** Open; host regressions and builds do not establish physical acceptance.
+**Design:** [frontend remediation](roadmap.md#esp32-frontend-audit--2026-09-22),
+[UI ownership](ui-architecture.md#cross-task-updates), Phase 2.
+**Setup:** paired current images, sustained Instrument on two Tracks, DIN/USB
+MIDI source, SD folders exceeding 20 entries, two resident samples and UART
+fault/queue-pressure instrumentation. Record image identities and transport logs.
+
+- [ ] F1/F2: hold/latch notes, switch Tracks, transpose, change tabs and leave
+  Play while producing MIDI bursts and rejected TX admissions. After recovery,
+  every accepted note-on releases on its original address; All Off releases
+  pending notes and rejected note-ons never replay.
+- [ ] F3/F5: rapidly change folders/filter/page while delaying directory replies,
+  then leave/re-enter Browse. No stale labels, incorrect paths, crash or mixed
+  metadata; old replies cannot satisfy a new request. Repeat with card removal.
+- [ ] F4/F7: select resident A, fail a new load by enqueue/SD/RAM rejection and
+  open Edit. A remains selected. Reuse a resident file larger than the remaining
+  free block on another Track; identity is shared and allocation does not grow.
+- [ ] F6: give two Tracks different filter/envelope values, enter/re-enter Play,
+  switch Tracks and interrupt readback. First adjustments start from confirmed
+  values; stale/disconnected values cannot authorize edits or cause jumps.
+- [ ] F8: reject the bind send after successful loading and delay binding replies.
+  Do not report success until matching readback; recover without another load
+  or duplicate mutation, including page exit and reconnect cases.
+- [ ] Repeat under sequencer/streaming load; capture UI stack/memory margins,
+  link counters and audio underruns. Preserve the independent capacity/soak gate.
+
+**Blocker:** physical/fault-injection session not run for this remediation.
+
 ## Recording a validation session
 
 Append a record for each run and update the relevant boxes and queue status.

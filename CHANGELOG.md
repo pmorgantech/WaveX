@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F1: held Play notes retain their originating Track across
+  selection changes. Added a real-LVGL regression; physical acceptance is HV-034.
+
 - Fix a use-after-free in the Sample Browser's deferred metadata update. The
   queued update held a pointer into the file browser's entry array and survived
   leaving the page, so re-entering the browser replayed it against the freed
