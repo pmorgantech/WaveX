@@ -4,7 +4,6 @@
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "../comm/packet_router.h"
-#include "../inter_mcu.h"
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "esp_uart_link.h"
@@ -12,6 +11,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "inter_mcu.h"
 
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
 #include "../../shared/uart_protocol/frame_scanner.hpp"

@@ -6,7 +6,6 @@
 #include "bsp/esp32_p4_nano.h"
 #include "config/hardware_config.h"
 #include "inter_mcu.h"
-#include "midi_task.h"
 #include "ui/current_track.h"
 #include "ui/display_manager.h"
 #include "ui/ui_api.h"
@@ -72,12 +71,7 @@ std::shared_ptr<UIPage> createMainMenu() {
     // edited, so the header and status line have to outlive a tab switch. See
     // UIInstrumentPage.
     //
-    // Each row also carries what is inside it and, where the state is actually
-    // available, what it is currently pointing at. Sample's resident count and
-    // Instrument's name are deliberately absent: neither is exposed outside
-    // the page that owns it today, and a plausible-looking placeholder in the
-    // root menu is worse than a blank - you would have to open the page to
-    // find out whether to believe it. Tracked in docs/roadmap.md.
+    // Context reads the shared backend snapshots; no page-local mirror.
     // Separator is ASCII "/" and not a middle dot: LVGL's built-in Montserrat
     // tables cover printable ASCII, so U+00B7 renders as a box on the panel.
     static const struct {
@@ -110,6 +104,37 @@ std::shared_ptr<UIPage> createMainMenu() {
                 snprintf(buf, sizeof(buf), "Track %u", trackDisplayNumber(getCurrentTrack()));
                 return std::string(buf);
             };
+        } else if (group == RootGroup::Sample) {
+            context = []() {
+                if (!inter_mcu_backend_link_alive())
+                    return std::string("Pool unavailable");
+                // Menu context runs once per second, only while visible.
+                inter_mcu_request_sample_meta_page(0, 1);
+                uint16_t count = 0;
+                if (!inter_mcu_get_sample_pool_count(&count, 3000))
+                    return std::string("Pool: checking");
+                char text[32];
+                snprintf(text, sizeof(text), "%u resident", count);
+                return std::string(text);
+            };
+        } else if (group == RootGroup::Instrument) {
+            context = []() {
+                if (!inter_mcu_backend_link_alive())
+                    return std::string("Instrument unavailable");
+                const auto track = getCurrentTrack();
+                inter_mcu_request_track_binding(track);
+                WaveX::Protocol::TrackBindingMessage binding;
+                if (!inter_mcu_get_track_binding(track, &binding, 3000))
+                    return std::string("Instrument: checking");
+                char text[64];
+                const char* name = binding.state == WaveX::Protocol::TRACK_BINDING_EMPTY ? "Empty"
+                                   : binding.state == WaveX::Protocol::TRACK_BINDING_LOADING
+                                       ? "Loading"
+                                   : binding.name[0] ? binding.name
+                                                     : "Unnamed";
+                snprintf(text, sizeof(text), "Track %u / %.23s", trackDisplayNumber(track), name);
+                return std::string(text);
+            };
         } else if (group == RootGroup::Diagnostics) {
             // The one piece of root-level state worth seeing without opening
             // anything: a dead link makes every other page lie quietly.
@@ -136,7 +161,7 @@ std::shared_ptr<UIPage> createMainMenu() {
 std::shared_ptr<UIPage> createSampleGroup() {
     auto group = std::make_shared<UITabHostPage>("Sample");
     group->addTab("Manage", createSampleManagerPage());
-    if (auto comm = wavex_ui::ui_get_comm_interface()) {
+    if (auto comm = wavex_ui::uiContext().comm) {
         group->addTab("Browse", createSampleBrowserPage(*comm));
     } else {
         // Browse needs the link; without it the tab would build an empty list

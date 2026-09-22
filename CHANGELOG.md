@@ -623,6 +623,18 @@ versioning and release process.
 
 ### Fixed
 
+- Play octave and active Pads/Keys range labels now agree with MIDI note names
+  without transposing performance notes.
+- Busy-overlay load failures and timeouts retain non-spinning error text until
+  dismissal. Root-menu Sample/Instrument context reads shared backend snapshots.
+- Directory browsing retries missing/rejected pages up to three attempts with
+  fresh request IDs and a 1.5-second deadline; exhausted listings clear selection
+  and expose Retry. The 256-entry limit remains pending the larger paging contract.
+- UI/main component cycle removed through shared frontend contracts and injected
+  panel/browser context; debug console stays with application code. Content-change
+  notifications are atomic. Removed unused interface methods, task panel-handle
+  and navigation queries, and the bypassed host theme mock.
+
 - Encoder polling uses IDF limit-watch accumulation with an IRAM-safe ISR instead
   of clearing a running counter; edges between reads and re-centres are retained.
   Removed unused counter-reset/snapshot APIs that bypassed poller ownership.

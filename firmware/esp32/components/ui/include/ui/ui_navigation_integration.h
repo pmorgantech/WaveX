@@ -22,8 +22,6 @@ void handleNavigationInput(const InputEvent& evt);
 /// A UIContext that forwards input to the navigation system.
 std::shared_ptr<UIContext> createNavigationContext();
 
-bool isNavigationActive();
-
 std::shared_ptr<UIPage> createMainMenu();
 
 }  // namespace wavex_ui

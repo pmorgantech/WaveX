@@ -419,7 +419,7 @@ still answer in their legacy form, so `scripts/wavex_log.py` and
 when slope and drive became Instrument parameters). `WAVEX-ENTER-DFU`
 keeps its own substring matcher, as §3 required.
 
-**ESP32** (`components/ui/src/ui_console.cpp`, `ui_console.h`; the console
+**ESP32** (`main/ui_console.cpp`, `ui_console.h`; the console
 task replaced the listener that lived in `ui_screenshot.cpp`):
 
 | Verb | Effect | Answered from |

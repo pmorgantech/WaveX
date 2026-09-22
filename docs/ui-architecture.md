@@ -39,9 +39,19 @@ Page construction can execute through either input path, so inspect both
 high-water marks on hardware.
 
 `DisplayManager` is a singleton, as are the navigator and input dispatcher.
-Pages still call `inter_mcu_*` functions in `main`; a fully injected
-`UISharedContext` and removal of that dependency cycle are future work in
-[roadmap.md](roadmap.md). Do not present them as an implemented abstraction.
+The UI component depends on `frontend_contracts`, a declaration-only component
+containing `ICommInterface`, backend API declarations, statistics values and bounded
+queue helpers. `main` supplies their implementations and depends on UI; UI does
+not depend on `main`. Startup injects `UISharedContext` with the browser interface
+and encoder/panel snapshot callbacks before UI tasks/listeners start. The debug
+console belongs to `main`. Pages still use the public `inter_mcu_*` service APIs;
+this is not a claim that every backend operation is virtualized.
+
+The UI owns the atomic content-change signal. Background tasks set it without
+accessing the application task object; the UI task consumes it. Root-menu context
+reads backend Pool totals and Track binding names rather than copying page state.
+Both contexts have a three-second freshness limit and reject an
+offline backend. Context refresh requests run only while the menu is visible.
 
 ## Navigation structure
 
@@ -230,6 +240,10 @@ resident ID is confirmed on the original target Track. A timeout, refusal, page
 exit or link loss ends UI retry; admitted mutations may already have applied
 and are never resubmitted. The successfully loaded sample remains in the Pool.
 
+Play uses MIDI note 60 = C4 consistently in key names and the octave tile.
+Its header shows the active surface's range: sixteen chromatic Pads or the
+25-note Keys surface. This is presentation only; note numbers are unchanged.
+
 Play reads the selected Instrument's filter and Env 1 through the existing
 correlated edit/modulator snapshots. Entry, Track changes and link transitions
 invalidate edit readiness. A successful CC enqueue waits for fresh readback
@@ -251,6 +265,19 @@ load state or widget text. Listener teardown waits for RX callbacks before
 clearing/freeing queues. Overflow invalidates the operation/listing and requires
 refresh rather than publishing a partial result. Queue locks never enclose
 callbacks, LVGL or link sends.
+
+A directory page has a 1.5-second deadline and at most three send attempts,
+including rejected queue admissions. Every attempt gets a fresh reply ID;
+responses from an earlier attempt cannot append entries. Exhaustion clears the
+partial listing and selection, stops the spinner and offers Retry by touch or
+softkey. Navigation and card removal cancel outstanding retries. Current storage
+and wire limits still cap directories at 256 entries; larger paging remains in
+the roadmap.
+
+Busy-overlay timeouts and load failures become terminal, non-spinning messages
+with an explicit Dismiss button. Late progress or queued completion cannot erase
+that explanation; a new operation resets it. A timeout does not cancel an admitted
+backend operation, so its result must be checked before retrying a mutation.
 
 A `volatile` struct plus a pending flag is not synchronization. Even a
 release/acquire flag does not protect a slot if the producer can overwrite

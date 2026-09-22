@@ -1,12 +1,10 @@
-#include "panel/panel_task.h"
 #include "ui/panel/panel_led_service.h"
 // WaveX UI Diagnostics Page Implementation
 #include <esp_log.h>
 #include <esp_lvgl_port.h>
 #include <string.h>
 
-#include "comm/statistics.h"
-#include "config.h"
+#include "config/hardware_config.h"
 #include "config/link_config.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -16,16 +14,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "inter_mcu.h"
-#include "links/esp_spi_link.h"
-#include "pcnt_task.h"
 #include "ui/input_dispatcher.h"
 #include "ui/panel_key.h"
 #include "ui/tca8418_keypad.h"
+#include "ui/ui_api.h"
 #include "ui/ui_diagnostics_page.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_tab_group.h"
-#include "ui_task.h"
 #include "ui_theme.h"
 
 #include <memory>
@@ -1186,9 +1182,9 @@ void UIDiagnosticsPage::refreshPanelTab() {
     static const uint8_t kUnits[2] = {WAVEX_ENCODER_PCNT_UNIT, WAVEX_PCNT1_UNIT};
     for (int i = 0; i < 2; i++) {
         int count = 0;
-        if (pcnt_get_raw_count(kUnits[i], &count) == ESP_OK) {
+        if (uiContext().readEncoder && uiContext().readEncoder(kUnits[i], &count) == ESP_OK) {
             snprintf(v, sizeof(v), "%d", count);
-            snprintf(sub, sizeof(sub), "raw count, PCNT unit %u", kUnits[i]);
+            snprintf(sub, sizeof(sub), "accumulated count, PCNT unit %u", kUnits[i]);
             setCard(panel_cards[4 + i], v, "", sub, -1);
         } else {
             setCard(panel_cards[4 + i], "-", "", "PCNT unit not running", -1);
@@ -1203,19 +1199,19 @@ void UIDiagnosticsPage::refreshPanelTab() {
              static_cast<unsigned long>(k.errors),
              static_cast<unsigned long>(k.overflows));
     setCard(panel_cards[6], v, "", sub, -1);
-    const auto leds = wavex_panel::ReadStatus();
+    const auto leds = uiContext().readPanel ? uiContext().readPanel() : PanelStatus{};
     const int test = PanelLedTestChannel();
     std::snprintf(v,
                   sizeof(v),
                   "%s",
-                  !leds.ready          ? "Unavailable"
-                  : !leds.applied      ? "Pending"
-                  : leds.frame.blanked ? "Blank"
-                                       : "Active");
+                  !leds.ready     ? "Unavailable"
+                  : !leds.applied ? "Pending"
+                  : leds.blanked  ? "Blank"
+                                  : "Active");
     std::snprintf(sub,
                   sizeof(sub),
                   "%s test %d errors %lu",
-                  wavex_panel::BackendName(),
+                  leds.backend,
                   test,
                   static_cast<unsigned long>(leds.errors));
     setCard(panel_cards[7], v, "", sub, -1);

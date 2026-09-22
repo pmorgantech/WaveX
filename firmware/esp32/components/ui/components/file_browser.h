@@ -71,6 +71,9 @@ typedef struct {
 
     // Pagination state
     uint32_t request_id;  // one outstanding page; changes on every new request
+    uint32_t request_started_ms;
+    uint8_t request_attempts;
+    bool browse_failed;  // failed listings never authorize selection
     uint32_t total_files;
     uint32_t current_page;
     uint32_t entries_per_page;  // typically 4

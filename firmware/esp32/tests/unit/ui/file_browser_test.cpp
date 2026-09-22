@@ -759,3 +759,65 @@ TEST_F(FileBrowserResponseTest, RejectsPreviousDirectoryPageAndDuplicateReply) {
     wavex_file_browser_process_pending_updates(browser_);
     EXPECT_EQ(browser_->entry_count, 1u);
 }
+
+TEST_F(FileBrowserResponseTest, MissingPageRetriesWithFreshIdsAndEventuallyFailsClosed) {
+    const auto old = Correlate(BuildBrowsePayload(1, {FileEntryWire(0, 100, "old.wav")}));
+    const auto first_id = browser_->request_id;
+    browser_->request_started_ms -= 1500;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_NE(browser_->request_id, first_id);
+    EXPECT_EQ(browser_->request_attempts, 2);
+    stats_->invoke_browse_resp_callback(old.data(), old.size());
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(browser_->entry_count, 0u);
+    browser_->request_started_ms -= 1500;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(browser_->request_attempts, 3);
+    browser_->request_started_ms -= 1500;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_TRUE(browser_->browse_failed);
+    EXPECT_FALSE(wavex_file_browser_loading(browser_));
+    EXPECT_EQ(wavex_file_browser_get_selected(browser_), nullptr);
+    EXPECT_TRUE(wavex_file_browser_refresh(browser_));
+    Respond(1, {FileEntryWire(0, 100, "new.wav")});
+    EXPECT_FALSE(browser_->browse_failed);
+    ASSERT_EQ(browser_->entry_count, 1u);
+    EXPECT_STREQ(browser_->entries[0].name, "new.wav");
+}
+TEST_F(FileBrowserResponseTest, LaterPageLossClearsPartialSelectionAndCardRemovalStopsRetry) {
+    std::vector<FileEntryWire> page;
+    for (unsigned i = 0; i < browser_->entries_per_page; ++i)
+        page.push_back(FileEntryWire(0, 100, "a.wav"));
+    Respond(40, page);
+    ASSERT_GT(browser_->entry_count, 0u);
+    for (unsigned i = 0; i < 3; ++i) {
+        browser_->request_started_ms -= 1500;
+        wavex_file_browser_process_pending_updates(browser_);
+    }
+    EXPECT_TRUE(browser_->browse_failed);
+    EXPECT_EQ(wavex_file_browser_get_selected(browser_), nullptr);
+    wavex_file_browser_refresh(browser_);
+    stats_->invoke_storage_status_callback(false);
+    wavex_file_browser_process_pending_updates(browser_);
+    const auto calls = GetInterMcuCapture().browse_req_calls;
+    browser_->request_started_ms -= 1500;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(GetInterMcuCapture().browse_req_calls, calls);
+}
+
+TEST_F(FileBrowserResponseTest, QueueRejectionIsPacedAndRecoversWithoutAcceptingOldReply) {
+    GetInterMcuCapture().send_result = ESP_FAIL;
+    EXPECT_TRUE(wavex_file_browser_refresh(browser_));
+    EXPECT_EQ(browser_->request_id, 0u);
+    EXPECT_TRUE(wavex_file_browser_loading(browser_));
+    const auto calls = GetInterMcuCapture().browse_req_calls;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(GetInterMcuCapture().browse_req_calls, calls);
+    GetInterMcuCapture().send_result = ESP_OK;
+    browser_->request_started_ms -= 1500;
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_NE(browser_->request_id, 0u);
+    Respond(1, {FileEntryWire(0, 100, "recovered.wav")});
+    EXPECT_EQ(browser_->entry_count, 1u);
+    EXPECT_FALSE(wavex_file_browser_loading(browser_));
+}

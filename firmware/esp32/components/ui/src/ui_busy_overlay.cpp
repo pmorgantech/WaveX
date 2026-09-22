@@ -31,6 +31,7 @@ constexpr uint32_t kColDim = palette::kColDim;
 lv_obj_t* s_scrim = nullptr;
 lv_obj_t* s_panel = nullptr;
 lv_obj_t* s_spinner = nullptr;
+lv_obj_t* s_dismiss = nullptr;
 lv_obj_t* s_caption = nullptr;
 lv_obj_t* s_detail = nullptr;
 lv_obj_t* s_bar = nullptr;
@@ -56,20 +57,8 @@ void onTimeout(lv_timer_t*) {
     if (!s_panel || !lv_obj_is_valid(s_panel)) {
         return;
     }
-    if (s_spinner && lv_obj_is_valid(s_spinner)) {
-        lv_obj_add_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (s_caption && lv_obj_is_valid(s_caption)) {
-        lv_label_set_text(s_caption, "No response from backend");
-        lv_obj_set_style_text_color(s_caption, lv_color_hex(kColRed), 0);
-    }
-    if (s_detail && lv_obj_is_valid(s_detail)) {
-        lv_label_set_text(s_detail, "Tap to dismiss");
-    }
-    if (s_timeout) {
-        lv_timer_delete(s_timeout);
-        s_timeout = nullptr;
-    }
+    failure("No response from backend",
+            "The operation may still finish. Check its result before retrying.");
 }
 
 void onScrimClick(lv_event_t*) {
@@ -123,7 +112,19 @@ void build() {
     lv_obj_set_style_text_color(s_detail, lv_color_hex(kColDim), 0);
     lv_obj_set_pos(s_detail, 112, 86);
     lv_obj_set_width(s_detail, 640 - 112 - 32);
-    lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_detail, LV_LABEL_LONG_WRAP);
+
+    s_dismiss = lv_button_create(s_panel);
+    ui_theme_apply_button_style(s_dismiss, true);
+    lv_obj_set_size(s_dismiss, 140, 44);
+    lv_obj_set_pos(s_dismiss, 640 - 172, 265);
+    lv_obj_add_event_cb(s_dismiss, onScrimClick, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* label = lv_label_create(s_dismiss);
+    lv_obj_set_style_text_font(label, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(label, UI_COLOR_TEXT, 0);
+    lv_label_set_text(label, "Dismiss");
+    lv_obj_center(label);
+    // Live work ignores dismissal, just as a tap on the scrim does.
 
     s_bar_label = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_bar_label, UI_FONT_SMALL, 0);
@@ -164,6 +165,9 @@ void build() {
 }  // namespace
 
 void show(const char* caption, const char* detail, uint32_t timeout_ms) {
+    s_hide_requested.store(false, std::memory_order_relaxed);
+    s_progress_requested.store(false, std::memory_order_relaxed);
+    s_dual_progress_requested.store(false, std::memory_order_relaxed);
     if (!s_scrim || !lv_obj_is_valid(s_scrim)) {
         s_scrim = nullptr;
         build();
@@ -175,6 +179,7 @@ void show(const char* caption, const char* detail, uint32_t timeout_ms) {
     lv_obj_move_foreground(s_scrim);
 
     lv_obj_remove_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dismiss, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_item_label, LV_OBJ_FLAG_HIDDEN);
@@ -207,9 +212,14 @@ void notice(const char* caption, const char* detail) {
         s_timeout = nullptr;
     }
     lv_obj_add_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
-    char text[224];
-    snprintf(text, sizeof(text), "%s\nTap to dismiss", detail ? detail : "");
-    lv_label_set_text(s_detail, text);
+    lv_obj_remove_flag(s_dismiss, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_detail, detail ? detail : "");
+}
+
+void failure(const char* caption, const char* detail) {
+    notice(caption, detail);
+    if (s_caption && lv_obj_is_valid(s_caption))
+        lv_obj_set_style_text_color(s_caption, lv_color_hex(kColRed), 0);
 }
 
 void showDual(const char* caption, const char* detail, uint32_t timeout_ms) {
@@ -226,7 +236,7 @@ void showDual(const char* caption, const char* detail, uint32_t timeout_ms) {
 }
 
 void setProgress(int percent) {
-    if (!s_bar || !lv_obj_is_valid(s_bar)) {
+    if (!s_timeout || !s_bar || !lv_obj_is_valid(s_bar)) {
         return;
     }
     if (percent < 0) {
@@ -241,7 +251,7 @@ void setProgress(int percent) {
 
 void setDualProgress(int total_percent, int item_percent, const char* item_detail) {
     setProgress(total_percent);
-    if (!s_item_bar || !lv_obj_is_valid(s_item_bar))
+    if (!s_timeout || !s_item_bar || !lv_obj_is_valid(s_item_bar))
         return;
     item_percent = item_percent < 0 ? 0 : (item_percent > 100 ? 100 : item_percent);
     lv_obj_remove_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
@@ -252,7 +262,7 @@ void setDualProgress(int total_percent, int item_percent, const char* item_detai
 }
 
 void setDetail(const char* detail) {
-    if (s_detail && lv_obj_is_valid(s_detail)) {
+    if (s_timeout && s_detail && lv_obj_is_valid(s_detail)) {
         lv_label_set_text(s_detail, detail ? detail : "");
     }
 }
@@ -298,7 +308,8 @@ void service() {
     if (s_hide_requested.exchange(false, std::memory_order_acquire)) {
         s_progress_requested.store(false, std::memory_order_relaxed);
         s_dual_progress_requested.store(false, std::memory_order_relaxed);
-        hide();
+        if (s_timeout)
+            hide();  // A late completion must not erase a terminal explanation.
         return;
     }
     if (s_dual_progress_requested.exchange(false, std::memory_order_acquire)) {

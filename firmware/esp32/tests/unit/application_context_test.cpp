@@ -51,44 +51,16 @@ TEST_F(ApplicationContextTest, GettersReturnStableInstances) {
     EXPECT_EQ(&context->getCommInterface(), &comm);
 }
 
-// The CommInterface must be constructed over the SAME StatisticsManager the
-// context exposes: data pushed through getStatistics() must be readable
-// through getCommInterface(). This is the wiring the whole UI depends on.
-TEST_F(ApplicationContextTest, CommInterfaceSharesTheContextsStatisticsManager) {
-    context->getStatistics().update_backend_heartbeat(4242, 17, 99, 33.5f);
-
-    wavex_backend_heartbeat_t hb;
-    context->getCommInterface().getBackendHeartbeat(&hb);
-    ASSERT_TRUE(hb.valid);
-    EXPECT_EQ(hb.uptime_ms, 4242u);
-    EXPECT_EQ(hb.rx_total, 17u);
-    EXPECT_EQ(hb.loop_counter, 99u);
-    EXPECT_FLOAT_EQ(hb.cpu_usage_percent, 33.5f);
-
-    context->getStatistics().increment_packet_stat(0x10);
-    wavex_packet_stats_t s;
-    context->getCommInterface().getPacketStats(&s);
-    EXPECT_EQ(s.meter_push_packets, 1u);
-}
-
-// Listener registration through the interface and invocation through the
-// statistics manager must meet at the same slot.
+// Registration and delivery must meet at the same injected statistics owner.
 TEST_F(ApplicationContextTest, ListenersRegisteredViaCommInterfaceFire) {
-    static float s_last_rms;
-    s_last_rms = -1.0f;
-
-    context->getCommInterface().setMeterListener(
-        [](float rms_left, float rms_right, float peak_left, float peak_right, void* user_data) {
-            (void)rms_right;
-            (void)peak_left;
-            (void)peak_right;
-            (void)user_data;
-            s_last_rms = rms_left;
-        },
-        nullptr);
-
-    context->getStatistics().update_meter_data(0.75f, 0.5f, 0.9f, 0.8f);
-    EXPECT_FLOAT_EQ(s_last_rms, 0.75f);
+    bool mounted = false;
+    context->getCommInterface().setStorageStatusListener(
+        [](bool value, void* data) { *static_cast<bool*>(data) = value; }, &mounted);
+    context->getStatistics().invoke_storage_status_callback(true);
+    EXPECT_TRUE(mounted);
+    context->getCommInterface().setStorageStatusListener(nullptr, nullptr);
+    context->getStatistics().invoke_storage_status_callback(false);
+    EXPECT_TRUE(mounted);
 }
 
 // The context's router must actually route: a real heartbeat packet through

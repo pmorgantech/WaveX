@@ -1,6 +1,6 @@
 #pragma once
 
-#include "i_comm_interface.h"
+#include "comm/i_comm_interface.h"
 #include "statistics.h"
 
 namespace WaveX {
@@ -22,17 +22,9 @@ class CommInterfaceImpl : public ICommInterface {
 
     ~CommInterfaceImpl() override = default;
 
-    // Meter data operations
-    void setMeterListener(wavex_meter_cb_t cb, void* user_data) override;
-    void getMeterData(wavex_meter_data_t* out) override;
-
     // File browsing operations
     void setBrowseResponseListener(wavex_browse_resp_cb_t cb, void* user_data) override;
     void setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) override;
-    esp_err_t sendBrowseRequest(
-        const char* path,
-        uint8_t start_index,
-        WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All) override;
 
     esp_err_t sendBrowsePageRequest(const Protocol::BrowsePageRequest& request) override;
 
@@ -40,19 +32,6 @@ class CommInterfaceImpl : public ICommInterface {
     void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) override;
     esp_err_t sendSamplePlayRequest(uint32_t file_index) override;
     esp_err_t sendSampleStopRequest() override;
-    esp_err_t sendSampleLoadRequest(uint16_t sample_id,
-                                    uint32_t sample_size,
-                                    uint16_t sample_rate,
-                                    uint8_t channels,
-                                    uint8_t bit_depth) override;
-    esp_err_t sendSampleData(const uint8_t* data, size_t length) override;
-
-    // Diagnostics operations
-    void getBackendHeartbeat(wavex_backend_heartbeat_t* out) override;
-    void getPacketStats(wavex_packet_stats_t* out) override;
-
-    // Utility operations
-    bool isBusy() override;
 
    private:
     StatisticsManager& statistics_;

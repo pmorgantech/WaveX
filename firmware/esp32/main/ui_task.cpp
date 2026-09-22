@@ -1,3 +1,4 @@
+#include "panel/panel_task.h"
 #include "panel/pot_service.h"
 #include "ui/panel/panel_led_service.h"
 #include "ui/ui_navigator.h"
@@ -68,7 +69,10 @@ UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(c
     m_context.comm_interface = &m_comm_interface;
 
     // Register comm interface with UI system for page creation
-    wavex_ui::ui_set_comm_interface(&m_comm_interface);
+    wavex_ui::uiInitialize({&m_comm_interface, pcnt_get_raw_count, [] {
+        const auto status = wavex_panel::ReadStatus();
+        return wavex_ui::PanelStatus{status.ready, status.applied, status.frame.blanked,
+                                    status.errors, wavex_panel::BackendName()}; }});
 
     ESP_LOGI(TAG, "UITask created with injected CommInterface");
 }
@@ -164,17 +168,10 @@ esp_err_t UITask::stop() {
     return ESP_OK;
 }
 
-void UITask::markContentChanged() {
-    m_context.content_changed = true;
-}
-
-esp_err_t UITask::getPanelHandle(esp_lcd_panel_handle_t *panel_handle) {
-    return wavex_ui::DisplayManager::instance().panelHandle(panel_handle);
-}
-
 void UITask::adaptiveRefreshControl() {
     uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000);  // Convert to ms
 
+    m_context.content_changed |= wavex_ui::takeUIContentChanged();
     if (m_context.content_changed) {
         uint32_t time_since_last_refresh = current_time - m_context.last_refresh_time;
 
@@ -358,19 +355,4 @@ esp_err_t wavex_ui_task_stop(void) {
     delete g_ui_task_instance;
     g_ui_task_instance = nullptr;
     return ret;
-}
-
-esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle) {
-    if (!g_ui_task_instance) {
-        ESP_LOGE(TAG, "UI task not started");
-        return ESP_FAIL;
-    }
-
-    return g_ui_task_instance->getPanelHandle(panel_handle);
-}
-
-void wavex_ui_mark_content_changed(void) {
-    if (g_ui_task_instance) {
-        g_ui_task_instance->markContentChanged();
-    }
 }

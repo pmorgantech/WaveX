@@ -550,7 +550,8 @@ void UIPlayPage::refreshKeys() {
 void UIPlayPage::refreshBindingStatus() {
     char low[8], high[8];
     NoteName(root_note_, low, sizeof(low));
-    NoteName(root_note_ + kPadCount - 1, high, sizeof(high));
+    const bool piano = tabview_ && lv_tabview_get_tab_active(tabview_) == 1;
+    NoteName(root_note_ + (piano ? 24 : kPadCount - 1), high, sizeof(high));
 
     const uint8_t track = currentTrack();
     WaveX::Protocol::TrackBindingMessage binding;
@@ -761,8 +762,8 @@ void UIPlayPage::refreshPadTiles() {
 
     char buf[16];
     // Octave and semitone are two readings of the one root note, not two
-    // stored values - MIDI note 60 is octave 5, semitone 0.
-    snprintf(buf, sizeof(buf), "%d", root_note_ / 12);
+    // stored values - MIDI note 60 is C4, semitone 0.
+    snprintf(buf, sizeof(buf), "%d", root_note_ / 12 - 1);
     valueTileSetValue(octave_tile_, buf);
     snprintf(buf, sizeof(buf), "%d", root_note_ % 12);
     valueTileSetValue(semi_tile_, buf);

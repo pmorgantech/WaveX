@@ -7,6 +7,8 @@
 #include "../components/file_browser.h"
 #include "comm/i_comm_interface.h"
 #include "comm/value_queue.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "input_event.h"
 #include "inter_mcu.h"
 #include "sample_binding_model.h"

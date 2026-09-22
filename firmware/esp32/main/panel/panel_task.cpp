@@ -5,9 +5,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_backend.h"
+#include "panel/pot_service.h"
 #include "panel_spi.h"
 #include "pcnt_task.h"
-#include "pot_service.h"
 
 #include <atomic>
 namespace wavex_panel {

@@ -15,7 +15,6 @@ set(COMPONENT_SRCS
     "components/ui_dial.cpp"
     "src/ui_diagnostics_page.cpp"
     "src/ui_screenshot.cpp"
-    "src/ui_console.cpp"
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
     "src/ui_api.cpp"
@@ -97,7 +96,7 @@ idf_component_register(
         esp_app_format
         esp_timer
         shared
-        main
+        frontend_contracts
 )
 
 # Compile-time theme selection. The palette lives in styles/themes/; this

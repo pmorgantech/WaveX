@@ -74,6 +74,15 @@ foreach(test_source IN LISTS widget_tests)
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../shared
     )
 
+    if(test_name STREQUAL "busy_overlay_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_busy_overlay.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/styles/ui_theme.cpp)
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
+    endif()
+
     if(test_name STREQUAL "encoder_strip_test")
         file(GLOB ENCODER_STRIP_FONTS ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
         target_sources(${test_name} PRIVATE

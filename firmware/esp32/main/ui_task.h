@@ -32,8 +32,6 @@
 typedef struct _lv_obj_t lv_obj_t;
 typedef struct _lv_timer_t lv_timer_t;
 
-// LCD panel handle type
-typedef struct esp_lcd_panel_t *esp_lcd_panel_handle_t;
 #endif
 
 #ifndef WAVEX_TEST_BUILD
@@ -66,10 +64,6 @@ class UITask {
     esp_err_t start();
     esp_err_t stop();
 
-    void markContentChanged();
-
-    esp_err_t getPanelHandle(esp_lcd_panel_handle_t *panel_handle);
-
    private:
     WaveX::Comm::ICommInterface &m_comm_interface;
 
@@ -88,7 +82,5 @@ class UITask {
 // Global functions (for C compatibility)
 esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface &comm_interface);
 esp_err_t wavex_ui_task_stop(void);
-esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle);
-void wavex_ui_mark_content_changed(void);
 
 #endif  // WAVEX_TEST_BUILD

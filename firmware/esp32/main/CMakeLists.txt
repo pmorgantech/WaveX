@@ -6,6 +6,7 @@ idf_component_register(
         "wavex_application.cpp"
         "inter_mcu.cpp"
         "ui_task.cpp"
+        "ui_console.cpp"
         "pcnt_task.cpp"
         "panel/panel_task.cpp"
         "panel/panel_spi.cpp"
@@ -47,6 +48,7 @@ idf_component_register(
         "esp_app_format"  # esp_app_get_description(): version from the root VERSION file
     PRIV_REQUIRES
         "shared"
+        "frontend_contracts"
         "ui"
 )
 

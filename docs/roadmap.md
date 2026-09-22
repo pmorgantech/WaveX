@@ -275,10 +275,6 @@ Implementation and host/build results are recorded in the changelog; neither
 closes the Phase 2 hardware, capacity or recovery gates. Audit follow-up
 hardware procedures remain in HV-034; unrelated maintenance stays below.
 
-The `ui_get_comm_interface()` global that two pages still reach through is
-already covered by the `ICommInterface` item under *UI and frontend
-maintenance*.
-
 ### Melodic follow-ups
 
 The [as-built melodic contract](features/melodic-sequencing.md) resolves gate,
@@ -317,8 +313,8 @@ host tests or a short callback screen as the full Phase 2.5 gate.
   bursts and repeated polling; coalesce replaceable telemetry where justified.
   Rejected enqueue attempts are not automatically lost musical events.
 - **Browse recovery:** verify correlated directory cancellation/delayed replies
-  on both boards in HV-034. Automatic timeout/retry after arbitrary wire loss
-  remains separate work; a missing page must not authorize stale selection.
+  and bounded timeout/retry on both boards in HV-034. Verify request/page loss,
+  queue pressure, late replies and explicit retry after exhaustion.
 - **Backend upgrade planning:** retain the [RT1170 plan](rt1170-migration.md),
   including the proposed M4 link/storage service after an M7-only audio baseline.
   Resolve shared-memory/cache handoffs, SD-stall command latency and bus contention.
@@ -376,22 +372,19 @@ read failures at HV-023 before claiming recovery acceptance.
 
 #### Other frontend maintenance
 
-- Reconcile Play's displayed octave and Pads/Keys range labels without changing
-  MIDI note numbers.
-- Break the UI/main dependency cycle after the UI hardware pass: inject a narrow
-  shared context, move `ICommInterface` out of `main`, then remove the dependency.
-- Give busy-overlay failures stable, non-spinning text and deliberate dismissal.
-- Recheck callers and remove unused frontend APIs, window manager/surfaces and
-  the bypassed `mocks/ui_theme.h` in a separate cleanup.
-- Supply root-menu resident-count/Instrument-name context from authoritative
-  shared accessors rather than duplicating state.
+- Complete HV-034 for encoder limit accounting, Play range labels, root-menu
+  context, busy-overlay terminal states and directory retry under load.
 
 ### Samples, instruments, and browsing
 
 - Reproduce non-frame-aligned WAV data artifacts with a minimal fixture; identify
   the parser/stream fault before changing offsets.
-- Add bounded directory paging when the 500-entry browse target is required;
-  extend the one-byte paging contract and bounded storage beyond 256 entries.
+- Extend bounded directory paging beyond 256 entries for the 500-entry target:
+  widen the shared request/reply cursor and backend enumeration limit together,
+  version the wire contract, retain request correlation and bounded retries, and
+  test 255/256/257/500-entry directories, filtering, cancellation and media loss.
+  Keep frontend storage bounded (a page window rather than an unbounded mirror).
+  This protocol/storage extension is follow-up work; current firmware remains capped.
 - Define reference-aware rename/delete/reorder behavior and protocol.
 - **Wavetable source, after 2.5:** follow [oscillator-sources.md](features/oscillator-sources.md).
   Resolve import metadata, cycle/frame limits, interpolation/anti-aliasing,

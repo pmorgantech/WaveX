@@ -46,8 +46,4 @@ std::shared_ptr<UIContext> createNavigationContext() {
     return std::make_shared<UIContext>("Navigation", handleNavigationInput);
 }
 
-bool isNavigationActive() {
-    return UINavigator::instance().active() != nullptr;
-}
-
 }  // namespace wavex_ui

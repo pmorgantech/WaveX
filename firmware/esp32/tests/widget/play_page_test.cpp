@@ -219,3 +219,11 @@ TEST_F(PlayPageTest, MissingAndDisconnectedReadbackCannotAuthorizeEdits) {
     page->getSoftkeys()[4].onPress();
     EXPECT_TRUE(controls.empty());
 }
+
+TEST_F(PlayPageTest, RangeFollowsActiveSurfaceWithoutTransposingNotes) {
+    EXPECT_EQ(std::string(page->contextLine()).find("C4-D#5 /"), 0u);
+    Select(1);
+    EXPECT_EQ(std::string(page->contextLine()).find("C4-C6 /"), 0u);
+    Select(0);
+    EXPECT_EQ(std::string(page->contextLine()).find("C4-D#5 /"), 0u);
+}

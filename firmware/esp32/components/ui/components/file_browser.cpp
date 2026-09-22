@@ -24,7 +24,7 @@
 #include <cstdio>
 // Mark UI content changes so the main UI task triggers a refresh
 #ifndef WAVEX_TEST_BUILD
-#include "ui_task.h"
+#include "ui/ui_api.h"
 #else
 #include "../../../tests/mocks/esp32_mocks.h"
 #endif
@@ -172,7 +172,9 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   uint32_t* total_files,
                                                   uint8_t* current_page_entries,
                                                   const char* current_path);
-static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_index);
+static bool send_browse_request(wavex_file_browser_t* browser,
+                                uint8_t start_index,
+                                bool retry = false);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void storage_status_callback(bool mounted, void* user_data);
@@ -243,6 +245,8 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
         8;  // Approximately 8 entries visible on screen (adjust based on screen size)
 
     browser->request_id = 0;
+    browser->browse_failed = false;
+    browser->request_attempts = 0;
     browser->total_files = 0;
     browser->current_page = 0;
     browser->entries_per_page =
@@ -692,6 +696,8 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     ESP_LOGI(TAG, "refresh_file_list called for path: %s", browser->current_path);
 
     browser->request_id = 0;
+    browser->browse_failed = false;
+    browser->request_attempts = 0;
     browser->total_files = 0;
     browser->current_page = 0;
     browser_set_pagination_in_progress(browser);
@@ -857,10 +863,23 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
     return true;
 }
 
-static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_index) {
+static void fail_browse(wavex_file_browser_t* browser) {
+    browser->request_id = 0;
+    browser->browse_failed = true;
+    browser->entry_count = browser->loaded_entries = 0;
+    browser->selected_index = browser->first_visible_index = 0;
+    browser_clear_pagination_in_progress(browser);
+    browser_set_ui_update(browser);
+}
+
+static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_index, bool retry) {
     static uint32_t next_request_id = 0;  // UI-domain, survives browser recreation.
     if (!browser->config.comm_interface)
         return false;
+    if (!retry)
+        browser->request_attempts = 0;
+    ++browser->request_attempts;
+    browser->request_started_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     BrowsePageRequest request;
     if (++next_request_id == 0)
         ++next_request_id;
@@ -872,7 +891,8 @@ static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_ind
     browser->request_id = request.request_id;
     if (browser->config.comm_interface->sendBrowsePageRequest(request) != ESP_OK) {
         browser->request_id = 0;
-        return false;
+        // Queue rejection is retryable too. Keep a bounded pending attempt,
+        // but no ID that an unrelated reply could satisfy.
     }
     return true;
 }
@@ -899,7 +919,8 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
         return;
     BrowsePageHeader page;
     memcpy(&page, data, sizeof(page));
-    if (page.request_id != browser->request_id ||
+    if (!browser_pagination_in_progress(browser) || !browser->request_id ||
+        page.request_id != browser->request_id ||
         page.start_index != browser->current_page * browser->entries_per_page ||
         page.filter != browser->config.filter)
         return;
@@ -914,7 +935,7 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
     wavex_file_entry_t* temp_entries = (wavex_file_entry_t*)malloc(20 * sizeof(wavex_file_entry_t));
     if (!temp_entries) {
         ESP_LOGE(TAG, "Failed to allocate memory for browse response parsing");
-        browser_clear_pagination_in_progress(browser);
+        fail_browse(browser);
         return;
     }
 
@@ -933,10 +954,7 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
     if (!parse_success) {
         free(temp_entries);
         ESP_LOGE(TAG, "Failed to parse browse response");
-        browser_clear_pagination_in_progress(browser);
-        // Mark the UI-owned listing for rebuilding.
-        browser->entry_count = 0;
-        browser_set_ui_update(browser);
+        fail_browse(browser);
         wavex_ui_mark_content_changed();
         return;
     }
@@ -1105,10 +1123,7 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         if (lost) {
             browser->inbox->replies.Clear();
             browser->inbox->storage.Clear();
-            browser->request_id = 0;
-            browser->entry_count = browser->loaded_entries = 0;
-            browser_clear_pagination_in_progress(browser);
-            browser_set_ui_update(browser);
+            fail_browse(browser);
             ESP_LOGE(TAG, "Browser response queue overflow; refresh required");
         } else {
             bool mounted;
@@ -1117,6 +1132,20 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
             BrowserInbox::Reply reply;
             for (unsigned i = 0; i < 4 && browser->inbox->replies.Pop(reply); ++i)
                 apply_browse_response(reply.data, reply.length, browser);
+        }
+    }
+
+    // One page at a time, at most three attempts. Unsigned elapsed time also
+    // works when the millisecond counter wraps. Every attempt has a new ID.
+    const uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    if (browser_pagination_in_progress(browser) && now - browser->request_started_ms >= 1500u) {
+        if (browser->request_attempts >= 3) {
+            fail_browse(browser);
+        } else {
+            const auto start =
+                static_cast<uint8_t>(browser->current_page * browser->entries_per_page);
+            if (!send_browse_request(browser, start, true))
+                fail_browse(browser);
         }
     }
 
@@ -1218,7 +1247,20 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         ESP_LOGD(TAG, "Updated file browser UI with %d entries", browser->entry_count);
     } else if (browser->entry_count == 0 && !browser_pagination_in_progress(browser)) {
         // Pagination finished and the directory is genuinely empty.
-        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
+        lv_obj_t* btn = lv_list_add_btn(
+            browser->list,
+            NULL,
+            browser->browse_failed ? "Browse failed - tap to retry" : "No files found...");
+        if (browser->browse_failed) {
+            lv_obj_add_event_cb(
+                btn,
+                [](lv_event_t* event) {
+                    wavex_file_browser_refresh(
+                        static_cast<wavex_file_browser_t*>(lv_event_get_user_data(event)));
+                },
+                LV_EVENT_SHORT_CLICKED,
+                browser);
+        }
         lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
         ui_theme_apply_button_style(btn, false);
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
@@ -1279,6 +1321,7 @@ static void apply_storage_status(bool mounted, void* user_data) {
     browser->storage_mounted = mounted;
     if (!mounted) {
         browser->inbox->replies.Clear();
+        browser->browse_failed = false;
         browser->request_id = 0;
         browser->selected_index = browser->first_visible_index = 0;
         browser->entry_count = browser->loaded_entries = 0;

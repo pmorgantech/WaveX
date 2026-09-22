@@ -1,4 +1,4 @@
-#include "pot_service.h"
+#include "panel/pot_service.h"
 
 #include "config/hardware_config.h"
 #include "freertos/FreeRTOS.h"

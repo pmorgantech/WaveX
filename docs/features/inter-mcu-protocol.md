@@ -479,6 +479,11 @@ folders and matching WXI entries from the bounded cache, then paginates the
 compacted snapshot. SFZ and unreadable/malformed WXI are excluded from tagged
 listings. Small foreground reads yield between steps and pause during streaming
 or other storage jobs; the UI keeps filter changes disabled while awaiting a list.
+The live frontend uses correlated `MSG_BROWSE_PAGE_REQ` requests. Each page has
+at most three attempts, spaced by a 1.5-second deadline, including failed queue
+admissions. Retries use fresh IDs; late replies cannot satisfy them. Exhaustion
+invalidates the partial listing and offers explicit Retry. Navigation and storage
+loss cancel retry state. This read-only recovery does not replay mutations.
 The 500-entry target requires a wider paging contract and remains open.
 
 ### Keyboard Key Map (as built, 2026-09-11)

@@ -1,21 +1,21 @@
-// Process-wide comm interface pointer, set once at startup so UI pages can
-// send/receive over the link without depending directly on the comm component.
 #include "ui/ui_api.h"
 
+#include <atomic>
 namespace {
-
-WaveX::Comm::ICommInterface* g_comm_interface = nullptr;
-
+wavex_ui::UISharedContext context;
+std::atomic<bool> content_changed{false};
 }  // namespace
-
 namespace wavex_ui {
-
-void ui_set_comm_interface(WaveX::Comm::ICommInterface* comm_interface) {
-    g_comm_interface = comm_interface;
+void uiInitialize(const UISharedContext& value) {
+    context = value;
 }
-
-WaveX::Comm::ICommInterface* ui_get_comm_interface() {
-    return g_comm_interface;
+const UISharedContext& uiContext() {
+    return context;
 }
-
+bool takeUIContentChanged() {
+    return content_changed.exchange(false, std::memory_order_relaxed);
+}
 }  // namespace wavex_ui
+void wavex_ui_mark_content_changed() {
+    content_changed.store(true, std::memory_order_relaxed);
+}

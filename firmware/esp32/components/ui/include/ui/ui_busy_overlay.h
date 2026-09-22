@@ -27,7 +27,7 @@ namespace BusyOverlay {
  *
  * @param caption       Headline, e.g. "Loading sample".
  * @param detail        Second line, usually the filename. May be nullptr.
- * @param timeout_ms    Auto-dismiss after this long with an error caption.
+ * @param timeout_ms    Show a persistent failure after this long.
  *                      Never pass 0: a spinner that cannot resolve is
  *                      indistinguishable from the freeze it was added to
  *                      explain, and the backend genuinely can fail to answer
@@ -43,6 +43,9 @@ void show(const char* caption, const char* detail, uint32_t timeout_ms);
  * not happening, and its timeout rewrites the caption as a backend failure.
  */
 void notice(const char* caption, const char* detail);
+
+/** Terminal failure; retains its text until deliberately dismissed. UI context only. */
+void failure(const char* caption, const char* detail);
 
 /** Show total + current-item bars for a multi-file operation. */
 void showDual(const char* caption, const char* detail, uint32_t timeout_ms);

@@ -235,8 +235,10 @@ only inline magic numbers:
 | TinyUSB device | esp_tinyusb default | — | — | USB events | Calls `tud_midi_rx_cb` |
 | esp_timer task | 22 | — | 0 | timer queue | Shared; keep callbacks short (guide §11) |
 
-`panel_task` retains the PCNT 2 ms polling cadence; converting quadrature
-service to interrupts still needs bench time. LED publication is a fixed-size
+`panel_task` retains the PCNT 2 ms polling cadence and consumes accumulated
+counts. ESP-IDF limit watch points extend the hardware count with its IRAM-safe
+ISR; polling never clears a running counter. Edge accounting across limits and
+flash-cache-disabled periods remains a bench gate (HV-034). LED publication is a fixed-size
 copy under a short SMP lock. The task releases that lock before DMA, and a
 one-second stale UI heartbeat forces BLANK. No page or UI task performs LED I/O.
 

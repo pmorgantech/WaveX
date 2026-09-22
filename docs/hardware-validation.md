@@ -2657,6 +2657,21 @@ fault/queue-pressure instrumentation. Record image identities and transport logs
   both 16-bit hardware limits, reverse near each limit and repeat during flash
   writes/cache-disabled intervals. Consumed movement must equal injected movement
   without jumps or missing detents. Record ISR/task timing and image identity.
+- [ ] Directory recovery: drop the first page and a middle page, reject sends,
+  and delay old replies across retries/navigation/card removal. At most three
+  attempts per page, 1.5 seconds apart; exhaustion stops loading, clears selection
+  and offers Retry. Retry must recover without mixed paths or duplicate entries.
+- [ ] Busy-overlay failure: refuse sample/Instrument loads and suppress replies
+  until timeout. No spinner/bar remains in a terminal state; the reason stays
+  visible despite late progress/completion, and Dismiss works on touch. Verify
+  a fresh operation completes normally and check the actual backend result.
+- [ ] Play labels: compare the octave tile and header to triggered MIDI notes at
+  low/high roots and after transposing/switching Pads/Keys. Middle C is C4;
+  Pads spans 16 notes and Keys spans 25, with no note-number changes.
+- [ ] Root context and dependency wiring: boot, load/unload samples and change
+  Track Instruments while moving between root groups. Pool totals and names
+  follow backend snapshots; offline/missing data is explicit. Exercise encoder,
+  Panel diagnostics, calibration and debug console after the component split.
 - [ ] Repeat under sequencer/streaming load; capture UI stack/memory margins,
   link counters and audio underruns. Preserve the independent capacity/soak gate.
 

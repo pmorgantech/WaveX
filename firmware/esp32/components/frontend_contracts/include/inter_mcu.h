@@ -8,8 +8,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "../../shared/spi_protocol/protocol.h"
-#include "comm/statistics.h"
+#include "comm/statistics_types.h"
+#include "spi_protocol/protocol.h"
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #else
@@ -139,6 +139,8 @@ size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size
  * have changed.
  */
 uint32_t inter_mcu_sample_pool_revision();
+// Authoritative total from the latest bounded Pool page, with freshness/link checks.
+bool inter_mcu_get_sample_pool_count(uint16_t* total, uint32_t max_age_ms);
 /**
  * Counts arrivals of anything the sample pages draw from: a record, a page,
  * a Track binding, a memory status. A page redraws from the caches when this
@@ -168,7 +170,9 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
 /// Patches and selection requests the backend refused.
 esp_err_t inter_mcu_request_track_binding(uint8_t track);
 void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& msg);
-bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out);
+bool inter_mcu_get_track_binding(uint8_t track,
+                                 WaveX::Protocol::TrackBindingMessage* out,
+                                 uint32_t max_age_ms = UINT32_MAX);
 
 /// Binds `sample_id` for note-on playback on `slot` (0..15, matches
 /// inter_mcu_send_note_on's channel). sample_id 0 clears that slot's

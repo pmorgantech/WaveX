@@ -19,7 +19,6 @@
 #include "ui/ui_api.h"
 #include "ui/ui_busy_overlay.h"
 #include "ui/ui_palette.h"
-#include "ui_task.h"
 
 #include "wav/resident_sample_policy.hpp"
 #include <algorithm>
@@ -545,6 +544,13 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
     }
 
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
+    if (file_browser_ && file_browser_->browse_failed) {
+        keys[1] = {"Retry", [this] {
+                       wavex_file_browser_refresh(file_browser_);
+                       refreshSoftkeys();
+                   }};
+        return keys;
+    }
 
     if (is_playing_) {
         keys[1] = {"Stop", [this]() {
@@ -930,7 +936,7 @@ void UISampleBrowser::processDeferredUpdates_() {
         sample_binding_.Cancel();
         load_request_id_.store(0);
         probe_request_id_.store(0);
-        BusyOverlay::hide();
+        BusyOverlay::failure("Response lost", "Check the operation result before retrying.");
         updateStatus("Response overflow; refresh before continuing");
     }
     WaveX::Protocol::SampleLoadReply sample;
@@ -948,7 +954,7 @@ void UISampleBrowser::processDeferredUpdates_() {
     // and one fewer timer is one fewer thing to tear down on exit.
     serviceWaveform();
     const bool loading = file_browser_ && wavex_file_browser_loading(file_browser_);
-    if (instruments_ && loading != tag_loading_) {
+    if (loading != tag_loading_) {
         tag_loading_ = loading;
         refreshSoftkeys();
     }
@@ -1515,9 +1521,9 @@ void UISampleBrowser::applySampleStatus(const WaveX::Protocol::SampleLoadReply& 
         // frames_played carries a SampleLoadFailReason. Before this state
         // existed a failed load left the spinner to time out; now it says why.
         browser->bind_on_load_track_.store(-1, std::memory_order_release);
-        BusyOverlay::requestHide();
         wavex_ui_mark_content_changed();
         const char* why = sampleLoadFailureText(frames_played);
+        BusyOverlay::failure("Sample load failed", why);
         ESP_LOGW(TAG,
                  "=== SAMPLE LOAD FAILED: id=%u reason=%lu ===",
                  (unsigned)sample_id,
@@ -1582,10 +1588,10 @@ void UISampleBrowser::applyInstrumentStatus(const WaveX::Protocol::InstStatusMes
         browser->updateStatus("Instrument loaded");
         wavex_ui_mark_content_changed();
     } else if (status.state == WaveX::Protocol::INST_STATUS_FAILED) {
-        BusyOverlay::requestHide();
         browser->load_request_id_.store(0, std::memory_order_release);
         char message[96];
         snprintf(message, sizeof(message), "Instrument load failed (error %u)", status.error);
+        BusyOverlay::failure("Instrument load failed", message);
         browser->updateStatus(message);
         wavex_ui_mark_content_changed();
     }
@@ -1708,7 +1714,7 @@ bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
         request_id, getCurrentTrack(), WaveX::Protocol::INST_OP_SFZ_LOAD, entry->path);
     if (result != ESP_OK) {
         load_request_id_.store(0, std::memory_order_release);
-        BusyOverlay::hide();
+        BusyOverlay::failure("Instrument load failed", "Request could not be sent. Try again.");
         updateStatus("Instrument load request failed");
         return false;
     }
@@ -1799,7 +1805,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
         persistent_state_.cancelLoad();
         bind_on_load_track_.store(-1, std::memory_order_release);
-        BusyOverlay::hide();
+        BusyOverlay::failure("Sample load failed", "Request could not be sent. Try again.");
         updateStatus("Error: Load request failed");
         return false;
     }
@@ -1906,7 +1912,7 @@ std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& com
 
 std::shared_ptr<UIPage> createInstrumentBrowserPage() {
     static SampleBrowserState state;
-    auto comm = ui_get_comm_interface();
+    auto comm = uiContext().comm;
     return comm ? std::make_shared<UISampleBrowser>(*comm, state, true) : nullptr;
 }
 

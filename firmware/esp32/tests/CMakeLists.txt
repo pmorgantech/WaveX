@@ -77,21 +77,15 @@ endif()
 
 # Include directories
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/mocks  # Must be first to override lvgl.h, ui_theme.h, esp_lcd_types.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks  # Must be first to override lvgl.h and esp_lcd_types.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/frontend_contracts/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../main
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/links
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components  # For file_browser.h, envelope_cache.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/styles  # For ui_theme.h (will use mock)
-    # ui_theme.h now names the vendored mono tables. Nine UI sources include
-    # it as "../styles/ui_theme.h", which bypasses mocks/ui_theme.h entirely,
-    # so the host build compiles the real header and needs the real
-    # wavex_fonts.h beside it. Only the declarations are needed - no host
-    # test references a mono table, so the generated .c files stay out of
-    # the link. That the mock is dead for those TUs is tracked in
-    # docs/roadmap.md.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/fonts  # For wavex_fonts.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/styles  # Real theme declarations
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/fonts
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/config  # For link_config.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol
@@ -139,6 +133,7 @@ add_library(wavex_esp32_test_lib STATIC
 )
 
 target_include_directories(wavex_esp32_test_lib PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/frontend_contracts/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../main
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared

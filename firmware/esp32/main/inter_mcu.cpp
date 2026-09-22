@@ -287,10 +287,12 @@ uint8_t s_meta_page_n = 0;
 uint16_t s_meta_page_first = 0;
 uint16_t s_meta_page_total = 0;
 bool s_meta_page_valid = false;
+uint32_t s_meta_page_received_ms = 0;
 
 portMUX_TYPE s_track_binding_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::TrackBindingMessage s_track_bindings[kTrackBindingCount];
 bool s_track_binding_valid[kTrackBindingCount] = {};
+uint32_t s_track_binding_received_ms[kTrackBindingCount] = {};
 
 // Bumped on the RX task, compared on the UI task; a page that keeps the
 // value it last acted on can tell "nothing new" from "something arrived"
@@ -427,6 +429,7 @@ void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeade
     s_meta_page_first = header.first;
     s_meta_page_total = header.total;
     s_meta_page_valid = true;
+    s_meta_page_received_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     taskEXIT_CRITICAL(&s_meta_page_lock);
     // The per-id cache sees them too, so a page a list showed can be looked
     // up by id afterwards (detail views, the picker prompt).
@@ -436,6 +439,18 @@ void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeade
         store_meta_record(m);
     }
     s_cache_revision.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool inter_mcu_get_sample_pool_count(uint16_t* total, uint32_t max_age_ms) {
+    if (!total || !inter_mcu_backend_link_alive())
+        return false;
+    const uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    taskENTER_CRITICAL(&s_meta_page_lock);
+    const bool valid = s_meta_page_valid && now - s_meta_page_received_ms <= max_age_ms;
+    if (valid)
+        *total = s_meta_page_total;
+    taskEXIT_CRITICAL(&s_meta_page_lock);
+    return valid;
 }
 
 size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
@@ -509,6 +524,7 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     // every UI reader can treat the cached copy as an ordinary string.
     s_track_bindings[msg.track].name[sizeof(s_track_bindings[msg.track].name) - 1] = '\0';
     s_track_binding_valid[msg.track] = true;
+    s_track_binding_received_ms[msg.track] = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     taskEXIT_CRITICAL(&s_track_binding_lock);
     if (changed) {
         s_pool_revision.fetch_add(1, std::memory_order_relaxed);
@@ -516,12 +532,17 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
-bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out) {
+bool inter_mcu_get_track_binding(uint8_t track,
+                                 WaveX::Protocol::TrackBindingMessage* out,
+                                 uint32_t max_age_ms) {
     if (!out || track >= kTrackBindingCount) {
         return false;
     }
     taskENTER_CRITICAL(&s_track_binding_lock);
-    const bool found = s_track_binding_valid[track];
+    const bool found =
+        s_track_binding_valid[track] &&
+        static_cast<uint32_t>(esp_timer_get_time() / 1000) - s_track_binding_received_ms[track] <=
+            max_age_ms;
     if (found) {
         *out = s_track_bindings[track];
     }

@@ -1,6 +1,6 @@
 #include "../main/comm/packet_router.h"
-#include "../main/inter_mcu.h"
 #include "esp32_mocks.h"
+#include "inter_mcu.h"
 
 using WaveX::Test::GetInterMcuCapture;
 

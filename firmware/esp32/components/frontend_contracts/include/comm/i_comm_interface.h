@@ -23,11 +23,11 @@ typedef int esp_err_t;
 #endif
 
 // Include data structure definitions
-#include "../inter_mcu.h"
+#include <stddef.h>
+
+#include "spi_protocol/protocol.h"
 
 // Callback type definitions (matching inter_mcu.h)
-typedef void (*wavex_meter_cb_t)(
-    float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
 // Storage came or went. Unsolicited from the backend - the frontend has no
 // view of the card slot and cannot poll for it.
@@ -52,37 +52,16 @@ class ICommInterface {
    public:
     virtual ~ICommInterface() = default;
 
-    // Meter data operations
-    virtual void setMeterListener(wavex_meter_cb_t cb, void* user_data) = 0;
-    virtual void getMeterData(wavex_meter_data_t* out) = 0;
-
     // File browsing operations
     virtual void setBrowseResponseListener(wavex_browse_resp_cb_t cb, void* user_data) = 0;
     virtual void setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) = 0;
-    virtual esp_err_t sendBrowseRequest(
-        const char* path,
-        uint8_t start_index,
-        WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All) = 0;
 
-    virtual esp_err_t sendBrowsePageRequest(const Protocol::BrowsePageRequest&) { return ESP_FAIL; }
+    virtual esp_err_t sendBrowsePageRequest(const Protocol::BrowsePageRequest&) = 0;
 
     // Sample control operations
     virtual void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) = 0;
     virtual esp_err_t sendSamplePlayRequest(uint32_t file_index) = 0;
     virtual esp_err_t sendSampleStopRequest() = 0;
-    virtual esp_err_t sendSampleLoadRequest(uint16_t sample_id,
-                                            uint32_t sample_size,
-                                            uint16_t sample_rate,
-                                            uint8_t channels,
-                                            uint8_t bit_depth) = 0;
-    virtual esp_err_t sendSampleData(const uint8_t* data, size_t length) = 0;
-
-    // Diagnostics operations
-    virtual void getBackendHeartbeat(wavex_backend_heartbeat_t* out) = 0;
-    virtual void getPacketStats(wavex_packet_stats_t* out) = 0;
-
-    // Utility operations
-    virtual bool isBusy() = 0;
 };
 
 }  // namespace Comm
