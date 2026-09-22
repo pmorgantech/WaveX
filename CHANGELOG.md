@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Removed the unused ESP32 packet-router singleton and accessor; the injected
+  ApplicationContext router remains the sole frontend routing owner.
+
 - Fixed frontend review F8: load-to-Track retries rejected bind enqueues, then
   confirms the resident ID through correlated Track readback before reporting
   success. Timeout, navigation and disconnect stop UI retry; admitted binding

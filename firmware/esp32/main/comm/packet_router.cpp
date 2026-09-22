@@ -17,8 +17,6 @@ namespace Comm {
 using namespace WaveX::Protocol;
 
 namespace {
-PacketRouter g_packet_router_instance;
-
 // Copies a fixed-size wire struct out of a payload region, rejecting
 // null/short payloads (review H3): a CRC-valid frame with an empty payload
 // used to reach memcpy(&msg, nullptr, sizeof) here - undefined behavior -
@@ -37,10 +35,6 @@ bool CopyMessage(const uint8_t* payload, size_t payload_len, T& out, const char*
     return true;
 }
 }  // namespace
-
-PacketRouter& GetPacketRouter() {
-    return g_packet_router_instance;
-}
 
 void PacketRouter::route_packet(const uint8_t* packet_data, size_t packet_len) {
     if (!packet_data || packet_len < 6) { // Minimum size for unified packet (4 header + 2 CRC)

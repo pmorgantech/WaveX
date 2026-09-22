@@ -294,12 +294,6 @@ audit follow-ups independent:
   without reinstalling the driver — a silently dead link. Currently latent:
   nothing calls `uart_link_stop()`. Either finish the teardown on the error
   path or drop the unused stop entry point.
-- [ ] **Dead packet-router singleton.** `packet_router.cpp` defines a
-  file-scope `PacketRouter` and an accessor with no callers anywhere in the
-  tree; the routing path uses the instance injected from `ApplicationContext`.
-  It costs a static-init `std::function` construction for nothing. Remove with
-  the unused-frontend-API sweep already listed under *UI and frontend
-  maintenance*.
 - [ ] **The link's router fallback fails silently.** When no router has been
   injected, the getter returns a function-local throwaway instance, so every
   inbound message would be parsed, counted and discarded with no diagnostic.
