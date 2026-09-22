@@ -12,6 +12,10 @@ uint32_t ticks = 0;
 std::vector<uint8_t> on_notes, off_notes;
 std::vector<uint8_t> on_tracks, off_tracks;
 esp_err_t on_result = ESP_OK, off_result = ESP_OK;
+bool link_alive = true, respond_controls = true;
+std::vector<WaveX::Protocol::ControlChangeMessage> controls;
+WaveX::Protocol::InstEditSyncMessage filter_reply;
+WaveX::Protocol::InstModSyncMessage envelope_reply;
 uint32_t Tick() {
     return ticks;
 }
@@ -48,6 +52,10 @@ class PlayPageTest : public ::testing::Test {
             initialized = true;
         }
         on_result = off_result = ESP_OK;
+        link_alive = respond_controls = true;
+        controls.clear();
+        filter_reply = {};
+        envelope_reply = {};
         on_notes.clear();
         off_notes.clear();
         on_tracks.clear();
@@ -74,7 +82,7 @@ namespace wavex_ui {
 void statusStripCreate(lv_obj_t*) {}
 }  // namespace wavex_ui
 bool inter_mcu_backend_link_alive() {
-    return true;
+    return link_alive;
 }
 bool inter_mcu_get_track_binding(uint8_t, WaveX::Protocol::TrackBindingMessage*) {
     return false;
@@ -85,7 +93,8 @@ esp_err_t inter_mcu_request_track_binding(uint8_t) {
 bool inter_mcu_get_sample_meta(uint16_t, WaveX::Protocol::SampleMetadata*) {
     return false;
 }
-esp_err_t inter_mcu_send_control_change(uint8_t, uint8_t, uint16_t) {
+esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t track, uint16_t value) {
+    controls.emplace_back(parameter, track, value);
     return ESP_OK;
 }
 esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t, uint8_t track) {
@@ -156,4 +165,57 @@ TEST_F(PlayPageTest, RejectedPressDoesNotBecomeHeld) {
     lv_obj_send_event(key, LV_EVENT_PRESSED, nullptr);
     lv_obj_send_event(key, LV_EVENT_RELEASED, nullptr);
     EXPECT_EQ(off_notes.size(), 1u);
+}
+
+esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstEditOpMessage& request) {
+    filter_reply = {};
+    filter_reply.request_id = request.request_id;
+    filter_reply.track = request.track;
+    filter_reply.valid = 1;
+    filter_reply.sound.cutoff_hz = request.track ? 2000.f : 200.f;
+    return ESP_OK;
+}
+esp_err_t inter_mcu_send_modulator(const WaveX::Protocol::InstModOpMessage& request) {
+    envelope_reply = {};
+    envelope_reply.request_id = request.request_id;
+    envelope_reply.track = request.track;
+    envelope_reply.valid = 1;
+    return ESP_OK;
+}
+bool inter_mcu_get_instrument_edit(WaveX::Protocol::InstEditSyncMessage* out) {
+    if (!respond_controls)
+        return false;
+    *out = filter_reply;
+    return true;
+}
+bool inter_mcu_get_modulator(WaveX::Protocol::InstModSyncMessage* out) {
+    if (!respond_controls)
+        return false;
+    *out = envelope_reply;
+    return true;
+}
+TEST_F(PlayPageTest, FirstControlStepUsesBackendValueAndTrackChangeWaitsForReadback) {
+    page->getSoftkeys()[4].onPress();
+    ASSERT_EQ(controls.size(), 1u);
+    EXPECT_NEAR(controls.back().value, 21845 + 1023, 1);
+    wavex_ui::setCurrentTrack(1);
+    page->onTrackChanged();
+    page->getSoftkeys()[4].onPress();
+    EXPECT_EQ(controls.size(), 1u);
+    Draw();
+    page->getSoftkeys()[4].onPress();
+    ASSERT_EQ(controls.size(), 2u);
+    EXPECT_EQ(controls.back().channel, 1);
+    EXPECT_NEAR(controls.back().value, 43690 + 1023, 1);
+}
+TEST_F(PlayPageTest, MissingAndDisconnectedReadbackCannotAuthorizeEdits) {
+    respond_controls = false;
+    wavex_ui::setCurrentTrack(1);
+    page->onTrackChanged();
+    page->getSoftkeys()[4].onPress();
+    EXPECT_TRUE(controls.empty());
+    link_alive = false;
+    Draw();
+    page->getSoftkeys()[4].onPress();
+    EXPECT_TRUE(controls.empty());
 }

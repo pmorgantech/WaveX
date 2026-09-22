@@ -74,3 +74,8 @@ bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage*);
 esp_err_t inter_mcu_send_control_change(uint8_t, uint8_t, uint16_t);
 esp_err_t inter_mcu_send_note_on_track(uint8_t, uint8_t, uint8_t);
 esp_err_t inter_mcu_send_note_off_track(uint8_t, uint8_t);
+
+esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstEditOpMessage&);
+esp_err_t inter_mcu_send_modulator(const WaveX::Protocol::InstModOpMessage&);
+bool inter_mcu_get_instrument_edit(WaveX::Protocol::InstEditSyncMessage*);
+bool inter_mcu_get_modulator(WaveX::Protocol::InstModSyncMessage*);

@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F6: Play filter/envelope controls start from correlated
+  per-Track Instrument readback and wait for confirmation after edits. Stale,
+  disconnected and out-of-range values cannot cause default-based jumps.
+
 - Fixed frontend review F5 with additive versioned directory-page correlation
   across both MCUs. Old directory/filter/page replies and duplicates cannot
   populate the active browser. Legacy bench browsing remains supported.

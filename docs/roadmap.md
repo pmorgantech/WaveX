@@ -272,8 +272,6 @@ one entry does not resolve the remaining cross-task browser ownership issue.
 
 The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- **F6 — Play controls:** read authoritative per-Track values before relative
-  input becomes an absolute CC; reject stale readback after Track/link changes.
 - **F7 — Resident admission:** let the backend decide RAM admission, including
   reuse of an already resident file without another allocation.
 - **F8 — Load binding:** retain rejected binding sends and confirm the resulting

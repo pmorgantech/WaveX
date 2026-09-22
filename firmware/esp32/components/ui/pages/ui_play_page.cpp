@@ -86,23 +86,20 @@ void NoteName(int note, char* out, size_t len) {
 struct ParamSpec {
     const char* label;
     uint8_t wire_param;
-    uint16_t initial;
 };
 
-// Initial values mirror the engine's VoiceLiveParams defaults, so opening this
-// page does not silently change the sound before anything is touched. Cutoff
-// 65535 is 20 kHz under the engine's exponential map - effectively open.
+// Control identities; values come from correlated Instrument readback.
 const ParamSpec kParams[static_cast<size_t>(UIPlayPage::Param::kCount)] = {
-    {"CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, 65535},
-    {"RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, 0},
-    {"ATTACK", WaveX::Protocol::PARAM_ENVELOPE_ATTACK, 0},
-    {"DECAY", WaveX::Protocol::PARAM_ENVELOPE_DECAY, 1638},
-    {"SUSTAIN", WaveX::Protocol::PARAM_ENVELOPE_SUSTAIN, 52428},
-    {"RELEASE", WaveX::Protocol::PARAM_ENVELOPE_RELEASE, 3277},
+    {"CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF},
+    {"RES", WaveX::Protocol::PARAM_FILTER_RESONANCE},
+    {"ATTACK", WaveX::Protocol::PARAM_ENVELOPE_ATTACK},
+    {"DECAY", WaveX::Protocol::PARAM_ENVELOPE_DECAY},
+    {"SUSTAIN", WaveX::Protocol::PARAM_ENVELOPE_SUSTAIN},
+    {"RELEASE", WaveX::Protocol::PARAM_ENVELOPE_RELEASE},
     // wire_param is unused for Track - stepParam()/sendParam() special-case it
     // rather than sending MSG_CONTROL_CHANGE, since it addresses which
     // Track a note-on goes out on, not a voice parameter value.
-    {"TRACK", 0, 0},
+    {"TRACK", 0},
 };
 
 // Mirrors the Daisy's own mapping so the number on screen is the number the
@@ -139,9 +136,8 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     for (auto& k: keys_) {
         k = Key{};
     }
-    for (size_t i = 0; i < static_cast<size_t>(Param::kCount); ++i) {
-        param_value_[i] = kParams[i].initial;
-    }
+    controls_.Reset(currentTrack());
+    controls_alive_ = inter_mcu_backend_link_alive();
 
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
@@ -180,7 +176,9 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     // Request it here and refresh it lightly while the page is open so a Load
     // or Select performed elsewhere cannot leave a stale claim on Play.
     inter_mcu_request_track_binding(currentTrack());
-    binding_timer_ = lv_timer_create(bindingTimerCb, 500, this);
+    binding_requested_at_ = lv_tick_get();
+    serviceParameters();
+    binding_timer_ = lv_timer_create(bindingTimerCb, 20, this);
 }
 
 void UIPlayPage::onExit() {
@@ -229,8 +227,14 @@ void UIPlayPage::bindingTimerCb(lv_timer_t* timer) {
     }
     // The request is small and idempotent. The timer is in LVGL context, so
     // the label update is safe; the UART task only fills the shared cache.
-    inter_mcu_request_track_binding(self->currentTrack());
-    self->refreshBindingStatus();
+    self->serviceParameters();
+    if (lv_tick_get() - self->binding_requested_at_ >= 500) {
+        self->binding_requested_at_ = lv_tick_get();
+        inter_mcu_request_track_binding(self->currentTrack());
+        self->refreshBindingStatus();
+    }
+    self->refreshParamLabel();
+    UINavigator::instance().refreshSoftkeys();
 }
 
 // --- layout ----------------------------------------------------------------
@@ -655,11 +659,13 @@ void UIPlayPage::stepParam(int direction, int divisor) {
         }
         setCurrentTrack(static_cast<uint8_t>(v));
         inter_mcu_request_track_binding(currentTrack());
-        refreshBindingStatus();
-        refreshParamLabel();
+        onTrackChanged();
         return;
     }
-    int v = static_cast<int>(param_value_[i]) + direction * kParamStep / divisor;
+    if (!parameterReady())
+        return;
+    int v = static_cast<int>(controls_.Value(static_cast<unsigned>(i))) +
+            direction * kParamStep / divisor;
     if (v < 0) {
         v = 0;
     } else if (v > 65535) {
@@ -668,17 +674,59 @@ void UIPlayPage::stepParam(int direction, int divisor) {
     if (static_cast<uint16_t>(v) == param_value_[i]) {
         return;  // at an end stop; do not spam the link
     }
-    param_value_[i] = static_cast<uint16_t>(v);
-    sendParam();
+    if (inter_mcu_send_control_change(
+            kParams[i].wire_param, currentTrack(), static_cast<uint16_t>(v)) != ESP_OK)
+        return;
+    controls_.Edited(static_cast<unsigned>(i));
+    serviceParameters();
     refreshParamLabel();
 }
 
-void UIPlayPage::sendParam() {
-    const size_t i = static_cast<size_t>(current_param_);
-    // Addressed to the selected Track: filter and envelope belong to that
-    // Track's Instrument now (track-and-patch-model.md §3.2), not to one
-    // engine-wide set of knob positions.
-    inter_mcu_send_control_change(kParams[i].wire_param, currentTrack(), param_value_[i]);
+bool UIPlayPage::parameterReady() const {
+    return current_param_ == Param::Track ||
+           (inter_mcu_backend_link_alive() && controls_.Track() == currentTrack() &&
+            controls_.Ready(static_cast<unsigned>(current_param_), lv_tick_get()));
+}
+
+void UIPlayPage::serviceParameters() {
+    const bool alive = inter_mcu_backend_link_alive();
+    if (alive != controls_alive_ || controls_.Track() != currentTrack()) {
+        controls_.Reset(currentTrack());
+        controls_alive_ = alive;
+    }
+    if (!alive)
+        return;
+    const auto now = lv_tick_get();
+    WaveX::Protocol::InstEditSyncMessage filter;
+    WaveX::Protocol::InstModSyncMessage envelope;
+    if (inter_mcu_get_instrument_edit(&filter))
+        controls_.Accept(filter, now);
+    if (inter_mcu_get_modulator(&envelope))
+        controls_.Accept(envelope, now);
+    for (unsigned i = 0; i < 6; ++i)
+        param_value_[i] = controls_.Value(i);
+    // Page-specific request namespace, monotonic across exit/re-entry.
+    static uint32_t next_id = 0x504C0000;
+    for (unsigned group = 0; group < 2; ++group) {
+        if (!controls_.Due(group, now))
+            continue;
+        if (++next_id == 0)
+            ++next_id;
+        esp_err_t result;
+        if (group == 0) {
+            WaveX::Protocol::InstEditOpMessage request;
+            request.track = currentTrack();
+            request.request_id = next_id;
+            result = inter_mcu_send_instrument_edit(request);
+        } else {
+            WaveX::Protocol::InstModOpMessage request;
+            request.track = currentTrack();
+            request.request_id = next_id;
+            result = inter_mcu_send_modulator(request);
+        }
+        // Pace failed admissions too; a later read is safe to retry.
+        controls_.Requested(group, result == ESP_OK ? next_id : 0, now);
+    }
 }
 
 void UIPlayPage::refreshParamLabel() {
@@ -696,13 +744,16 @@ void UIPlayPage::refreshPadTiles() {
     // shared current-Track store, so param_value_[Track] is never read.
     const uint16_t raw = current_param_ == Param::Track ? getCurrentTrack() : param_value_[i];
     char value[24];
-    FormatParamValue(current_param_, raw, value, sizeof(value));
+    if (parameterReady())
+        FormatParamValue(current_param_, raw, value, sizeof(value));
+    else
+        snprintf(value, sizeof(value), "--");
 
     if (std::strcmp(lv_label_get_text(param_tile_.label), kParams[i].label))
         lv_label_set_text(param_tile_.label, kParams[i].label);
     valueTileSetValue(param_tile_, value);
     valueTileSetFocus(param_tile_, true);
-    if (current_param_ == Param::Track) {
+    if (current_param_ == Param::Track || !parameterReady()) {
         valueTileHideFill(param_tile_);
     } else {
         valueTileSetFill(param_tile_, static_cast<float>(raw) / 65535.0f);
@@ -736,7 +787,10 @@ EncoderBindings UIPlayPage::encoderBindings() {
             static_cast<Param>(i), param_value_[i], binding.value.data(), binding.value.size());
         binding.owner = this;
         binding.parameter = i;
-        binding.enabled = inter_mcu_backend_link_alive();
+        binding.enabled = inter_mcu_backend_link_alive() && controls_.Track() == currentTrack() &&
+                          controls_.Ready(i, lv_tick_get());
+        if (!binding.enabled)
+            snprintf(binding.value.data(), binding.value.size(), "--");
         binding.onSteps = [](void* owner, uint8_t parameter, int steps) {
             auto& page = *static_cast<UIPlayPage*>(owner);
             page.current_param_ = static_cast<Param>(parameter);
@@ -775,6 +829,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIPlayPage::getSoftkeys() {
                    refreshKeys();
                    UINavigator::instance().refreshSoftkeys();
                }};
+    for (int i: {3, 4}) {
+        keys[i].enabled = parameterReady();
+        keys[i].why = "Waiting for sound values, or value outside Play range";
+    }
     keys[5].active = latch_;
     return keys;
 }
@@ -796,6 +854,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIPlayPage::getShiftedSoftkeys() {
 }
 
 void UIPlayPage::onTrackChanged() {
+    controls_.Reset(currentTrack());
+    serviceParameters();
     // The panel's Track -/+ stepped the shared Track; the binding request is
     // already on the wire, so only the labels need redrawing.
     refreshBindingStatus();

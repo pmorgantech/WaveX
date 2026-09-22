@@ -222,6 +222,14 @@ it playable through an Instrument. Pending load tags/geometry are separate from
 the confirmed resident editor selection. Only successful completion adopts the
 Daisy-assigned ID; failure or navigation discards the pending selection.
 
+Play reads the selected Instrument's filter and Env 1 through the existing
+correlated edit/modulator snapshots. Entry, Track changes and link transitions
+invalidate edit readiness. A successful CC enqueue waits for fresh readback
+before another edit in that family. Read-only polls are paced, stale/failed
+replies cannot authorize edits, and values outside the existing Play CC range
+remain unavailable (edit those through Instrument). Panel tiles and softkeys
+show unavailable values as `--`, rather than fabricated defaults.
+
 ## Cross-task updates
 
 A background callback copies a complete value into a synchronized mailbox or

@@ -4,6 +4,7 @@
 
 #include "components/encoder_strip.h"
 #include "components/ui_value_tile.h"
+#include "play_controls_model.h"
 #include "ui_page.h"
 
 #include <array>
@@ -119,7 +120,11 @@ class UIPlayPage : public UIPage {
 
     void stepParam(int direction, int divisor = 1);
     void selectParam(int direction);
-    void sendParam();
+    void serviceParameters();
+    bool parameterReady() const;
+    PlayControlsModel controls_;
+    bool controls_alive_ = false;
+    uint32_t binding_requested_at_ = 0;
     void refreshParamLabel();
 
     int noteFor(const Key& k) const;
