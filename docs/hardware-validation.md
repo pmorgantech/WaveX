@@ -258,6 +258,82 @@ Evidence: `logs/sd-write-25-{aligned,single,shift,prefix}.jsonl`,
 host tests and both Stage A/Stage B builds pass. This investigation does not close write-soak, loaded-audio,
 recovery, power-loss or phase acceptance.
 
+### Card/driver isolation, 2026-09-21
+
+**Setup:** same card, socket and power arrangement; four-bit 25 MHz, normal
+Stage A and the unchanged ESP32 image identified above. Software reset/remount
+separates experiments; no card swap, rewiring or socket-rail measurement was
+available. Card CID words are `03534453 4b363447 8061e321 c2016908`.
+`DBGMCU_IDCODE=0x20036450` identifies revision V (`REV_ID=0x2003`).
+[ST ES0392 Rev 15](https://www.st.com/resource/en/errata_sheet/es0392-stm32h742xig-stm32h743xig-stm32h750xb-stm32h753xi-device-errata-stmicroelectronics.pdf)
+Table 2 and §2.8 do not identify a matching revision-V single-block write-CRC
+limitation; this does not exclude an unlisted silicon or software fault.
+
+Test images over `cc60688`:
+
+- Pattern/directory image: `b06b821fdbb7b8e116f96dde81af253215fe5031ab984ac06c6946f4ef138dce`.
+- Aligned-buffer/flow-control image: `e8aecc41d59784d98990f194d94ed3553a36a779c60b15e32c4647e43ab4d2d9`.
+- Transfer-spacing image: `d284b38275f7d48851519b632c5dc04dc6b7bb076cf9a949e7beaea8f4d7d8b0`.
+
+| Controlled comparison | Result | What it establishes |
+|---|---|---|
+| 1 MiB, 44-byte prefix, hash/zero/FF/AA55, root and recordings directory | All eight exact readbacks passed | These payloads/directory choices alone do not reproduce the recorder fault |
+| Recorder, normal direct DMA | Both sources failed Save | Failure remains reproducible after passing scratch probes |
+| Dedicated aligned AXI buffer, same sector counts and clock | Initial two recorder tests passed; next two failed | Alignment/cache-line isolation alone is not a fix |
+| SDMMC FIFO hardware flow control, direct buffers | Four recorder tests passed; next two failed | Flow control alone is not a fix |
+| 100 us idle before each disk transfer, direct buffers | Both recorder tests failed | Simple additional inter-transfer spacing is not a fix |
+
+The aligned-buffer failure retained caller address `0x240302cc` and actual
+IDMA address `0x24076cc0`: the failing **single-sector** write really used the
+32-byte-aligned staging buffer. `STA=0x2`, HAL error `0x6`, clock `0x4004`.
+The flow-control failure also retained a single-sector data CRC, with
+`CLKCR=0x24004`, confirming hardware flow control was enabled. Neither captured
+failure set the FIFO underrun or IDMA transfer-error status bits. This narrows
+those specific hypotheses; it does not exonerate every driver path.
+The spacing experiment failed a seven-sector write (LBA 476225), with
+`STA=0x11002`, HAL `0x2`, `DCOUNT=3072`: CRC failed with six sectors still
+remaining. The problem therefore also affects multi-block writes; it is not
+specific to CMD24/single-sector handling.
+
+Evidence: `logs/sd-isolate-d{0,1}-p{0,1,2,3}.jsonl`,
+`logs/sd-isolate-recorder-{direct,bounce,bounce-repeat1,flow,flow-repeat1,flow-repeat2}.log`,
+`logs/sd-isolate-{bounce,flow,gap}-info.log`,
+`logs/sd-isolate-recorder-gap0.log`, and the retained `SDIO` records in
+`logs/daisy.log`. USB re-enumeration skips were retried after a verified boot;
+skips are not passes.
+
+The final transfer-spacing image above was reflashed with boot defaults restored:
+`SDIO INFO` confirmed mode 0 and `CLKCR=0x4004`, with no retained error and no
+active voices, samples or streaming. The four new pattern/readback and mode-busy
+guard HIL cases passed (6.53 s, `logs/sd-isolate-probe-hil.log`). These diagnostic
+checks do not turn the failed recorder comparisons into acceptance. The normal
+Stage A, Stage B and release builds passed, as did all 866 Daisy host tests;
+the release ELF contains no probe/experiment symbols.
+
+- [ ] **001g — Card versus assembly:** with the same image, 25 MHz/four-bit,
+  and mode 0, run repeated codec/internal Save cycles on this card and a second
+  known-good FAT32 card. Record CID, first-error snapshots and pass/fail order;
+  alternate cards to avoid confusing elapsed time with card identity. Separately
+  write/sync/readback a scratch file on the original card through a known-good
+  PC reader. A second card passing suggests card-specific compatibility/timing;
+  it does not by itself prove defective flash.
+- [ ] **001h — Socket power:** scope VDD at the card socket relative to its
+  nearby ground during a failing Save. Retain min voltage and droop/ringing
+  traces, then compare a verified stable supply/local decoupling arrangement.
+  ST-Link target-voltage telemetry is not a socket transient measurement.
+- [ ] **001i — Signal integrity:** check continuity, actual external pull-ups,
+  grounding, socket/adapter construction and any level shifters against the
+  component specifications. Compare the same workload with a short, direct
+  harness; scope clock/command/data at the socket for edge quality and timing.
+  Keep four-bit mode. The current vendor setup changes GPIO slew along with
+  clock speed, so a 25-versus-12.5 MHz pass/fail comparison is not a pure
+  clock-only experiment. Keep wiring/supply changes separate and retain traces.
+- [ ] **001j — Remaining driver isolation:** if both cards fail on a verified
+  electrical setup, compare identical files/transaction ordering against an
+  upstream minimal DMA/FatFs application, preserving clock, GPIO configuration
+  and buffer placement. Do not promote a short software workaround to production
+  without repeated recorder, byte-readback and loaded-audio acceptance.
+
 **Remaining:** isolate card/socket/wiring integrity and the reproduced wider-bus
 write failure; successful reads alone do not prove write stability. Measure
 sustained WAV streaming and write soak with negotiated clocks. Cancellation,

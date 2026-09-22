@@ -11,7 +11,13 @@
 
 namespace WaveX::Storage {
 namespace {
-uint8_t Pattern(uint32_t offset) {
+uint8_t Pattern(uint32_t offset, uint32_t pattern) {
+    if (pattern == 1)
+        return 0;
+    if (pattern == 2)
+        return 0xff;
+    if (pattern == 3)
+        return (offset & 1u) ? 0x55 : 0xaa;
     // Depends on all offset bytes, so repeated/omitted sectors cannot compare equal.
     uint32_t x = offset + 0x9e3779b9u;
     x ^= x >> 16;
@@ -20,20 +26,35 @@ uint8_t Pattern(uint32_t offset) {
     return static_cast<uint8_t>(x);
 }
 }  // namespace
-bool SdWriteProbe::Begin(uint32_t bytes, uint32_t chunk, uint32_t shift, uint32_t prefix) {
+bool SdWriteProbe::Begin(uint32_t bytes,
+                         uint32_t chunk,
+                         uint32_t shift,
+                         uint32_t prefix,
+                         uint32_t pattern,
+                         uint32_t directory,
+                         uint32_t gap_ms) {
     if (Busy() || !SdSdio::IsMounted() || bytes == 0 || bytes > 64u * 1024u * 1024u ||
         (chunk != 512 && chunk != 4096) || (shift != 0 && shift != 4) ||
-        (prefix != 0 && prefix != 44) || prefix > bytes)
+        (prefix != 0 && prefix != 44) || prefix > bytes || pattern > 3 || directory > 1 ||
+        gap_ms > 20)
         return false;
     bytes_ = bytes;
     chunk_ = chunk;
     shift_ = shift;
     prefix_ = prefix;
+    pattern_ = pattern;
+    directory_ = directory;
+    gap_ms_ = gap_ms;
+    next_ms_ = HAL_GetTick();
     offset_ = result_ = elapsed_ = 0;
     failed_phase_ = Phase::Idle;
     generation_ = SdSdio::MediaGeneration();
     started_ = HAL_GetTick();
-    std::snprintf(path_, sizeof(path_), "/wx%06lx.tmp", started_ & 0xfffffful);
+    std::snprintf(path_,
+                  sizeof(path_),
+                  "%s/wx%06lx.tmp",
+                  directory ? "/wavex/recordings" : "",
+                  started_ & 0xfffffful);
     phase_ = Phase::Create;
     return true;
 }
@@ -53,6 +74,10 @@ void SdWriteProbe::Pump() {
         Fail(FR_NOT_READY);
         return;
     }
+    // Defer between application chunks without blocking link/audio service.
+    // FatFs may still perform several disk operations within one chunk.
+    if (static_cast<int32_t>(HAL_GetTick() - next_ms_) < 0)
+        return;
     FRESULT result = FR_OK;
     auto* buffer = buffer_ + shift_;
     switch (phase_) {
@@ -67,7 +92,7 @@ void SdWriteProbe::Pump() {
             const uint32_t count =
                 offset_ == 0 && prefix_ ? prefix_ : std::min(chunk_, bytes_ - offset_);
             for (uint32_t i = 0; i < count; ++i)
-                buffer[i] = Pattern(offset_ + i);
+                buffer[i] = Pattern(offset_ + i, pattern_);
             UINT wrote = 0;
             result = f_write(&file_, buffer, count, &wrote);
             offset_ += wrote;
@@ -114,7 +139,7 @@ void SdWriteProbe::Pump() {
                 return;
             }
             for (uint32_t i = 0; i < count; ++i) {
-                if (buffer[i] != Pattern(offset_ + i)) {
+                if (buffer[i] != Pattern(offset_ + i, pattern_)) {
                     offset_ += i;
                     Fail(103);
                     return;
@@ -135,26 +160,31 @@ void SdWriteProbe::Pump() {
         default:
             break;
     }
+    next_ms_ = HAL_GetTick() + gap_ms_;
     if (result != FR_OK)
         Fail(result);
 }
 void SdWriteProbe::Status(char* reply, size_t size, int32_t sequence) const {
-    std::snprintf(reply,
-                  size,
-                  "WAVEX-DBG: %ld OK busy=%u phase=%u failed_phase=%u result=%lu bytes=%lu "
-                  "offset=%lu chunk=%lu shift=%lu prefix=%lu ms=%lu path=%s",
-                  static_cast<long>(sequence),
-                  Busy(),
-                  static_cast<unsigned>(phase_),
-                  static_cast<unsigned>(failed_phase_),
-                  result_,
-                  bytes_,
-                  offset_,
-                  chunk_,
-                  shift_,
-                  prefix_,
-                  Busy() ? HAL_GetTick() - started_ : elapsed_,
-                  path_);
+    std::snprintf(
+        reply,
+        size,
+        "WAVEX-DBG: %ld OK busy=%u phase=%u failed_phase=%u result=%lu bytes=%lu "
+        "offset=%lu chunk=%lu shift=%lu prefix=%lu pattern=%lu dir=%lu gap=%lu ms=%lu path=%s",
+        static_cast<long>(sequence),
+        Busy(),
+        static_cast<unsigned>(phase_),
+        static_cast<unsigned>(failed_phase_),
+        result_,
+        bytes_,
+        offset_,
+        chunk_,
+        shift_,
+        prefix_,
+        pattern_,
+        directory_,
+        gap_ms_,
+        Busy() ? HAL_GetTick() - started_ : elapsed_,
+        path_);
 }
 }  // namespace WaveX::Storage
 #endif

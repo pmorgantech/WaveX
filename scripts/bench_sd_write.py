@@ -28,6 +28,9 @@ def main():
     parser.add_argument("--shift", type=int, choices=[0, 4], default=0)
     parser.add_argument("--prefix", type=int, choices=[0, 44], default=0)
     parser.add_argument("--resident-playback", action="store_true")
+    parser.add_argument("--pattern", type=int, choices=range(4), default=0)
+    parser.add_argument("--directory", type=int, choices=[0, 1], default=0)
+    parser.add_argument("--gap-ms", type=int, choices=range(21), default=0)
     args = parser.parse_args()
     lock = open("/tmp/wavex-sd-write-bench.lock", "w")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -39,7 +42,11 @@ def main():
     assert (
         before["valid"] == "0"
     ), f"Reboot before testing: pre-existing failure {before}"
-    initial = {"initial": before, "state": daisy.cmd("STATE")}
+    initial = {
+        "initial": before,
+        "state": daisy.cmd("STATE"),
+        "info": daisy.cmd("SDIO", "INFO"),
+    }
     print(json.dumps(initial), flush=True)
     playing = False
     sample = None
@@ -56,7 +63,15 @@ def main():
             daisy.note(15, 60, 100, True)
             playing = True
         for size in args.bytes:
-            options = (size, args.chunk, args.shift, args.prefix)
+            options = (
+                size,
+                args.chunk,
+                args.shift,
+                args.prefix,
+                args.pattern,
+                args.directory,
+                args.gap_ms,
+            )
             daisy.cmd("SDTEST", "START", *options)
             deadline = time.monotonic() + 240
             while True:

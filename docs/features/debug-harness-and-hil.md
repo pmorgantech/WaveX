@@ -450,8 +450,9 @@ scrolling an unknown card by pot detent.
 | Verb | Effect |
 |---|---|
 | `PING`, `LOG`, `FILTER` | ack / as before |
-| `SDIO [REGS / RESET]` | Daisy SDMMC first failed disk transfer, retained until reset/reboot. Default: operation, LBA, block count, DMA buffer, elapsed ms, disk result, IRQ capture and selected speed index. REGS: pre-HAL SDMMC registers plus post-handler HAL error; RESET explicitly clears the retained record. Foreground failure without IRQ captures registers at disk return. |
-| `SDTEST START <bytes> <chunk> <shift> <prefix>` / `SDTEST STATUS` | Debug-only cooperative scratch-file probe on mounted SDMMC. Bytes 1..67108864, chunk 512/4096, buffer shift 0/4, prefix 0/44. Exclusively creates `/wxHHHHHH.tmp`, writes deterministic bytes, syncs/closes/reopens and verifies every byte. Passed files are removed; failed files remain. Requires otherwise idle storage; do not use UI storage operations during the probe. No automatic retry/remount. |
+| `SDIO [REGS / RESET / INFO]` | Daisy SDMMC first failed disk transfer, retained until reset/reboot. Default: operation, LBA, block count, DMA buffer, elapsed ms, disk result, IRQ capture and selected speed index. REGS: pre-HAL SDMMC registers plus post-handler HAL error; RESET explicitly clears the retained record. Foreground failure without IRQ captures registers at disk return. INFO reports silicon ID, raw card CID, live CLKCR and experiment mode. |
+| `SDIO MODE <0..7>` | Debug-only experiment bit mask: 1 stages disk transfers up to 4 KiB through a dedicated 32-byte-aligned AXI buffer; 2 enables SDMMC hardware FIFO flow control; 4 adds 100 us before each disk transfer. Modes combine by OR. Requires mounted media, idle storage jobs and no SD streaming. No bus-width/clock change or implicit diagnostic reset. Reboot restores mode 0. |
+| `SDTEST START <bytes> <chunk> <shift> <prefix> [<pattern> <directory> <gap_ms>]` / `SDTEST STATUS` | Debug-only cooperative scratch-file probe on mounted SDMMC. Bytes 1..67108864, chunk 512/4096, buffer shift 0/4, prefix 0/44. Exclusively creates `/wxHHHHHH.tmp`, writes deterministic bytes, syncs/closes/reopens and verifies every byte. Passed files are removed; failed files remain. Requires otherwise idle storage; do not use UI storage operations during the probe. No automatic retry/remount. Optional triplet: patterns 0 hash, 1 zero, 2 FF, 3 AA/55; directory 0 root or 1 existing `/wavex/recordings`; foreground gap 0..20 ms. Supply all three or none. |
 | `LOGSTATS` | `usb_drop`, `isr_log`, and optional `rtt_drop`; foreground logging diagnostics |
 | `STATE` | `voices underruns samples streaming blocks dropped` |
 | `BANKSTATS` | Last accepted Bank job: `request op busy error pumps max_us work_us`; read-only, available during storage work. Rejected requests do not reset the measurement. |
@@ -584,3 +585,22 @@ code, or 100 short-write, 101 wrong file size, 102 short-read, 103 byte mismatch
 `offset` is progress within the failing phase. File creation uses `FA_CREATE_NEW`;
 a name collision fails safely. See [HV-001](../hardware-validation.md#hv-001--sd-card-formatting)
 for hardware evidence and remaining recovery/soak gates.
+
+For isolation, add `--pattern 1`, `--directory 1` or `--gap-ms 5` to the
+bench runner. The directory option never creates/removes the directory itself.
+Application-chunk gaps leave the main loop free, but FatFs can still make
+several disk transfers within a chunk. Mode bit 4 instead inserts 100 us before
+each wrapped disk transfer, with audio interrupts enabled. This diagnostic
+spacing is not a production recovery policy.
+
+For actual recorder comparisons, select an experiment **after a fresh boot**
+then run `python3 -m pytest -q tests/hil/test_recording.py`. Repeat before calling
+an experiment successful: initial successes have been followed by CRC failures.
+Run the probe checks with `python3 -m pytest -q tests/hil/test_sd_write_probe.py`
+on mounted test media with a clear `SDIO` latch and otherwise idle storage.
+
+The aligned-buffer mode preserves sector counts and does not split requests;
+transfers larger than 4 KiB continue through the original path. `SDIO`'s `buf`
+is the caller address, while `SDIO REGS`'s `base` is the actual IDMA address,
+so a failed staged transfer can be distinguished from an untested direct one.
+Do not interpret a short pass as proof of card/wiring integrity or a driver fix.

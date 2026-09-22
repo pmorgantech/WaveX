@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Extended SD diagnostics with card/silicon identity, payload/directory/cadence
+  comparisons and guarded debug-only aligned-buffer, hardware-flow-control and
+  transfer-spacing experiments. Production defaults remain unchanged; repeated
+  recorder trials retain the unresolved CRC failure and physical isolation gate.
+
 - Added retained first-failure SD disk/IRQ diagnostics and a debug-only,
   cooperative scratch-file write/sync/readback probe. The bench runner compares
   size, transfer chunks, buffer alignment and WAV-like offsets without raw-sector

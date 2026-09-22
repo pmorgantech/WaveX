@@ -41,6 +41,7 @@ static daisy::SpiHandle spi_handle;
 
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "storage/sd_sdio.h"
+extern "C" SD_HandleTypeDef hsd1;
 
 #include "storage/sd_io_diagnostics.hpp"
 #if WAVEX_DEBUG_HARNESS_ENABLED
@@ -172,18 +173,28 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
         FormatOk(seq, reply, sizeof(reply));
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
     } else if (std::strcmp(c.verb, "SDTEST") == 0) {
-        unsigned long bytes, chunk, shift, prefix;
+        unsigned long bytes, chunk, shift, prefix, pattern = 0, directory = 0, gap = 0;
         char extra;
         if (std::strcmp(p, "STATUS") == 0) {
             s_sd_probe.Status(reply, sizeof(reply), seq);
-        } else if (std::sscanf(
+        } else if (std::sscanf(p,
+                               "START %lu %lu %lu %lu %lu %lu %lu %c",
+                               &bytes,
+                               &chunk,
+                               &shift,
+                               &prefix,
+                               &pattern,
+                               &directory,
+                               &gap,
+                               &extra) == 7 ||
+                   std::sscanf(
                        p, "START %lu %lu %lu %lu %c", &bytes, &chunk, &shift, &prefix, &extra) ==
-                   4) {
+                       4) {
             bool busy = WaveX::Storage::CardService::Busy();
 #if WAVEX_AUDIO_ENGINE_ENABLED
             busy = busy || WaveX::AudioEngine::StorageJobBusy();
 #endif
-            if (busy || !s_sd_probe.Begin(bytes, chunk, shift, prefix)) {
+            if (busy || !s_sd_probe.Begin(bytes, chunk, shift, prefix, pattern, directory, gap)) {
                 FormatErr(seq, "busy_or_invalid", reply, sizeof(reply));
             } else {
                 s_sd_probe.Status(reply, sizeof(reply), seq);
@@ -192,6 +203,43 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             FormatErr(seq, "syntax", reply, sizeof(reply));
         }
     } else if (std::strcmp(c.verb, "SDIO") == 0) {
+        unsigned long mode;
+        char extra;
+        if (std::sscanf(p, "MODE %lu %c", &mode, &extra) == 1) {
+            bool busy = !WaveX::Storage::SdSdio::IsMounted() || s_sd_probe.Busy() ||
+                        WaveX::Storage::CardService::Busy();
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            busy =
+                busy || WaveX::AudioEngine::StorageJobBusy() || WaveX::AudioEngine::IsWavPlaying();
+#endif
+            if (busy || !WaveX::Storage::SdIo::ConfigureExperiment(mode)) {
+                FormatErr(seq, "busy_or_invalid", reply, sizeof(reply));
+            } else {
+                std::snprintf(reply,
+                              sizeof(reply),
+                              "WAVEX-DBG: %ld OK mode=%lu",
+                              static_cast<long>(seq),
+                              WaveX::Storage::SdIo::Experiment());
+            }
+            WaveX::Log::PrintLine("%s", reply);
+            return;
+        }
+        if (std::strcmp(p, "INFO") == 0) {
+            std::snprintf(reply,
+                          sizeof(reply),
+                          "WAVEX-DBG: %ld OK chip=%08lx cid0=%08lx cid1=%08lx cid2=%08lx "
+                          "cid3=%08lx clk=%08lx mode=%lu",
+                          static_cast<long>(seq),
+                          DBGMCU->IDCODE,
+                          hsd1.CID[0],
+                          hsd1.CID[1],
+                          hsd1.CID[2],
+                          hsd1.CID[3],
+                          hsd1.Instance->CLKCR,
+                          WaveX::Storage::SdIo::Experiment());
+            WaveX::Log::PrintLine("%s", reply);
+            return;
+        }
         if (*p && std::strcmp(p, "RESET") && std::strcmp(p, "REGS")) {
             FormatErr(seq, "syntax", reply, sizeof(reply));
             WaveX::Log::PrintLine("%s", reply);

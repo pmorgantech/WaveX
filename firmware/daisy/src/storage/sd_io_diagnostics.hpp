@@ -64,6 +64,12 @@ class FirstFailure {
 
 Failure Snapshot();
 void Reset();
+// Debug-only experiments. Call only with all foreground storage jobs idle.
+// Bit 0: isolate <=4 KiB DMA through a dedicated aligned AXI buffer.
+// Bit 1: enable FIFO flow control. Bit 2: 100 us pre-transfer idle interval.
+// Reboot restores defaults; none of these experiments is a production fix.
+bool ConfigureExperiment(uint32_t mode);
+uint32_t Experiment();
 // Foreground-only, emits each latched failure once through the existing ring.
 void Report();
 

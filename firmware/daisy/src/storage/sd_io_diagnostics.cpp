@@ -1,11 +1,15 @@
 #include "sd_io_diagnostics.hpp"
 
 #include "config/hardware_config.h"
+#include "config/logging_config.h"
+
+#include <cstring>
 
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "comm/log_ring.h"
 #include "diskio.h"
 #include "stm32h7xx_hal.h"
+#include "sys/system.h"
 
 extern "C" {
 extern SD_HandleTypeDef hsd1;
@@ -18,6 +22,11 @@ namespace WaveX::Storage::SdIo {
 namespace {
 FirstFailure capture;
 bool reported = false;
+#if WAVEX_DEBUG_HARNESS_ENABLED
+bool bounce_enabled = false;
+bool gap_enabled = false;
+alignas(32) uint8_t bounce[4096];  // Foreground-owned AXI SRAM, no shared cache lines.
+#endif
 
 // PRIMASK restoration also works when called with interrupts already masked.
 struct Guard {
@@ -55,6 +64,23 @@ void Reset() {
     capture.Reset();
     reported = false;
 }
+#if WAVEX_DEBUG_HARNESS_ENABLED
+uint32_t Experiment() {
+    return (bounce_enabled ? 1u : 0u) | (gap_enabled ? 4u : 0u) |
+           ((hsd1.Instance->CLKCR & SDMMC_CLKCR_HWFC_EN) ? 2u : 0u);
+}
+bool ConfigureExperiment(uint32_t mode) {
+    if (mode > 7 || hsd1.State != HAL_SD_STATE_READY ||
+        (hsd1.Instance->STA & (SDMMC_FLAG_DPSMACT | SDMMC_FLAG_CMDACT)))
+        return false;
+    bounce_enabled = (mode & 1u) != 0;
+    gap_enabled = (mode & 4u) != 0;
+    hsd1.Init.HardwareFlowControl =
+        (mode & 2u) ? SDMMC_HARDWARE_FLOW_CONTROL_ENABLE : SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
+    MODIFY_REG(hsd1.Instance->CLKCR, SDMMC_CLKCR_HWFC_EN, hsd1.Init.HardwareFlowControl);
+    return true;
+}
+#endif
 void Report() {
     if (reported || !capture.HasFailure())
         return;
@@ -89,13 +115,28 @@ void Report() {
 }
 
 DRESULT Transfer(bool write, BYTE drive, BYTE* buffer, DWORD sector, UINT count) {
+#if WAVEX_DEBUG_HARNESS_ENABLED
+    // Diagnostic only: audio IRQs remain enabled; this is never callback code.
+    if (gap_enabled)
+        daisy::System::DelayUs(100);
+#endif
     const uint32_t start = HAL_GetTick();
     {
         Guard guard;
         capture.Begin(write, drive, sector, count, reinterpret_cast<uint32_t>(buffer));
     }
-    const auto result = write ? __real_disk_write(drive, buffer, sector, count)
-                              : __real_disk_read(drive, buffer, sector, count);
+    auto* dma_buffer = buffer;
+#if WAVEX_DEBUG_HARNESS_ENABLED
+    if (bounce_enabled && count > 0 && count <= sizeof(bounce) / 512u) {
+        dma_buffer = bounce;
+        if (write)
+            std::memcpy(bounce, buffer, count * 512u);
+    }
+#endif
+    const auto result = write ? __real_disk_write(drive, dma_buffer, sector, count)
+                              : __real_disk_read(drive, dma_buffer, sector, count);
+    if (!write && result == RES_OK && dma_buffer != buffer)
+        std::memcpy(buffer, dma_buffer, count * 512u);
     {
         Guard guard;
         capture.Finish(static_cast<uint32_t>(result), HAL_GetTick() - start, ReadRegisters(hsd1));

@@ -11,6 +11,7 @@ TEST(SdIoDiagnostics, RetainsFirstIrqBeforeCleanupAndLaterFailures) {
     irq.status = 2;
     irq.error = 2;
     irq.remaining = 3584;
+    irq.buffer = 0x24008000;  // A staged DMA buffer differs from the caller.
     capture.ObserveIrq(irq);
     Registers cleanup;
     cleanup.error = 4;
@@ -23,6 +24,8 @@ TEST(SdIoDiagnostics, RetainsFirstIrqBeforeCleanupAndLaterFailures) {
     EXPECT_TRUE(f.write);
     EXPECT_TRUE(f.irq);
     EXPECT_EQ(f.sector, 42u);
+    EXPECT_EQ(f.buffer, 0x24000100u);
+    EXPECT_EQ(f.registers.buffer, 0x24008000u);
     EXPECT_EQ(f.registers.error, 2u);
     EXPECT_EQ(f.registers.remaining, 3584u);
     EXPECT_EQ(f.elapsed_ms, 17u);
