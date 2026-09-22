@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Encoder polling uses IDF limit-watch accumulation with an IRAM-safe ISR instead
+  of clearing a running counter; edges between reads and re-centres are retained.
+  Removed unused counter-reset/snapshot APIs that bypassed poller ownership.
+
 - Correlated frontend resident sample loads end-to-end with an additive versioned
   request/reply pair. Delayed progress, failures and completions from a previous
   browser visit cannot change a new load or bind the wrong sample. Legacy bench

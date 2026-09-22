@@ -43,6 +43,11 @@ static_assert(WAVEX_PCNT1_DIRECTION == 1 || WAVEX_PCNT1_DIRECTION == -1,
 
 #define PCNT_CONFIG_COUNT (sizeof(s_pcnt_configs) / sizeof(wavex_pcnt_config_t))
 
+// Panel-task baseline and atomic UI-consumed movement are private to this module.
+struct encoder_reading_t {
+    uint32_t last_hw = 0;
+    int32_t delta = 0;
+};
 static encoder_reading_t s_encoder_readings[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Driver handles, indexed by WaveX logical unit. NULL means "not initialized".
@@ -66,6 +71,7 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
     pcnt_unit_config_t unit_config = {};
     unit_config.high_limit = INT16_MAX;
     unit_config.low_limit = INT16_MIN;
+    unit_config.flags.accum_count = true;
 
     pcnt_unit_handle_t unit = NULL;
     esp_err_t ret = pcnt_new_unit(&unit_config, &unit);
@@ -153,6 +159,18 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
         return ret;
     }
 
+    // The IDF ISR extends both hardware limits; polling never clears a running
+    // counter. Its pending-overflow compensation also covers reads before ISR service.
+    ret = pcnt_unit_add_watch_point(unit, unit_config.low_limit);
+    if (ret == ESP_OK)
+        ret = pcnt_unit_add_watch_point(unit, unit_config.high_limit);
+    if (ret != ESP_OK) {
+        pcnt_del_channel(chan_b);
+        pcnt_del_channel(chan_a);
+        pcnt_del_unit(unit);
+        return ret;
+    }
+
     // Enable, zero, and start. The legacy sequence was pause/clear/resume;
     // the current driver additionally requires an explicit enable before the
     // unit will accept a start.
@@ -210,8 +228,12 @@ void pcnt_poll(void) {
         // positive as clockwise; a knob whose phases are wired the other
         // way is corrected here by its hardware_config.h direction, never
         // by a page.
-        int32_t delta = ((int32_t)hw_count - reading->last_hw) * config->direction;
-        reading->last_hw = (int32_t)hw_count;
+        // Unsigned subtraction retains movement across the 32-bit accumulated
+        // count wrap. Encoder movement between polls is far below INT32_MAX.
+        const uint32_t movement = static_cast<uint32_t>(hw_count) - reading->last_hw;
+        const int32_t delta =
+            static_cast<int32_t>(config->direction > 0 ? movement : 0u - movement);
+        reading->last_hw = static_cast<uint32_t>(hw_count);
         if (delta != 0) {
             const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
                                         ? "Main Encoder"
@@ -231,33 +253,6 @@ void pcnt_poll(void) {
             // enough - the delta is a self-contained count, not a flag
             // publishing some other buffer.
             __atomic_fetch_add(&reading->delta, delta, __ATOMIC_RELAXED);
-        }
-
-        // Re-centre well before the driver's ±INT16 limit, where it would
-        // reset the count to zero on its own and make the next delta a
-        // large bogus jump.
-        //
-        // The counter is NOT cleared on every poll any more. Doing that
-        // discarded any edge landing between get_count() and clear_count(),
-        // which is every poll during movement; now the window is hit once
-        // per ~8000 counts (~85 revolutions), where losing a fraction of a
-        // detent is imperceptible. Closing it completely needs the driver's
-        // watch-point callbacks, which is an ISR and wants bench time.
-        constexpr int32_t kRecentreThreshold = 8000;
-        if (hw_count > kRecentreThreshold || hw_count < -kRecentreThreshold) {
-            esp_err_t clear_err = pcnt_unit_clear_count(s_pcnt_units[config->unit]);
-            if (clear_err == ESP_OK) {
-                reading->last_hw = 0;
-            } else {
-                // last_hw still matches the hardware, so the baseline stays
-                // true and the next poll just tries again. The old code
-                // zeroed it regardless, which re-applied the whole count as
-                // fresh delta on every subsequent poll.
-                ESP_LOGW(TAG,
-                         "PCNT unit %u clear_count failed: %s",
-                         (unsigned)config->unit,
-                         esp_err_to_name(clear_err));
-            }
         }
     }
 }
@@ -287,44 +282,6 @@ esp_err_t pcnt_task_start(void) {
 }
 esp_err_t pcnt_task_stop(void) {
     return wavex_panel::Stop();
-}
-
-esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading) {
-    if (unit >= WAVEX_PCNT_UNIT_COUNT || reading == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    bool unit_enabled = false;
-    for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
-        if (s_pcnt_configs[i].unit == unit && s_pcnt_configs[i].enabled) {
-            unit_enabled = true;
-            break;
-        }
-    }
-
-    if (!unit_enabled) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    *reading = s_encoder_readings[unit];
-    return ESP_OK;
-}
-
-esp_err_t pcnt_reset_counter(uint8_t unit) {
-    if (unit >= WAVEX_PCNT_UNIT_COUNT) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (s_pcnt_units[unit] == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t ret = pcnt_unit_clear_count(s_pcnt_units[unit]);
-    if (ret == ESP_OK) {
-        s_encoder_readings[unit].last_hw = 0;
-        s_encoder_readings[unit].prev_count = 0;
-        __atomic_store_n(&s_encoder_readings[unit].delta, 0, __ATOMIC_RELAXED);
-    }
-    return ret;
 }
 
 esp_err_t pcnt_get_raw_count(uint8_t unit, int *count) {

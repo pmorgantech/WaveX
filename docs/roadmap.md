@@ -277,8 +277,7 @@ hardware procedures remain in HV-034; unrelated maintenance stays below.
 
 The `ui_get_comm_interface()` global that two pages still reach through is
 already covered by the `ICommInterface` item under *UI and frontend
-maintenance*; the PCNT counter re-centre window is already covered by the
-watch-point item in the same section. Neither is restated here.
+maintenance*.
 
 ### Melodic follow-ups
 
@@ -382,8 +381,6 @@ read failures at HV-023 before claiming recovery acceptance.
 - Break the UI/main dependency cycle after the UI hardware pass: inject a narrow
   shared context, move `ICommInterface` out of `main`, then remove the dependency.
 - Give busy-overlay failures stable, non-spinning text and deliberate dismissal.
-- Close the PCNT read/clear race with an IRAM-safe watch-point design or UI-task
-  consumption.
 - Recheck callers and remove unused frontend APIs, window manager/surfaces and
   the bypassed `mocks/ui_theme.h` in a separate cleanup.
 - Supply root-menu resident-count/Instrument-name context from authoritative

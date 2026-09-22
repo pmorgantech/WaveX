@@ -49,27 +49,13 @@ typedef struct {
     bool enabled;            // Whether this unit is enabled
 } wavex_pcnt_config_t;
 
-typedef struct {
-    int32_t last_hw;     // Hardware count at the previous poll
-    int32_t prev_count;  // Unused; retained so the struct layout is unchanged
-    // Accumulated movement not yet consumed. Written by the PCNT task and
-    // taken by the UI task, on either core, so every access goes through
-    // __atomic_* builtins rather than a plain read-modify-write. Kept as a
-    // plain int32_t here because this header is `extern "C"`.
-    int32_t delta;
-} encoder_reading_t;
-
 esp_err_t pcnt_task_init(void);
 esp_err_t pcnt_task_start(void);
 // One pass, called exclusively by panel_task. No blocking delay.
 void pcnt_poll(void);
 esp_err_t pcnt_task_stop(void);
 
-esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading);
-
-esp_err_t pcnt_reset_counter(uint8_t unit);
-
-/** Raw hardware counter value for `unit`, bypassing delta tracking. Debugging only. */
+/** Accumulated driver counter value for `unit`, bypassing delta tracking. Debugging only. */
 esp_err_t pcnt_get_raw_count(uint8_t unit, int *count);
 
 /**

@@ -142,3 +142,6 @@ CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5
 # Native USB console: logs and debug commands bypass the CH343 UART bridge.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Preserve encoder overflow accounting while flash cache is disabled.
+CONFIG_PCNT_ISR_IRAM_SAFE=y

@@ -2653,6 +2653,10 @@ fault/queue-pressure instrumentation. Record image identities and transport logs
 - [ ] Audit follow-up: read UART diagnostics while injecting RX overflow and
   TX queue rejection on both cores. Verify increments are retained through
   concurrent updates; individual counter reads need not form one snapshot.
+- [ ] Encoder accumulation: drive known quadrature edges in both directions across
+  both 16-bit hardware limits, reverse near each limit and repeat during flash
+  writes/cache-disabled intervals. Consumed movement must equal injected movement
+  without jumps or missing detents. Record ISR/task timing and image identity.
 - [ ] Repeat under sequencer/streaming load; capture UI stack/memory margins,
   link counters and audio underruns. Preserve the independent capacity/soak gate.
 
