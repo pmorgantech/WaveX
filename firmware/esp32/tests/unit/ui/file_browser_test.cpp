@@ -400,6 +400,7 @@ class FileBrowserResponseTest : public ::testing::Test {
     void Respond(uint32_t total_count, const std::vector<FileEntryWire>& entries) {
         std::vector<uint8_t> payload = BuildBrowsePayload(total_count, entries);
         stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+        wavex_file_browser_process_pending_updates(browser_);
     }
 
     int parent_ = 0;  // opaque dummy for the LVGL mock
@@ -554,6 +555,7 @@ TEST_F(FileBrowserResponseTest, MalformedPayloadsAreRejected) {
     // Shorter than the header.
     uint8_t junk[3] = {0x01, 0x02, 0x03};
     stats_->invoke_browse_resp_callback(junk, sizeof(junk));
+    wavex_file_browser_process_pending_updates(browser_);
     EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
 
     // Header claims more entries than the payload carries. Refresh first so
@@ -565,6 +567,7 @@ TEST_F(FileBrowserResponseTest, MalformedPayloadsAreRejected) {
     BrowseRespHeader bad_header(5, 5);  // claims 5 entries, carries 1
     memcpy(lying.data(), &bad_header, sizeof(bad_header));
     stats_->invoke_browse_resp_callback(lying.data(), lying.size());
+    wavex_file_browser_process_pending_updates(browser_);
     EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
 }
 
@@ -620,10 +623,12 @@ TEST_F(FileBrowserResponseTest, StorageStatusUpdatesFlagAndRelistsOnMount) {
     ASSERT_EQ(cap.browse_req_calls, 1);
 
     stats_->invoke_storage_status_callback(false);
+    wavex_file_browser_process_pending_updates(browser_);
     EXPECT_FALSE(wavex_file_browser_is_storage_mounted(browser_));
     EXPECT_EQ(cap.browse_req_calls, 1) << "loss must not trigger a re-list";
 
     stats_->invoke_storage_status_callback(true);
+    wavex_file_browser_process_pending_updates(browser_);
     EXPECT_TRUE(wavex_file_browser_is_storage_mounted(browser_));
     EXPECT_EQ(cap.browse_req_calls, 2) << "re-insert must re-list";
     EXPECT_STREQ(cap.browse_req_path, "/");
@@ -638,6 +643,7 @@ TEST_F(FileBrowserResponseTest, DestroyDeregistersListeners) {
 
     Respond(1, {FileEntryWire(0, 100, "late.wav")});
     stats_->invoke_storage_status_callback(true);
+    wavex_file_browser_process_pending_updates(browser_);
     // Reaching here without touching freed memory is the point; ASan/valgrind
     // turns a regression into a hard failure.
     SUCCEED();
@@ -666,6 +672,7 @@ TEST_F(FileBrowserResponseTest, UnterminatedWireNameIsBoundedEvenInDebugLogging)
     auto payload = BuildBrowsePayload(1, {FileEntryWire()});
     std::fill(payload.begin() + sizeof(BrowseRespHeader), payload.end(), 'n');
     stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+    wavex_file_browser_process_pending_updates(browser_);
     ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
     const auto* entry = wavex_file_browser_get_entry(browser_, 0);
     ASSERT_NE(entry, nullptr);
@@ -696,4 +703,26 @@ TEST_F(FileBrowserResponseTest, CompleteDirectoryReachesFinalIndexWithoutWrappin
     ASSERT_NE(selected, nullptr);
     EXPECT_STREQ(selected->name, "kit255.wxi");
     EXPECT_STREQ(selected->path, "/kit255.wxi");
+}
+
+TEST_F(FileBrowserResponseTest, ReceiveDoesNotMutateUiStateUntilService) {
+    const auto payload = BuildBrowsePayload(1, {FileEntryWire(0, 100, "deferred.wav")});
+    stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+    EXPECT_EQ(browser_->entry_count, 0u);
+    wavex_file_browser_process_pending_updates(browser_);
+    ASSERT_EQ(browser_->entry_count, 1u);
+    EXPECT_STREQ(browser_->entries[0].name, "deferred.wav");
+    stats_->invoke_storage_status_callback(false);
+    EXPECT_TRUE(browser_->storage_mounted);
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_FALSE(browser_->storage_mounted);
+    EXPECT_EQ(browser_->entry_count, 0u);
+}
+TEST_F(FileBrowserResponseTest, ReplyOverflowClearsListingInsteadOfPublishingPartialState) {
+    const auto payload = BuildBrowsePayload(1, {FileEntryWire(0, 100, "queued.wav")});
+    for (int i = 0; i < 5; ++i)
+        stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(browser_->entry_count, 0u);
+    EXPECT_FALSE(wavex_file_browser_loading(browser_));
 }

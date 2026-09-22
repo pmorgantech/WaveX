@@ -1,9 +1,10 @@
+#include "comm/value_queue.h"
+
+#include <new>
 /**
  * @file file_browser.cpp
  * @brief File Browser Component Implementation
  */
-
-#include "file_browser.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include "comm/i_comm_interface.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "file_browser.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "inter_mcu.h"
@@ -150,6 +152,15 @@ static void fb_style_row(lv_obj_t* btn, const wavex_file_entry_t* entry, bool se
     lv_obj_align(meta, LV_ALIGN_RIGHT_MID, 0, 0);
 }
 
+struct BrowserInbox {
+    struct Reply {
+        size_t length = 0;
+        uint8_t data[2048] = {};
+    };
+    WaveX::Comm::ValueQueue<Reply, 4> replies;
+    WaveX::Comm::ValueQueue<bool, 4> storage;
+};
+
 // Browser instances are passed via user_data in callbacks - no global needed
 
 static void file_list_event_cb(lv_event_t* e);
@@ -168,17 +179,11 @@ static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void storage_status_callback(bool mounted, void* user_data);
+static void apply_browse_response(const uint8_t* data, size_t length, void* user_data);
+static void apply_storage_status(bool mounted, void* user_data);
 static void update_file_browser_ui(wavex_file_browser_t* browser);
 
-// Cross-task handoff for ui_update_pending (dma-timing-review-2026-07-03.md
-// Finding 11): browse_resp_callback runs on the UART task, writing
-// browser->entries[] and then setting this flag, while the UI task reads
-// the flag and then the entries. On the dual-core P4 a plain bool store
-// guarantees no ordering between those writes - the UI task could see the
-// flag set but the entries only partially written. The release-store /
-// acquire-load pair below provides that ordering; all other stores go
-// through the same helpers so no plain access ever races an atomic one on
-// the same address.
+// UI dirty flags. RX callbacks publish only to BrowserInbox.
 static inline void browser_set_ui_update(wavex_file_browser_t* browser) {
     __atomic_store_n(&browser->ui_update_pending, true, __ATOMIC_RELEASE);
 }
@@ -203,11 +208,7 @@ static inline bool browser_selection_update_pending(const wavex_file_browser_t* 
     return __atomic_load_n(&browser->selection_update_pending, __ATOMIC_ACQUIRE);
 }
 
-// Same cross-task hazard as ui_update_pending above, and previously missed:
-// pagination_in_progress is written from the UART RX task
-// (browse_resp_callback and friends) and read from the UI task
-// (fb_show_loading_row / update_file_browser_ui) as a plain bool, with no
-// ordering guarantee between the two cores.
+// Pagination state is owned by the UI domain.
 static inline void browser_set_pagination_in_progress(wavex_file_browser_t* browser) {
     __atomic_store_n(&browser->pagination_in_progress, true, __ATOMIC_RELEASE);
 }
@@ -232,6 +233,11 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     }
 
     memset(browser, 0, sizeof(wavex_file_browser_t));
+    browser->inbox = new (std::nothrow) BrowserInbox;
+    if (!browser->inbox) {
+        free(browser);
+        return nullptr;
+    }
     browser->config = *config;
     browser->selected_index = 0;
     browser->storage_mounted = true;
@@ -255,6 +261,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
         (wavex_file_entry_t*)malloc(config->max_entries * sizeof(wavex_file_entry_t));
     if (!browser->entries) {
         ESP_LOGE(TAG, "Failed to allocate entries array");
+        delete browser->inbox;
         free(browser);
         return NULL;
     }
@@ -294,6 +301,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     } else {
         ESP_LOGE(TAG, "No comm interface provided to file browser");
         free(browser->entries);
+        delete browser->inbox;
         free(browser);
         return NULL;
     }
@@ -341,6 +349,7 @@ void wavex_file_browser_destroy(wavex_file_browser_t* browser) {
         lv_obj_del(browser->container);
     }
 
+    delete browser->inbox;
     free(browser);
     ESP_LOGI(TAG, "File browser destroyed");
 }
@@ -872,6 +881,17 @@ static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
 }
 
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data) {
+    auto* browser = static_cast<wavex_file_browser_t*>(user_data);
+    if (!browser || !data || !length || length > sizeof(BrowserInbox::Reply::data))
+        return;
+    BrowserInbox::Reply reply;
+    reply.length = length;
+    memcpy(reply.data, data, length);
+    browser->inbox->replies.Push(reply);
+    wavex_ui_mark_content_changed();
+}
+
+static void apply_browse_response(const uint8_t* data, size_t length, void* user_data) {
     wavex_file_browser_t* browser = (wavex_file_browser_t*)user_data;
     if (!browser || !data || length == 0) {
         ESP_LOGE(TAG, "Invalid browse response callback parameters");
@@ -905,8 +925,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         free(temp_entries);
         ESP_LOGE(TAG, "Failed to parse browse response");
         browser_clear_pagination_in_progress(browser);
-        // Mark error state for deferred UI update (this callback runs from UART task, not LVGL
-        // context)
+        // Mark the UI-owned listing for rebuilding.
         browser->entry_count = 0;
         browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
@@ -998,9 +1017,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
 
         ESP_LOGI(TAG, "First page loaded: marking %d entries for UI update", browser->entry_count);
 
-        // Set flag for UI task to process (thread-safe deferred update). This
-        // runs on the UART task, so the rebuild itself must happen on the UI
-        // task: update_file_browser_ui() picks the flag up under the LVGL lock.
+        // Rebuild after applying this complete page in the UI domain.
         browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
 
@@ -1072,9 +1089,26 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         return;
     }
 
-    // Acquire-load pairs with browser_set_ui_update's release-store: once we
-    // see the flag, the UART task's writes to entries[]/entry_count are
-    // guaranteed visible (review Finding 11).
+    if (browser->inbox) {
+        const bool lost =
+            browser->inbox->replies.TakeOverflow() | browser->inbox->storage.TakeOverflow();
+        if (lost) {
+            browser->inbox->replies.Clear();
+            browser->inbox->storage.Clear();
+            browser->entry_count = browser->loaded_entries = 0;
+            browser_clear_pagination_in_progress(browser);
+            browser_set_ui_update(browser);
+            ESP_LOGE(TAG, "Browser response queue overflow; refresh required");
+        } else {
+            bool mounted;
+            for (unsigned i = 0; i < 4 && browser->inbox->storage.Pop(mounted); ++i)
+                apply_storage_status(mounted, browser);
+            BrowserInbox::Reply reply;
+            for (unsigned i = 0; i < 4 && browser->inbox->replies.Pop(reply); ++i)
+                apply_browse_response(reply.data, reply.length, browser);
+        }
+    }
+
     bool full = browser_ui_update_pending(browser);
     bool selection_only = browser_selection_update_pending(browser);
     if (!full && !selection_only) {
@@ -1218,18 +1252,24 @@ static void update_visual_selection(wavex_file_browser_t* browser) {
     wavex_ui_mark_content_changed();
 }
 
-// Storage appeared or vanished. Runs on the UART task, so it must not touch
-// LVGL - refresh_file_list() only sends a browse request and sets the deferred
-// UI-update flag, which is safe from here.
+// RX copies storage state; the UI applies it after releasing the queue lock.
 static void storage_status_callback(bool mounted, void* user_data) {
+    auto* browser = static_cast<wavex_file_browser_t*>(user_data);
+    if (browser)
+        browser->inbox->storage.Push(mounted);
+    wavex_ui_mark_content_changed();
+}
+
+static void apply_storage_status(bool mounted, void* user_data) {
     wavex_file_browser_t* browser = (wavex_file_browser_t*)user_data;
     if (!browser) {
         return;
     }
     browser->storage_mounted = mounted;
     if (!mounted) {
-        // The empty browse response that accompanies a loss already clears the
-        // list; nothing to do but stop any pagination still in flight.
+        browser->inbox->replies.Clear();
+        browser->entry_count = browser->loaded_entries = 0;
+        browser_set_ui_update(browser);
         browser_clear_pagination_in_progress(browser);
         ESP_LOGI(TAG, "Storage lost - browser idle");
         return;

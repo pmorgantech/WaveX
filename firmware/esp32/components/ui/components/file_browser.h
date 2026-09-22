@@ -50,7 +50,10 @@ typedef void (*wavex_file_selected_index_cb_t)(uint32_t file_index,
                                                void* user_data);
 typedef void (*wavex_directory_changed_cb_t)(const char* path, void* user_data);
 
+struct BrowserInbox;
+
 typedef struct {
+    BrowserInbox* inbox;  // RX writes only this queue; remaining fields are UI-owned.
     lv_obj_t* container;
     lv_obj_t* list;
     lv_obj_t* path_label;
@@ -70,12 +73,7 @@ typedef struct {
     uint32_t total_files;
     uint32_t current_page;
     uint32_t entries_per_page;  // typically 4
-    // True if we're currently loading more pages. Written from the UART RX
-    // task (browse_resp_callback and friends), read from the UI task
-    // (fb_show_loading_row / update_file_browser_ui) - always through the
-    // browser_{set,clear,}_pagination_in_progress() release/acquire helpers
-    // in file_browser.cpp, same discipline as ui_update_pending below. Never
-    // write or read this field directly.
+    // UI-domain state; RX publishes whole responses into inbox.
     bool pagination_in_progress;
     uint32_t loaded_entries;
 
@@ -117,7 +115,7 @@ void wavex_file_browser_set_directory_changed_callback(wavex_file_browser_t* bro
                                                        wavex_directory_changed_cb_t callback,
                                                        void* user_data);
 
-// Thread-safe: call from the UI task to apply updates queued by the RX task.
+// UI context (LVGL lock held): consume RX values, then apply and draw.
 void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser);
 
 const char* wavex_file_browser_get_current_path(wavex_file_browser_t* browser);

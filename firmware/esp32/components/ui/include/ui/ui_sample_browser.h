@@ -6,6 +6,7 @@
 #include "../components/envelope_panel.h"
 #include "../components/file_browser.h"
 #include "comm/i_comm_interface.h"
+#include "comm/value_queue.h"
 #include "input_event.h"
 #include "inter_mcu.h"
 #include "ui_navigator.h"
@@ -190,28 +191,19 @@ class UISampleBrowser : public UIPage {
     uint32_t selected_file_index_ = 0;
     char selected_file_path_[96] = {0};
 
-    // Deferred UI updates. The producer is the UART RX task (sample-status and
-    // browse callbacks); the consumer is the UI task, which drains these under
-    // the LVGL lock in processDeferredUpdates_(). Widgets must never be touched
-    // from the producer side - the LVGL task renders on the other core.
-    //
-    // The flags are release-stored after their payload is written and
-    // acquire-loaded before it is read, so the consumer cannot see a raised
-    // flag ahead of the data it advertises. Plain bools (or volatile) give no
-    // such ordering on this dual-core part.
+    // RX owns only these queues. Listener deregistration precedes Clear and
+    // page destruction; all state below is applied in the UI/LVGL domain.
+    WaveX::Comm::ValueQueue<WaveX::Protocol::SampleStatusMessage, 16> sample_replies_;
+    WaveX::Comm::ValueQueue<WaveX::Protocol::InstStatusMessage, 16> instrument_replies_;
+    static void applySampleStatus(uint16_t, uint8_t, uint32_t, uint8_t, uint32_t, void*);
+    static void applyInstrumentStatus(const WaveX::Protocol::InstStatusMessage&, void*);
+
+    // Deferred widget presentation, now written and consumed only under LVGL.
     std::atomic<bool> status_update_pending_{false};
     std::atomic<bool> metadata_update_pending_{false};
     char pending_status_text_[256] = {0};
     char pending_metadata_text_[512] = {0};
-    // Held by value, like the two buffers above, rather than as a pointer into
-    // the file browser's entry array. That array is rewritten page by page by
-    // the RX task and freed outright by onExit()'s
-    // wavex_file_browser_destroy(), while this update is consumed a UI pass
-    // later - so a pointer here outlived what it pointed at every time the
-    // page was left with an update still queued.
-    // `_valid_` is payload under metadata_update_pending_, same as the text
-    // buffers: written before the flag's release-store, read after its
-    // acquire-load.
+    // Copy by value so later pagination/exit cannot invalidate a queued detail.
     wavex_file_entry_t pending_metadata_entry_ = {};
     bool pending_metadata_entry_valid_ = false;
 

@@ -226,6 +226,14 @@ A background callback copies a complete value into a synchronized mailbox or
 bounded queue. A UI service point consumes it, releases the mailbox lock,
 then changes widgets in the LVGL context.
 
+File Browser receives bounded complete packet copies and storage values; Sample
+Browser receives typed sample/Instrument status values. Their UI service drains
+these queues before changing directory entries, selection, persistent strings,
+load state or widget text. Listener teardown waits for RX callbacks before
+clearing/freeing queues. Overflow invalidates the operation/listing and requires
+refresh rather than publishing a partial result. Queue locks never enclose
+callbacks, LVGL or link sends.
+
 A `volatile` struct plus a pending flag is not synchronization. Even a
 release/acquire flag does not protect a slot if the producer can overwrite
 its fields while the consumer is copying them. Use explicit slot ownership,

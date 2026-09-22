@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F3: browser responses cross synchronized bounded value
+  queues; RX no longer writes directory entries, selection, persistent strings
+  or status buffers. Added concurrent handoff and deferred-application tests.
+
 - Fixed frontend review F2: the inter-MCU client retains releases for admitted
   Play/DIN/USB presses through queue pressure and page exit, with bounded retry
   and ordered retriggers. Play no longer marks rejected presses as held.

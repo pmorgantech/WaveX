@@ -327,6 +327,8 @@ void UISampleBrowser::onExit() {
              "=== SAMPLE BROWSER ON_EXIT: Unregistering callback and clearing active instance");
     inter_mcu_set_sample_status_listener(nullptr, nullptr);
     inter_mcu_set_inst_status_listener(nullptr, nullptr);
+    sample_replies_.Clear();
+    instrument_replies_.Clear();
     // A half-answered picker does not survive leaving the page, and a load
     // whose completion we will no longer hear must not bind later either.
     awaiting_track_ = false;
@@ -710,7 +712,7 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     wavex_ui_mark_content_changed();
 
     // Show metadata for the selected file once the listing has landed. This
-    // runs on the UART task, so it only raises a flag; processDeferredUpdates_()
+    // runs while applying a queued directory reply; processDeferredUpdates_()
     // reads the selection and updates the label on the UI task.
     browser->selection_metadata_pending_.store(true, std::memory_order_release);
 
@@ -810,7 +812,7 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
 
     // Copy the entry for the deferred update (may be called from non-LVGL
     // context). A pointer would dangle: the browser's entry array is rewritten
-    // per browse page by the RX task and freed by onExit().
+    // per browse page in the UI domain and freed by onExit().
     pending_metadata_entry_ = *entry;
     pending_metadata_entry_valid_ = true;
     metadata_update_pending_.store(true, std::memory_order_release);
@@ -917,6 +919,27 @@ void UISampleBrowser::processDeferredUpdates() {
 }
 
 void UISampleBrowser::processDeferredUpdates_() {
+    if (sample_replies_.TakeOverflow() | instrument_replies_.TakeOverflow()) {
+        sample_replies_.Clear();
+        instrument_replies_.Clear();
+        bind_on_load_track_.store(-1);
+        load_request_id_.store(0);
+        probe_request_id_.store(0);
+        BusyOverlay::hide();
+        updateStatus("Response overflow; refresh before continuing");
+    }
+    WaveX::Protocol::SampleStatusMessage sample;
+    for (unsigned i = 0; i < 16 && sample_replies_.Pop(sample); ++i)
+        applySampleStatus(sample.sample_id,
+                          sample.state,
+                          sample.sample_rate,
+                          sample.channels,
+                          sample.frames_played,
+                          this);
+    WaveX::Protocol::InstStatusMessage instrument;
+    for (unsigned i = 0; i < 16 && instrument_replies_.Pop(instrument); ++i)
+        applyInstrumentStatus(instrument, this);
+
     // This should be called from UI task loop with LVGL lock held
 
     // The waveform rides the existing UI-task pass rather than adding an
@@ -1269,12 +1292,28 @@ void UISampleBrowser::refreshSoftkeys() {
     wavex_ui_mark_content_changed();
 }
 
-void UISampleBrowser::sample_status_callback(uint16_t sample_id,
-                                             uint8_t state,
-                                             uint32_t sample_rate,
-                                             uint8_t channels,
-                                             uint32_t frames_played,
-                                             void* user_data) {
+void UISampleBrowser::sample_status_callback(
+    uint16_t id, uint8_t state, uint32_t rate, uint8_t channels, uint32_t frames, void* user_data) {
+    auto* browser = static_cast<UISampleBrowser*>(user_data);
+    if (browser)
+        browser->sample_replies_.Push({id, state, channels, rate, frames});
+    wavex_ui_mark_content_changed();
+}
+
+void UISampleBrowser::instrument_status_callback(const WaveX::Protocol::InstStatusMessage& status,
+                                                 void* user_data) {
+    auto* browser = static_cast<UISampleBrowser*>(user_data);
+    if (browser)
+        browser->instrument_replies_.Push(status);
+    wavex_ui_mark_content_changed();
+}
+
+void UISampleBrowser::applySampleStatus(uint16_t sample_id,
+                                        uint8_t state,
+                                        uint32_t sample_rate,
+                                        uint8_t channels,
+                                        uint32_t frames_played,
+                                        void* user_data) {
     // DEBUG, not INFO: LOAD_PROGRESS arrives about a hundred times per load,
     // and two lines each was enough to push everything else out of the log
     // ring before it could be read.
@@ -1440,8 +1479,8 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
     }
 }
 
-void UISampleBrowser::instrument_status_callback(const WaveX::Protocol::InstStatusMessage& status,
-                                                 void* user_data) {
+void UISampleBrowser::applyInstrumentStatus(const WaveX::Protocol::InstStatusMessage& status,
+                                            void* user_data) {
     UISampleBrowser* browser = static_cast<UISampleBrowser*>(user_data);
     if (!browser || browser != s_active_instance_ || !browser->is_initialized_) {
         return;
