@@ -623,6 +623,11 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F8: load-to-Track retries rejected bind enqueues, then
+  confirms the resident ID through correlated Track readback before reporting
+  success. Timeout, navigation and disconnect stop UI retry; admitted binding
+  mutations are never resubmitted.
+
 - Fixed frontend review F7: sample-load RAM admission is backend-owned, allowing
   resident reuse when the file exceeds the remaining free block. Added a loader
   regression proving reuse preserves identity and performs no allocation/read.

@@ -180,7 +180,7 @@ playback remains uninterrupted.
 ## Outstanding hardware verification
 
 [hardware-validation.md](hardware-validation.md) owns procedures, blockers,
-image identities and results for HV-001–032. Keep partial/deferred checks open
+image identities and results for HV-001–034. Keep partial/deferred checks open
 until all acceptance criteria pass. Complete the following validation work:
 
 | Area | Remaining verification |
@@ -267,18 +267,21 @@ coverage and hardware evidence (principles 13 and 15).
 
 The combined frontend reviews cover input, UART/router/listeners, response
 caches, browser ownership, Play note/control lifetime and feature-page request
-handling. The earlier metadata-pointer fix is retained in the changelog; copying
-one entry does not resolve the remaining cross-task browser ownership issue.
+handling. Their physical acceptance remains open alongside the earlier audit
+follow-ups below.
 
-The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
+The user authorized review findings 1–8 on 2026-09-22. Their remaining physical
+acceptance is [HV-034](hardware-validation.md#hv-034--frontend-note-browser-and-load-recovery).
+Implementation and host/build results are recorded in the changelog; neither
+closes the Phase 2 hardware, capacity or recovery gates. Keep the remaining
+audit follow-ups independent:
 
-- **F8 — Load binding:** retain rejected binding sends and confirm the resulting
-  Track binding before claiming the sample is playable there.
-
-Physical acceptance for all eight findings is [HV-034](hardware-validation.md#hv-034--frontend-note-browser-and-load-recovery).
-Completed implementation leaves this list and is recorded in the changelog.
-Keep the following earlier audit follow-ups independent:
-
+- [ ] **Correlate legacy sample-load completions.** The completion carries the
+  resident ID but not the initiating request tag. A delayed completion can be
+  mistaken for a new load after leaving and reopening the browser. Extend the
+  typed load reply before treating cancellation/restart across navigation as
+  fully recovered; directory-page and Track-binding correlation do not cover
+  this legacy message.
 - [ ] **UART link overflow counter has two writers and one lock.**
   `queue_overflows` is incremented from the link task's RX path without the TX
   mutex and from the send path while holding it, so the read-modify-write

@@ -2638,8 +2638,10 @@ fault/queue-pressure instrumentation. Record image identities and transport logs
   switch Tracks and interrupt readback. First adjustments start from confirmed
   values; stale/disconnected values cannot authorize edits or cause jumps.
 - [ ] F8: reject the bind send after successful loading and delay binding replies.
-  Do not report success until matching readback; recover without another load
-  or duplicate mutation, including page exit and reconnect cases.
+  Do not report success until matching readback; recover while the page remains
+  active without another load or duplicate mutation. Page exit and disconnect
+  stop UI retries; reconnect cannot resubmit an admitted binding. Verify the
+  actual Track state because an admitted mutation may already have applied.
 - [ ] Repeat under sequencer/streaming load; capture UI stack/memory margins,
   link counters and audio underruns. Preserve the independent capacity/soak gate.
 

@@ -9,6 +9,7 @@
 #include "comm/value_queue.h"
 #include "input_event.h"
 #include "inter_mcu.h"
+#include "sample_binding_model.h"
 #include "ui_navigator.h"
 #include "ui_page.h"
 
@@ -201,6 +202,8 @@ class UISampleBrowser : public UIPage {
     uint16_t shown_generation_ = 0;
 
     void serviceWaveform();
+    void serviceSampleBinding();
+    SampleBindingModel sample_binding_;
     /// The resident sample behind the highlighted row, with its record, or 0.
     uint16_t resolveSelectedSample(WaveX::Protocol::SampleMetadata& meta);
     /// resolveSelectedSample() is asked ~30 Hz; the answer only changes with
@@ -267,7 +270,7 @@ class UISampleBrowser : public UIPage {
     uint8_t target_track_ = 0;
     // The Track a sample load will be bound to once the Daisy reports it
     // resident (SAMPLE_STATUS_LOAD_COMPLETE), and the id it must arrive with.
-    // -1 = nothing pending. Written on the UI task, read on the RX path.
+    // -1 = nothing pending. Owned by the UI domain.
     std::atomic<int16_t> bind_on_load_track_{-1};
     std::atomic<uint16_t> bind_on_load_sample_id_{0};
     char sfz_probe_path_[96] = {};

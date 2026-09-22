@@ -221,6 +221,11 @@ replayed. Browser audition streams a file; loading and binding a resident sample
 it playable through an Instrument. Pending load tags/geometry are separate from
 the confirmed resident editor selection. Only successful completion adopts the
 Daisy-assigned ID; failure or navigation discards the pending selection.
+Load-to-Track retains a rejected bind enqueue for bounded retry. After admission,
+it polls correlated Track state and reports success only when the requested
+resident ID is confirmed on the original target Track. A timeout, refusal, page
+exit or link loss ends UI retry; admitted mutations may already have applied
+and are never resubmitted. The successfully loaded sample remains in the Pool.
 
 Play reads the selected Instrument's filter and Env 1 through the existing
 correlated edit/modulator snapshots. Entry, Track changes and link transitions

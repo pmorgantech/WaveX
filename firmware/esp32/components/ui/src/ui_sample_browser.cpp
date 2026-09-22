@@ -334,6 +334,7 @@ void UISampleBrowser::onExit() {
     pending_load_ = PendingLoad::None;
     bind_on_load_track_.store(-1, std::memory_order_release);
     persistent_state_.cancelLoad();
+    sample_binding_.Cancel();
     // Detach before the widgets go: it drops the chunk listener first, so
     // the RX task cannot write through a freed page, and releases the cache's
     // run in flight, which would otherwise block every later waveform in the
@@ -924,6 +925,7 @@ void UISampleBrowser::processDeferredUpdates_() {
         instrument_replies_.Clear();
         bind_on_load_track_.store(-1);
         persistent_state_.cancelLoad();
+        sample_binding_.Cancel();
         load_request_id_.store(0);
         probe_request_id_.store(0);
         BusyOverlay::hide();
@@ -941,6 +943,7 @@ void UISampleBrowser::processDeferredUpdates_() {
     for (unsigned i = 0; i < 16 && instrument_replies_.Pop(instrument); ++i)
         applyInstrumentStatus(instrument, this);
 
+    serviceSampleBinding();
     // This should be called from UI task loop with LVGL lock held
 
     // The waveform rides the existing UI-task pass rather than adding an
@@ -1293,6 +1296,45 @@ void UISampleBrowser::refreshSoftkeys() {
     wavex_ui_mark_content_changed();
 }
 
+void UISampleBrowser::serviceSampleBinding() {
+    if (!sample_binding_.Active())
+        return;
+    const uint32_t now = lv_tick_get();
+    sample_binding_.Check(now, inter_mcu_backend_link_alive());
+    if (sample_binding_.NeedSend(now)) {
+        const bool sent = inter_mcu_send_sample_select(sample_binding_.Sample(),
+                                                       sample_binding_.Track()) == ESP_OK;
+        sample_binding_.Sent(sent, now);
+    }
+    WaveX::Protocol::TrackStateMessage state;
+    if (inter_mcu_get_track_state(&state))
+        sample_binding_.Accept(state);
+    if (sample_binding_.NeedRead(now)) {
+        static uint32_t next_id = 0x424E0000;
+        if (++next_id == 0)
+            ++next_id;
+        const WaveX::Protocol::TrackStateRequest request{next_id, sample_binding_.Track()};
+        sample_binding_.Requested(next_id, inter_mcu_request_track_state(request) == ESP_OK, now);
+    }
+    if (sample_binding_.Status() == SampleBindingModel::State::Confirmed) {
+        char status[128];
+        snprintf(status,
+                 sizeof(status),
+                 "Sample %u loaded onto Track %u - the Keys play it",
+                 sample_binding_.Sample(),
+                 trackDisplayNumber(sample_binding_.Track()));
+        BusyOverlay::hide();
+        updateStatus(status);
+        inter_mcu_request_track_binding(sample_binding_.Track());
+        sample_binding_.Cancel();
+    } else if (sample_binding_.Status() == SampleBindingModel::State::Failed) {
+        BusyOverlay::notice("Sample loaded",
+                            "Track assignment was not confirmed. Check the Track before playing.");
+        updateStatus("Sample loaded; Track assignment not confirmed");
+        sample_binding_.Cancel();
+    }
+}
+
 void UISampleBrowser::sample_status_callback(
     uint16_t id, uint8_t state, uint32_t rate, uint8_t channels, uint32_t frames, void* user_data) {
     auto* browser = static_cast<UISampleBrowser*>(user_data);
@@ -1414,6 +1456,7 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
     } else if (state == WaveX::Protocol::SAMPLE_STATUS_LOAD_COMPLETE) {
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
         BusyOverlay::requestHide();
+        BusyOverlay::service();  // Retire load progress before showing the binding phase.
         wavex_ui_mark_content_changed();
         // Refresh display-only allocator diagnostics after a successful load.
         inter_mcu_request_sample_mem_status();
@@ -1428,24 +1471,21 @@ void UISampleBrowser::applySampleStatus(uint16_t sample_id,
             browser->bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
             setCurrentSampleId(sample_id);
         }
-        // The second half of Load (§6.1 A): now that the id is resident, bind
-        // it to the Track the user loaded onto. The Daisy answers with the
-        // Track's new binding, which every page reads from the shared cache.
-        const bool bound = ours;
-        if (bound) {
+        if (ours) {
             browser->bind_on_load_track_.store(-1, std::memory_order_release);
-            inter_mcu_send_sample_select(sample_id, static_cast<uint8_t>(bind_track));
-            inter_mcu_request_track_binding(static_cast<uint8_t>(bind_track));
+            browser->sample_binding_.Begin(
+                sample_id, static_cast<uint8_t>(bind_track), lv_tick_get());
+            BusyOverlay::show("Assigning sample", "Waiting for Track confirmation", 5000);
         }
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
             char status_text[256];
             const char* path = browser->persistent_state_.last_load_sample_path.c_str();
             const char* name = path ? strrchr(path, '/') : nullptr;
             name = name ? name + 1 : (path ? path : "");
-            if (bound) {
+            if (ours) {
                 snprintf(status_text,
                          sizeof(status_text),
-                         "%.64s loaded onto Track %u - the Keys play it",
+                         "%.64s loaded; assigning Track %u...",
                          name,
                          trackDisplayNumber(static_cast<uint8_t>(bind_track)));
             } else {
@@ -1671,7 +1711,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
-    if (persistent_state_.loading()) {
+    if (persistent_state_.loading() || sample_binding_.Active()) {
         updateStatus("A sample load is already pending");
         return false;
     }
