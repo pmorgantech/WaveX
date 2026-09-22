@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Made ESP32 UART diagnostic counters atomic, preserving concurrent RX/TX
+  overflow increments and allowing race-free reads from diagnostic tasks.
+
 - Removed the uncalled UART stop API and its incomplete teardown/reinitialization
   path. The frontend link retains application lifetime; UI suspension does not
   destroy the driver or its synchronization objects.

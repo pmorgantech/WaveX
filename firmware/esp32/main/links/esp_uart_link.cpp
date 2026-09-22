@@ -48,14 +48,17 @@ struct uart_msg_entry_t {
     bool pending = false;
 };
 
+// Individual counters are atomic; a diagnostic read is not a synchronized
+// snapshot of all counters. RX and TX can both increment queue_overflows.
 struct uart_stats_t {
-    uint32_t packets_sent = 0;
-    uint32_t packets_received = 0;
-    uint32_t crc_errors = 0;
-    uint32_t frame_sync_errors = 0;
-    uint32_t queue_overflows = 0;
-    uint32_t seq_drops = 0;    // duplicate/out-of-order frames dropped by SequenceTracker
-    uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
+    std::atomic<uint32_t> packets_sent = 0;
+    std::atomic<uint32_t> packets_received = 0;
+    std::atomic<uint32_t> crc_errors = 0;
+    std::atomic<uint32_t> frame_sync_errors = 0;
+    std::atomic<uint32_t> queue_overflows = 0;
+    std::atomic<uint32_t> seq_drops =
+        0;  // duplicate/out-of-order frames dropped by SequenceTracker
+    std::atomic<uint32_t> seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
 };
 
 std::atomic<TaskHandle_t> s_uart_task_handle{nullptr};
@@ -136,7 +139,7 @@ void append_rx_data(const uint8_t* data, size_t len) {
     WaveX::UartProtocol::ScanStats append_stats{};
     size_t dropped = s_scanner.Append(data, len, append_stats);
     if (dropped > 0) {
-        s_stats.queue_overflows++;
+        s_stats.queue_overflows.fetch_add(1, std::memory_order_relaxed);
         UART_LOGW(TAG, "RX buffer overflow - dropped %u oldest bytes", (unsigned)dropped);
     }
 }
@@ -152,11 +155,11 @@ void process_rx_frames() {
             size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
 
             if (!ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
-                s_stats.crc_errors++;
+                s_stats.crc_errors.fetch_add(1, std::memory_order_relaxed);
                 UART_LOGE(TAG, "Failed to parse UART packet (len=%d)", static_cast<int>(frame_len));
                 return;
             }
-            s_stats.packets_received++;
+            s_stats.packets_received.fetch_add(1, std::memory_order_relaxed);
             UART_LOGI(TAG,
                       "RX %s (0x%02X) len=%d seq=%u flags=0x%02X",
                       WaveX::Protocol::MessageTypeName(msg_type),
@@ -172,7 +175,7 @@ void process_rx_frames() {
             const auto seq_result = s_rx_seq.Evaluate(seq);
             if (seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate ||
                 seq_result == WaveX::Protocol::SequenceTracker::Result::OutOfOrder) {
-                s_stats.seq_drops++;
+                s_stats.seq_drops.fetch_add(1, std::memory_order_relaxed);
                 UART_LOGW(TAG,
                           "RX seq=%u dropped (%s), expected=%u",
                           seq,
@@ -183,7 +186,7 @@ void process_rx_frames() {
                 return;
             }
             if (seq_result == WaveX::Protocol::SequenceTracker::Result::ResyncAccept) {
-                s_stats.seq_resyncs++;
+                s_stats.seq_resyncs.fetch_add(1, std::memory_order_relaxed);
                 UART_LOGW(TAG, "peer reboot detected - seq resynced to %u", seq);
             }
 
@@ -192,8 +195,8 @@ void process_rx_frames() {
         },
         scan);
 
-    s_stats.crc_errors += scan.crc_errors;
-    s_stats.frame_sync_errors += scan.sync_errors;
+    s_stats.crc_errors.fetch_add(scan.crc_errors, std::memory_order_relaxed);
+    s_stats.frame_sync_errors.fetch_add(scan.sync_errors, std::memory_order_relaxed);
 }
 
 bool dequeue_tx_entry(uart_msg_entry_t& out_entry) {
@@ -287,7 +290,7 @@ void uart_task(void* /*param*/) {
                         xQueueReset(s_uart_event_queue);
                         s_tx_wake_pending.store(false);
                         s_scanner.Clear();
-                        s_stats.queue_overflows++;
+                        s_stats.queue_overflows.fetch_add(1, std::memory_order_relaxed);
                         break;
                     case UART_BUFFER_FULL:
                         // IDF retains the last FIFO chunk when its ring fills.
@@ -338,17 +341,20 @@ void uart_task(void* /*param*/) {
             health_at = xTaskGetTickCount();
             // These fields are owned by this task. TX producer overflow counts
             // are intentionally excluded because they have another writer.
-            ESP_LOGI(TAG,
-                     "UART HEALTH sent=%lu received=%lu crc=%lu sync=%lu seqdrop=%lu "
-                     "rxoverflow=%lu framing=%lu parity=%lu",
-                     static_cast<unsigned long>(s_stats.packets_sent),
-                     static_cast<unsigned long>(s_stats.packets_received),
-                     static_cast<unsigned long>(s_stats.crc_errors),
-                     static_cast<unsigned long>(s_stats.frame_sync_errors),
-                     static_cast<unsigned long>(s_stats.seq_drops),
-                     static_cast<unsigned long>(rx_overflows),
-                     static_cast<unsigned long>(framing_errors),
-                     static_cast<unsigned long>(parity_errors));
+            ESP_LOGI(
+                TAG,
+                "UART HEALTH sent=%lu received=%lu crc=%lu sync=%lu seqdrop=%lu "
+                "rxoverflow=%lu framing=%lu parity=%lu",
+                static_cast<unsigned long>(s_stats.packets_sent.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(
+                    s_stats.packets_received.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(s_stats.crc_errors.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(
+                    s_stats.frame_sync_errors.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(s_stats.seq_drops.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(rx_overflows),
+                static_cast<unsigned long>(framing_errors),
+                static_cast<unsigned long>(parity_errors));
         }
 #endif
 
@@ -372,7 +378,7 @@ void uart_task(void* /*param*/) {
                           written,
                           static_cast<int>(entry.frame_len));
             } else {
-                s_stats.packets_sent++;
+                s_stats.packets_sent.fetch_add(1, std::memory_order_relaxed);
                 UART_LOGI(TAG, "TX: Packet sent successfully (seq=%u)", entry.seq);
             }
             // 15ms > a max frame's 10.29ms wire time at 2 Mbaud (the old
@@ -481,7 +487,15 @@ esp_err_t uart_link_init(void) {
     }
 
     s_uart_running = true;
-    s_stats = uart_stats_t{};
+    // Init precedes task creation and producer admission. Diagnostics use
+    // relaxed atomics: counters carry no ownership/publication relationship.
+    s_stats.packets_sent.store(0, std::memory_order_relaxed);
+    s_stats.packets_received.store(0, std::memory_order_relaxed);
+    s_stats.crc_errors.store(0, std::memory_order_relaxed);
+    s_stats.frame_sync_errors.store(0, std::memory_order_relaxed);
+    s_stats.queue_overflows.store(0, std::memory_order_relaxed);
+    s_stats.seq_drops.store(0, std::memory_order_relaxed);
+    s_stats.seq_resyncs.store(0, std::memory_order_relaxed);
     s_next_sequence = 1;
     s_tx_wake_pending.store(false);
     s_scanner.Clear();
@@ -552,7 +566,7 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
     }
 
     if (s_msg_count >= static_cast<int>(MSG_QUEUE_SIZE)) {
-        s_stats.queue_overflows++;
+        s_stats.queue_overflows.fetch_add(1, std::memory_order_relaxed);
         UART_LOGE(TAG, "UART TX queue full (size=%d)", MSG_QUEUE_SIZE);
         xSemaphoreGive(s_uart_mutex);
         return -1;
@@ -599,13 +613,13 @@ void uart_link_log_stats(void) {
     UART_LOGI(TAG,
               "UART stats: sent=%u received=%u crc_errors=%u sync_errors=%u overflow=%u "
               "seq_drops=%u resyncs=%u",
-              s_stats.packets_sent,
-              s_stats.packets_received,
-              s_stats.crc_errors,
-              s_stats.frame_sync_errors,
-              s_stats.queue_overflows,
-              s_stats.seq_drops,
-              s_stats.seq_resyncs);
+              s_stats.packets_sent.load(std::memory_order_relaxed),
+              s_stats.packets_received.load(std::memory_order_relaxed),
+              s_stats.crc_errors.load(std::memory_order_relaxed),
+              s_stats.frame_sync_errors.load(std::memory_order_relaxed),
+              s_stats.queue_overflows.load(std::memory_order_relaxed),
+              s_stats.seq_drops.load(std::memory_order_relaxed),
+              s_stats.seq_resyncs.load(std::memory_order_relaxed));
 }
 
 #endif  // !WAVEX_SPI_LINK_ENABLED

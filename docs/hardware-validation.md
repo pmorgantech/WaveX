@@ -2642,6 +2642,9 @@ fault/queue-pressure instrumentation. Record image identities and transport logs
   active without another load or duplicate mutation. Page exit and disconnect
   stop UI retries; reconnect cannot resubmit an admitted binding. Verify the
   actual Track state because an admitted mutation may already have applied.
+- [ ] Audit follow-up: read UART diagnostics while injecting RX overflow and
+  TX queue rejection on both cores. Verify increments are retained through
+  concurrent updates; individual counter reads need not form one snapshot.
 - [ ] Repeat under sequencer/streaming load; capture UI stack/memory margins,
   link counters and audio underruns. Preserve the independent capacity/soak gate.
 

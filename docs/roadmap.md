@@ -282,12 +282,6 @@ audit follow-ups independent:
   typed load reply before treating cancellation/restart across navigation as
   fully recovered; directory-page and Track-binding correlation do not cover
   this legacy message.
-- [ ] **UART link overflow counter has two writers and one lock.**
-  `queue_overflows` is incremented from the link task's RX path without the TX
-  mutex and from the send path while holding it, so the read-modify-write
-  races across cores and the counter can under-report exactly when it matters.
-  Diagnostics-only, but it is the pattern §14 asks us not to ship. Split the RX
-  and TX overflow counters, or make them atomic.
 - [ ] **The link's router fallback fails silently.** When no router has been
   injected, the getter returns a function-local throwaway instance, so every
   inbound message would be parsed, counted and discarded with no diagnostic.
