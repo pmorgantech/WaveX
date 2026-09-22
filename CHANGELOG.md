@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- UART initialization now rejects missing PacketRouter injection with an error
+  instead of routing to a silent dummy. The router is fixed after initialization;
+  an impossible missing-router dispatch fails explicitly.
+
 - Made ESP32 UART diagnostic counters atomic, preserving concurrent RX/TX
   overflow increments and allowing race-free reads from diagnostic tasks.
 

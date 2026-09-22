@@ -17,6 +17,7 @@
 #include "../../shared/uart_protocol/frame_scanner.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -127,10 +128,11 @@ static WaveX::Protocol::SequenceTracker s_rx_seq;
 static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
 
 static WaveX::Comm::PacketRouter& GetRouter() {
+    // Initialization requires an injected router and freezes its lifetime.
+    // A violated invariant must not turn incoming traffic into a silent sink.
     if (!s_packet_router) {
-        // Fallback for tests or uninitialized state - this should not happen in production
-        static WaveX::Comm::PacketRouter dummy_router;
-        return dummy_router;
+        ESP_LOGE(TAG, "UART router missing after initialization");
+        std::abort();
     }
     return *s_packet_router;
 }
@@ -400,6 +402,11 @@ void uart_task(void* /*param*/) {
 }  // namespace
 
 void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
+    if (s_uart_mutex) {
+        if (packet_router != s_packet_router)
+            ESP_LOGE(TAG, "Cannot replace UART router after initialization");
+        return;
+    }
     s_packet_router = packet_router;
     if (s_packet_router) {
         s_packet_router->set_stats_callback(
@@ -408,6 +415,10 @@ void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
 }
 
 esp_err_t uart_link_init(void) {
+    if (!s_packet_router) {
+        ESP_LOGE(TAG, "Inject PacketRouter before initializing the UART link");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_uart_mutex) {
         return ESP_OK;
     }

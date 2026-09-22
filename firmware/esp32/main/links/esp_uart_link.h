@@ -39,7 +39,8 @@ void uart_link_log_stats(void);
 #ifdef __cplusplus
 }
 
-// Set PacketRouter reference for dependency injection (C++ function)
+// Inject before init; the owner must outlive the application-lifetime link.
+// Router replacement after initialization is rejected.
 void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router);
 #endif
 

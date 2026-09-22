@@ -282,11 +282,6 @@ audit follow-ups independent:
   typed load reply before treating cancellation/restart across navigation as
   fully recovered; directory-page and Track-binding correlation do not cover
   this legacy message.
-- [ ] **The link's router fallback fails silently.** When no router has been
-  injected, the getter returns a function-local throwaway instance, so every
-  inbound message would be parsed, counted and discarded with no diagnostic.
-  Make the fallback say so once, or assert — an unreachable state should look
-  unreachable.
 
 The `ui_get_comm_interface()` global that two pages still reach through is
 already covered by the `ICommInterface` item under *UI and frontend
