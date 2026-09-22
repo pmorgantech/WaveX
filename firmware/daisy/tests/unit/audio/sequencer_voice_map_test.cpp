@@ -171,6 +171,7 @@ TEST_F(SequencerVoiceMapTest, SparseTrackEditsAndRevocationsSurviveMailboxReuse)
     for (uint8_t edit = 0; edit < 64; ++edit) {
         const uint8_t track = edit % 16;
         instrument.filter.cutoff_hz = expected[track] = 2000.0f + edit;
+        instrument.arp = {static_cast<uint8_t>((edit / 16) % 2), 5, 3, 7, 42, 1, 2, 91};
         map.PrepareTrack(track, instrument, resolver);
         mailbox.ProducerValue().CopyLiveFrom(map);
         mailbox.PublishPrepared();
@@ -179,6 +180,8 @@ TEST_F(SequencerVoiceMapTest, SparseTrackEditsAndRevocationsSurviveMailboxReuse)
             continue;
         ASSERT_TRUE(mailbox.AcquireLatest());
         for (uint8_t check = 0; check < 16; ++check) {
+            EXPECT_TRUE(WaveX::Arp::Equal(mailbox.ConsumerValue().tracks[check].arp,
+                                          map.tracks[check].arp));
             ASSERT_GT(mailbox.ConsumerValue().Resolve(check, 0, 75, out), 0);
             EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, expected[check]);
         }

@@ -2476,6 +2476,11 @@ saving and soak remain open. Final image evidence follows below.
 Setup: matched images, a gated keyboard Instrument, DIN/USB MIDI chord input and a
 DAW clock source; enable the Instrument Arp panel.
 
+- [ ] After the 2026-09-22 publication fix, enable Arp from its default-off
+  state, change every setting and disable it again while holding a chord.
+  Verify audible generated timing follows the published settings, including
+  rapid edits; capture before/after callback DWT peaks on the matched workload.
+
 - [ ] Hear every mode, octave range, division, gate, velocity and latch behavior;
   repeated pitches and stale releases must preserve the current chord/group.
 - [ ] Verify Apply/Revert and Instrument/Bank/Project save/reload, rebind, disable,

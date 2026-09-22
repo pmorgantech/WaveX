@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Publish complete Instrument arpeggiator settings to the audio callback,
+  including updates and disable across reused snapshot slots.
+
 - Prevent sequencer Locks/Grid mode changes from overflowing LVGL's invalidation
   list into a full-screen refresh. Real-LVGL host regression reduces submitted
   pixels from 1,024,000 to about 270,000; device timing remains unverified.

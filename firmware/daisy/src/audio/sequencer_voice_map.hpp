@@ -247,6 +247,7 @@ struct SequencerVoiceMap {
                 continue;
             dest.revision = src.revision;
             dest.policy = src.policy;
+            dest.arp = src.arp;
             dest.keyboard = src.keyboard;
             CopyOscillator(dest, src);
             CopyOscillator(dest.secondary, src.secondary);
