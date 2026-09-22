@@ -172,10 +172,7 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   uint32_t* total_files,
                                                   uint8_t* current_page_entries,
                                                   const char* current_path);
-static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
-                                const char* path,
-                                uint8_t start_index,
-                                WaveX::Protocol::BrowseFilter filter);
+static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_index);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void storage_status_callback(bool mounted, void* user_data);
@@ -245,6 +242,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     browser->visible_count =
         8;  // Approximately 8 entries visible on screen (adjust based on screen size)
 
+    browser->request_id = 0;
     browser->total_files = 0;
     browser->current_page = 0;
     browser->entries_per_page =
@@ -693,6 +691,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
 
     ESP_LOGI(TAG, "refresh_file_list called for path: %s", browser->current_path);
 
+    browser->request_id = 0;
     browser->total_files = 0;
     browser->current_page = 0;
     browser_set_pagination_in_progress(browser);
@@ -703,7 +702,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
-    if (!send_browse_request(browser->config.comm_interface, browser->current_path, 0, browser->config.filter)) {
+    if (!send_browse_request(browser, 0)) {
         ESP_LOGE(TAG, "Failed to send browse request");
         browser_clear_pagination_in_progress(browser);
         browser->entry_count = 0;
@@ -858,25 +857,23 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
     return true;
 }
 
-static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
-                                const char* path,
-                                uint8_t start_index,
-                                WaveX::Protocol::BrowseFilter filter) {
-    if (!comm_interface) {
-        ESP_LOGE(TAG, "No comm interface available for browse request");
+static bool send_browse_request(wavex_file_browser_t* browser, uint8_t start_index) {
+    static uint32_t next_request_id = 0;  // UI-domain, survives browser recreation.
+    if (!browser->config.comm_interface)
+        return false;
+    BrowsePageRequest request;
+    if (++next_request_id == 0)
+        ++next_request_id;
+    request.request_id = next_request_id;
+    request.start_index = start_index;
+    request.filter = browser->config.filter;
+    static_assert(sizeof(request.path) == sizeof(browser->current_path));
+    memcpy(request.path, browser->current_path, sizeof(request.path));
+    browser->request_id = request.request_id;
+    if (browser->config.comm_interface->sendBrowsePageRequest(request) != ESP_OK) {
+        browser->request_id = 0;
         return false;
     }
-
-    esp_err_t result = comm_interface->sendBrowseRequest(path, start_index, filter);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send browse request: %d", result);
-        return false;
-    }
-    ESP_LOGD(
-        TAG,
-        "=== INTERFACE MESSAGE: Successfully sent browse request for path: %s, start_index: %d ===",
-        path,
-        start_index);
     return true;
 }
 
@@ -897,6 +894,18 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
         ESP_LOGE(TAG, "Invalid browse response callback parameters");
         return;
     }
+
+    if (!IsValidBrowsePageResponse(data, length))
+        return;
+    BrowsePageHeader page;
+    memcpy(&page, data, sizeof(page));
+    if (page.request_id != browser->request_id ||
+        page.start_index != browser->current_page * browser->entries_per_page ||
+        page.filter != browser->config.filter)
+        return;
+    browser->request_id = 0;  // duplicates cannot append a second copy
+    data += sizeof(page);
+    length -= sizeof(page);
 
     ESP_LOGD(TAG, "Received browse response: %d bytes", (int)length);
 
@@ -941,6 +950,7 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
     if (total_files == 0 && current_page_entries == 0) {
         free(temp_entries);
         ESP_LOGD(TAG, "Empty browse response - clearing file list");
+        browser->request_id = 0;
         browser->total_files = 0;
         browser->loaded_entries = 0;
         browser->entry_count = 0;
@@ -1054,7 +1064,7 @@ static void apply_browse_response(const uint8_t* data, size_t length, void* user
                  browser->current_page,
                  browser->entries_per_page,
                  next_start_index);
-        if (!send_browse_request(browser->config.comm_interface, browser->current_path, next_start_index, browser->config.filter)) {
+        if (!send_browse_request(browser, next_start_index)) {
             ESP_LOGE(TAG, "Failed to request next page");
             browser_clear_pagination_in_progress(browser);
         }
@@ -1095,6 +1105,7 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         if (lost) {
             browser->inbox->replies.Clear();
             browser->inbox->storage.Clear();
+            browser->request_id = 0;
             browser->entry_count = browser->loaded_entries = 0;
             browser_clear_pagination_in_progress(browser);
             browser_set_ui_update(browser);
@@ -1268,6 +1279,8 @@ static void apply_storage_status(bool mounted, void* user_data) {
     browser->storage_mounted = mounted;
     if (!mounted) {
         browser->inbox->replies.Clear();
+        browser->request_id = 0;
+        browser->selected_index = browser->first_visible_index = 0;
         browser->entry_count = browser->loaded_entries = 0;
         browser_set_ui_update(browser);
         browser_clear_pagination_in_progress(browser);

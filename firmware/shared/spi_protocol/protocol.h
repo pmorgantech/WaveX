@@ -214,6 +214,8 @@ enum MessageType : uint8_t {
     MSG_GLOBAL_LFO_OP = 0x90,
     MSG_GLOBAL_LFO_SYNC = 0x91,
     MSG_SEQ_LOCK_NOTICE = 0x92,
+    MSG_BROWSE_PAGE_REQ = 0x93,  // Correlated directory read, payload version 1
+    MSG_BROWSE_PAGE_RESP = 0x94,
     MSG_ERROR = 0xFF
 };
 
@@ -764,6 +766,42 @@ struct BrowseRespHeader {
 } __attribute__((packed));
 
 // Sample status (playback or load notifications). `state` values:
+// Additive versioned browsing. Legacy 0x30/0x31 remains available to bench
+// clients; UI browsing uses only this pair and validates every page identity.
+struct BrowsePageRequest {
+    uint32_t request_id = 0;
+    uint8_t version = 1, start_index = 0;
+    BrowseFilter filter = BrowseFilter::All;
+    char path[BROWSE_DIRECTORY_PATH_MAX] = {};
+} __attribute__((packed));
+struct BrowsePageHeader {
+    uint32_t request_id = 0;
+    uint8_t version = 1, start_index = 0;
+    BrowseFilter filter = BrowseFilter::All;
+} __attribute__((packed));
+static_assert(sizeof(BrowsePageRequest) == 7 + BROWSE_DIRECTORY_PATH_MAX, "browse request size");
+static_assert(sizeof(BrowsePageHeader) == 7, "browse correlation header size");
+inline bool IsValidBrowsePageRequest(const BrowsePageRequest& m) {
+    if (!m.request_id || m.version != 1 || !BrowseFilterValid(m.filter) || !m.path[0])
+        return false;
+    for (size_t i = 0; i < sizeof(m.path); ++i)
+        if (!m.path[i])
+            return true;
+    return false;
+}
+// Header is followed by the existing BrowseRespHeader and FileEntryWire array.
+inline bool IsValidBrowsePageResponse(const uint8_t* payload, size_t size) {
+    if (!payload || size < sizeof(BrowsePageHeader) + sizeof(BrowseRespHeader))
+        return false;
+    BrowsePageHeader page;
+    BrowseRespHeader listing;
+    memcpy(&page, payload, sizeof(page));
+    memcpy(&listing, payload + sizeof(page), sizeof(listing));
+    return page.request_id && page.version == 1 && BrowseFilterValid(page.filter) &&
+           listing.n <= 20 && listing.total_count <= BROWSE_DIRECTORY_ENTRY_LIMIT &&
+           size == sizeof(page) + sizeof(listing) + listing.n * sizeof(FileEntryWire);
+}
+
 enum SampleStatusState : uint8_t {
     SAMPLE_STATUS_STOPPED = 0,
     SAMPLE_STATUS_PLAYING = 1,
@@ -3467,6 +3505,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "HEARTBEAT";
         case MSG_ACK:
             return "ACK";
+        case MSG_BROWSE_PAGE_REQ:
+            return "BROWSE_PAGE_REQ";
+        case MSG_BROWSE_PAGE_RESP:
+            return "BROWSE_PAGE_RESP";
         case MSG_BROWSE_REQ:
             return "BROWSE_REQ";
         case MSG_BROWSE_RESP:

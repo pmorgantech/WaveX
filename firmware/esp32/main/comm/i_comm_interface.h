@@ -64,6 +64,8 @@ class ICommInterface {
         uint8_t start_index,
         WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All) = 0;
 
+    virtual esp_err_t sendBrowsePageRequest(const Protocol::BrowsePageRequest&) { return ESP_FAIL; }
+
     // Sample control operations
     virtual void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) = 0;
     virtual esp_err_t sendSamplePlayRequest(uint32_t file_index) = 0;

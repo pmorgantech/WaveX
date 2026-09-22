@@ -12,7 +12,8 @@ namespace Comm {
 void ProcessBrowseRequest(const char* path,
                           size_t start_index,
                           uint8_t max_entries = 20,
-                          Protocol::BrowseFilter filter = Protocol::BrowseFilter::All);
+                          Protocol::BrowseFilter filter = Protocol::BrowseFilter::All,
+                          uint32_t request_id = 0);
 void ProcessSamplePlayRequest(const char* file_path);
 // Retry the latest unsent listing after transport backpressure, main-loop only.
 void PumpBrowseResponse();

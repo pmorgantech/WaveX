@@ -341,6 +341,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_envelope_chunk(msg, payload, payload_len);
         } break;
 
+        case WaveX::Protocol::MSG_BROWSE_PAGE_RESP: {
+            if (WaveX::Protocol::IsValidBrowsePageResponse(payload, payload_len))
+                handle_browse_resp(payload, payload_len);
+            break;
+        }
         case WaveX::Protocol::MSG_BROWSE_RESP: {
             // Browse responses are handled differently - they don't have message type in payload
             int64_t response_arrival_time_us = esp_timer_get_time();

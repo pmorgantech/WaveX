@@ -272,8 +272,6 @@ one entry does not resolve the remaining cross-task browser ownership issue.
 
 The user authorized review findings 1–8 on 2026-09-22. Remaining implementation:
 
-- **F5 — Browse correlation:** see the single owning transport item below;
-  delayed pages must never enter a new directory listing.
 - **F6 — Play controls:** read authoritative per-Track values before relative
   input becomes an absolute CC; reject stale readback after Track/link changes.
 - **F7 — Resident admission:** let the backend decide RAM admission, including
@@ -351,10 +349,9 @@ host tests or a short callback screen as the full Phase 2.5 gate.
   before moving preparation out of the callback. Investigate UART queue-full
   bursts and repeated polling; coalesce replaceable telemetry where justified.
   Rejected enqueue attempts are not automatically lost musical events.
-- **Browse request correlation:** the legacy directory reply has no request/path
-  identity. F5 requires a versioned correlated read before supporting safe cancellation
-  of overlapping directory changes and automatic retry after arbitrary lost or
-  delayed replies. Serializing bench requests is not proof of that behavior.
+- **Browse recovery:** verify correlated directory cancellation/delayed replies
+  on both boards in HV-034. Automatic timeout/retry after arbitrary wire loss
+  remains separate work; a missing page must not authorize stale selection.
 - **Backend upgrade planning:** retain the [RT1170 plan](rt1170-migration.md),
   including the proposed M4 link/storage service after an M7-only audio baseline.
   Resolve shared-memory/cache handoffs, SD-stall command latency and bus contention.

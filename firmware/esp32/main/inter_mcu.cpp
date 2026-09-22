@@ -2156,3 +2156,13 @@ bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage* out) {
     taskEXIT_CRITICAL(&s_lock_notice_lock);
     return pending;
 }
+
+esp_err_t inter_mcu_send_browse_page_req(const WaveX::Protocol::BrowsePageRequest& request) {
+    if (!s_initialized || s_suspended)
+        return ESP_ERR_INVALID_STATE;
+    if (!WaveX::Protocol::IsValidBrowsePageRequest(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_BROWSE_PAGE_REQ, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}

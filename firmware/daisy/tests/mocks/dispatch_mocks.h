@@ -80,6 +80,7 @@ struct DispatchRecord {
         size_t start_index;
         uint8_t max_entries;
         Protocol::BrowseFilter filter;
+        uint32_t request_id;
     };
     std::vector<BrowseCall> browse_requests;
     std::vector<std::string> play_requests;

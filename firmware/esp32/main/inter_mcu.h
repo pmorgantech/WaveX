@@ -457,3 +457,5 @@ bool inter_mcu_get_global_lfo(WaveX::Protocol::GlobalLfoSyncMessage*);
 
 void inter_mcu_store_lock_notice(const WaveX::Protocol::SeqLockNoticeMessage&);
 bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage*);
+
+esp_err_t inter_mcu_send_browse_page_req(const WaveX::Protocol::BrowsePageRequest& request);

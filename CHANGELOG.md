@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed frontend review F5 with additive versioned directory-page correlation
+  across both MCUs. Old directory/filter/page replies and duplicates cannot
+  populate the active browser. Legacy bench browsing remains supported.
+
 - Fixed frontend review F4: pending sample-load tags and geometry no longer
   replace the confirmed resident editor selection. Failed sends/loads and page
   exit preserve the previous sample; success adopts the backend-assigned ID.

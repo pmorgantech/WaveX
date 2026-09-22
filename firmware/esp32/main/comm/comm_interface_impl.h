@@ -34,6 +34,8 @@ class CommInterfaceImpl : public ICommInterface {
         uint8_t start_index,
         WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All) override;
 
+    esp_err_t sendBrowsePageRequest(const Protocol::BrowsePageRequest& request) override;
+
     // Sample control operations
     void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) override;
     esp_err_t sendSamplePlayRequest(uint32_t file_index) override;

@@ -367,6 +367,17 @@ std::vector<uint8_t> BuildBrowsePayload(uint32_t total_count,
 
 }  // namespace
 
+static std::vector<uint8_t> Correlate(std::vector<uint8_t> payload) {
+    const auto& capture = GetInterMcuCapture();
+    WaveX::Protocol::BrowsePageHeader page;
+    page.request_id = capture.browse_request_id;
+    page.start_index = capture.browse_req_start_index;
+    page.filter = capture.browse_req_filter;
+    payload.insert(payload.begin(), sizeof(page), 0);
+    memcpy(payload.data(), &page, sizeof(page));
+    return payload;
+}
+
 class FileBrowserResponseTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -398,7 +409,7 @@ class FileBrowserResponseTest : public ::testing::Test {
     // Delivers a browse response exactly the way the UART RX task does: via
     // the statistics manager's listener slot.
     void Respond(uint32_t total_count, const std::vector<FileEntryWire>& entries) {
-        std::vector<uint8_t> payload = BuildBrowsePayload(total_count, entries);
+        std::vector<uint8_t> payload = Correlate(BuildBrowsePayload(total_count, entries));
         stats_->invoke_browse_resp_callback(payload.data(), payload.size());
         wavex_file_browser_process_pending_updates(browser_);
     }
@@ -534,12 +545,13 @@ TEST_F(FileBrowserResponseTest, PaginationRequestsNextPageAndAccumulates) {
 
 // An empty listing is authoritative and can arrive UNSOLICITED (SD ejected):
 // it must clear the stale listing and reset the selection.
-TEST_F(FileBrowserResponseTest, UnsolicitedEmptyResponseClearsStaleListing) {
+TEST_F(FileBrowserResponseTest, StorageLossClearsStaleListing) {
     Respond(2, {FileEntryWire(0, 100, "a.wav"), FileEntryWire(0, 200, "b.wav")});
     ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 2u);
     wavex_file_browser_set_selection(browser_, 1);
 
-    Respond(0, {});
+    stats_->invoke_storage_status_callback(false);
+    wavex_file_browser_process_pending_updates(browser_);
 
     EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
     EXPECT_EQ(wavex_file_browser_get_selected_index(browser_), 0u);
@@ -556,7 +568,7 @@ TEST_F(FileBrowserResponseTest, MalformedPayloadsAreRejected) {
     uint8_t junk[3] = {0x01, 0x02, 0x03};
     stats_->invoke_browse_resp_callback(junk, sizeof(junk));
     wavex_file_browser_process_pending_updates(browser_);
-    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
 
     // Header claims more entries than the payload carries. Refresh first so
     // the browser is in a clean listing cycle.
@@ -566,9 +578,10 @@ TEST_F(FileBrowserResponseTest, MalformedPayloadsAreRejected) {
     std::vector<uint8_t> lying = BuildBrowsePayload(5, {FileEntryWire(0, 100, "a.wav")});
     BrowseRespHeader bad_header(5, 5);  // claims 5 entries, carries 1
     memcpy(lying.data(), &bad_header, sizeof(bad_header));
+    lying = Correlate(lying);
     stats_->invoke_browse_resp_callback(lying.data(), lying.size());
     wavex_file_browser_process_pending_updates(browser_);
-    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
 }
 
 // A name at the wire-format maximum (47 chars + NUL) must survive intact,
@@ -671,6 +684,7 @@ TEST_F(FileBrowserResponseTest, FullSizePageRetainsEveryEntry) {
 TEST_F(FileBrowserResponseTest, UnterminatedWireNameIsBoundedEvenInDebugLogging) {
     auto payload = BuildBrowsePayload(1, {FileEntryWire()});
     std::fill(payload.begin() + sizeof(BrowseRespHeader), payload.end(), 'n');
+    payload = Correlate(payload);
     stats_->invoke_browse_resp_callback(payload.data(), payload.size());
     wavex_file_browser_process_pending_updates(browser_);
     ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
@@ -706,7 +720,7 @@ TEST_F(FileBrowserResponseTest, CompleteDirectoryReachesFinalIndexWithoutWrappin
 }
 
 TEST_F(FileBrowserResponseTest, ReceiveDoesNotMutateUiStateUntilService) {
-    const auto payload = BuildBrowsePayload(1, {FileEntryWire(0, 100, "deferred.wav")});
+    const auto payload = Correlate(BuildBrowsePayload(1, {FileEntryWire(0, 100, "deferred.wav")}));
     stats_->invoke_browse_resp_callback(payload.data(), payload.size());
     EXPECT_EQ(browser_->entry_count, 0u);
     wavex_file_browser_process_pending_updates(browser_);
@@ -719,10 +733,29 @@ TEST_F(FileBrowserResponseTest, ReceiveDoesNotMutateUiStateUntilService) {
     EXPECT_EQ(browser_->entry_count, 0u);
 }
 TEST_F(FileBrowserResponseTest, ReplyOverflowClearsListingInsteadOfPublishingPartialState) {
-    const auto payload = BuildBrowsePayload(1, {FileEntryWire(0, 100, "queued.wav")});
+    const auto payload = Correlate(BuildBrowsePayload(1, {FileEntryWire(0, 100, "queued.wav")}));
     for (int i = 0; i < 5; ++i)
         stats_->invoke_browse_resp_callback(payload.data(), payload.size());
     wavex_file_browser_process_pending_updates(browser_);
     EXPECT_EQ(browser_->entry_count, 0u);
     EXPECT_FALSE(wavex_file_browser_loading(browser_));
+}
+
+TEST_F(FileBrowserResponseTest, RejectsPreviousDirectoryPageAndDuplicateReply) {
+    Respond(25, std::vector<FileEntryWire>(20, FileEntryWire(0, 100, "old.wav")));
+    const auto old_tail =
+        Correlate(BuildBrowsePayload(25, {FileEntryWire(0, 100, "old-tail.wav")}));
+    ASSERT_TRUE(wavex_file_browser_navigate_to(browser_, "/NEW"));
+    stats_->invoke_browse_resp_callback(old_tail.data(), old_tail.size());
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(browser_->entry_count, 0u);
+    EXPECT_TRUE(wavex_file_browser_loading(browser_));
+    const auto fresh = Correlate(BuildBrowsePayload(1, {FileEntryWire(0, 100, "new.wav")}));
+    stats_->invoke_browse_resp_callback(fresh.data(), fresh.size());
+    wavex_file_browser_process_pending_updates(browser_);
+    ASSERT_EQ(browser_->entry_count, 1u);
+    EXPECT_STREQ(browser_->entries[0].path, "/NEW/new.wav");
+    stats_->invoke_browse_resp_callback(fresh.data(), fresh.size());
+    wavex_file_browser_process_pending_updates(browser_);
+    EXPECT_EQ(browser_->entry_count, 1u);
 }

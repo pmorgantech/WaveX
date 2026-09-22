@@ -191,6 +191,7 @@ struct InterMcuCapture {
 
     // --- outbound: CommInterfaceImpl -> inter_mcu_send_* ---
     esp_err_t send_result = ESP_OK;  // returned by every inter_mcu_send_* mock
+    uint32_t browse_request_id = 0;
     int browse_req_calls = 0;
     char browse_req_path[96] = {0};
     WaveX::Protocol::BrowseFilter browse_req_filter = WaveX::Protocol::BrowseFilter::All;

@@ -1139,3 +1139,20 @@ TEST_F(MessageDispatchTest, RecordingRejectsTruncatedAndInvalidRequests) {
     Dispatch(MSG_REC_OP, r);
     ASSERT_EQ(GetDispatchRecord().record_ops.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, CorrelatedBrowseRetainsRequestIdentityAndRejectsUnknownVersion) {
+    BrowsePageRequest request;
+    request.request_id = 345;
+    request.start_index = 20;
+    request.filter = BrowseFilter::Samples;
+    std::strcpy(request.path, "/sounds");
+    Dispatch(MSG_BROWSE_PAGE_REQ, request);
+    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
+    const auto& call = GetDispatchRecord().browse_requests.front();
+    EXPECT_EQ(call.request_id, 345u);
+    EXPECT_EQ(call.start_index, 20u);
+    EXPECT_EQ(call.path, "/sounds");
+    request.version = 2;
+    Dispatch(MSG_BROWSE_PAGE_REQ, request);
+    EXPECT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
+}

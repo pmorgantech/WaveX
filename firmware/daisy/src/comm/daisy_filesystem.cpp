@@ -58,6 +58,8 @@ static struct {
     WaveX::Wxi::TagScan scan;
 } s_tag_filter;
 static WaveX::Comm::BrowseResponseOutbox s_browse_response;
+static uint32_t s_browse_request_id = 0;
+static uint8_t s_browse_response_type = WaveX::Protocol::MSG_BROWSE_RESP;
 // Keep FIL off the stack and aligned; place in default BSS (cache managed by driver).
 alignas(32) static FIL s_metadata_file;
 // Metadata read buffer: 4KB, aligned, in normal BSS (non-DTCM) so cache maintenance works.
@@ -278,7 +280,8 @@ void ReplyBrowsePage(size_t start_index, uint8_t max_entries);
 void ProcessBrowseRequest(const char* path,
                           size_t start_index,
                           uint8_t max_entries,
-                          Protocol::BrowseFilter filter) {
+                          Protocol::BrowseFilter filter,
+                          uint32_t request_id) {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
@@ -288,6 +291,7 @@ void ProcessBrowseRequest(const char* path,
                (uint32_t)start_index,
                max_entries);
 
+    s_browse_request_id = request_id;
     if (start_index && s_directory_state_valid && s_directory_filter == filter &&
         std::strcmp(path, s_current_directory) == 0) {
         ReplyBrowsePage(start_index, max_entries);
@@ -325,7 +329,7 @@ void ProcessBrowseRequest(const char* path,
 
 void ReplyBrowsePage(size_t start_index, uint8_t max_entries) {
     static constexpr size_t kMaxBrowseEntries =
-        (BrowseResponseOutbox::kCapacity - 5) / sizeof(FileEntryWire);
+        (BrowseResponseOutbox::kCapacity - sizeof(BrowsePageHeader) - 5) / sizeof(FileEntryWire);
     const size_t available =
         start_index < s_current_file_count ? s_current_file_count - start_index : 0;
     const size_t entries_written =
@@ -353,10 +357,20 @@ void ReplyBrowsePage(size_t start_index, uint8_t max_entries) {
 
     // Create browse response payload: total_count (4 bytes) + n_entries (1 byte) + entries
     size_t payload_size = 0;
+    s_browse_response_type = MSG_BROWSE_RESP;
+    if (s_browse_request_id) {
+        BrowsePageHeader page;
+        page.request_id = s_browse_request_id;
+        page.start_index = static_cast<uint8_t>(start_index);
+        page.filter = s_directory_filter;
+        memcpy(browse_payload, &page, sizeof(page));
+        payload_size = sizeof(page);
+        s_browse_response_type = MSG_BROWSE_PAGE_RESP;
+    }
 
     // Copy total_count
     uint32_t total_count_le = total_count;
-    memcpy(browse_payload, &total_count_le, sizeof(uint32_t));
+    memcpy(browse_payload + payload_size, &total_count_le, sizeof(uint32_t));
     payload_size += sizeof(uint32_t);
 
     // Copy n_entries count. In range: both branches bound entries_written by
@@ -443,7 +457,7 @@ void PumpBrowseResponse() {
     // the queue drains. Main calls this before background status producers.
     if (LinkTxIdle()) {
         s_browse_response.Pump([](const uint8_t* payload, uint16_t size) {
-            return LinkSend(MSG_BROWSE_RESP, payload, size);
+            return LinkSend(s_browse_response_type, payload, size);
         });
     }
 }
@@ -471,6 +485,8 @@ void NotifyStorageLost() {
 
     // An empty browse response: total_count 0, n 0. Same shape the browser
     // already parses, so it clears the list through its normal path.
+    s_browse_request_id = 0;
+    s_browse_response_type = MSG_BROWSE_RESP;
     auto* empty_browse = s_browse_response.Begin();
     constexpr size_t empty_size = sizeof(uint32_t) + sizeof(uint8_t);
     memset(empty_browse, 0, empty_size);

@@ -328,6 +328,16 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_HEARTBEAT:
             HandleHeartbeatMessage(payload, payload_size);
             break;
+        case MSG_BROWSE_PAGE_REQ: {
+            BrowsePageRequest request;
+            if (payload_size != sizeof(request))
+                break;
+            memcpy(&request, payload, sizeof(request));
+            if (IsValidBrowsePageRequest(request))
+                WaveX::Comm::ProcessBrowseRequest(
+                    request.path, request.start_index, 20, request.filter, request.request_id);
+            break;
+        }
         case MSG_BROWSE_REQ:
             HandleBrowseRequestMessage(payload, payload_size);
             break;

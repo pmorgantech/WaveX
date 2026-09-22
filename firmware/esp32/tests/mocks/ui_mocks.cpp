@@ -239,3 +239,8 @@ esp_err_t inter_mcu_send_browse_req(const char* path,
     cap.browse_req_filter = filter;
     return cap.send_result;
 }
+
+esp_err_t inter_mcu_send_browse_page_req(const WaveX::Protocol::BrowsePageRequest& request) {
+    WaveX::Test::GetInterMcuCapture().browse_request_id = request.request_id;
+    return inter_mcu_send_browse_req(request.path, request.start_index, request.filter);
+}

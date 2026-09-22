@@ -770,3 +770,18 @@ Diagnostic MIDI note/CC/clock fields now report received channel-addressed
 messages per subscription interval. UI Track notes and generated notes are
 excluded. Subscription establishes fresh counter baselines; transport/tempo
 fields come from the authoritative callback playhead snapshot.
+
+## Correlated directory pages
+
+The frontend browser uses additive `MSG_BROWSE_PAGE_REQ` / `MSG_BROWSE_PAGE_RESP`
+(`BrowsePageRequest` / `BrowsePageHeader`, payload version 1 in `protocol.h`).
+The response prefix echoes a nonzero request ID, payload version, start offset
+and filter, followed by the existing listing header and entries. One page is
+outstanding; every navigation/page request gets a fresh UI-session ID. The UI
+rejects mismatched/duplicate replies before parsing names against its path.
+The Daisy retains the complete correlated response through TX backpressure.
+Legacy browse messages remain available for bench clients; they cannot complete
+an active correlated UI read. Storage-loss notifications invalidate the UI read.
+Malformed replies are ignored. A manual refresh issues a new read; automatic
+wire-loss timeout/retry remains a roadmap follow-up. Directory capacity and
+path limits remain defined in `protocol.h`.

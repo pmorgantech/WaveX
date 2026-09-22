@@ -70,6 +70,7 @@ typedef struct {
     void* user_data;
 
     // Pagination state
+    uint32_t request_id;  // one outstanding page; changes on every new request
     uint32_t total_files;
     uint32_t current_page;
     uint32_t entries_per_page;  // typically 4

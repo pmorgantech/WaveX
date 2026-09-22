@@ -49,9 +49,10 @@ void DiagSubscribe(bool enable, uint8_t interval_hz) {
 void ProcessBrowseRequest(const char* path,
                           size_t start_index,
                           uint8_t max_entries,
-                          Protocol::BrowseFilter filter) {
+                          Protocol::BrowseFilter filter,
+                          uint32_t request_id) {
     WaveX::Test::GetDispatchRecord().browse_requests.push_back(
-        {path ? std::string(path) : std::string(), start_index, max_entries, filter});
+        {path ? std::string(path) : std::string(), start_index, max_entries, filter, request_id});
 }
 
 void ProcessSamplePlayRequest(const char* file_path) {

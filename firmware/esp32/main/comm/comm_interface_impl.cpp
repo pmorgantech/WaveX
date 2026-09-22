@@ -32,6 +32,10 @@ esp_err_t CommInterfaceImpl::sendBrowseRequest(const char* path,
     return inter_mcu_send_browse_req(path, start_index, filter);
 }
 
+esp_err_t CommInterfaceImpl::sendBrowsePageRequest(const Protocol::BrowsePageRequest& request) {
+    return inter_mcu_send_browse_page_req(request);
+}
+
 // Sample control operations
 void CommInterfaceImpl::setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) {
     statistics_.set_sample_status_callback(cb, user_data);
