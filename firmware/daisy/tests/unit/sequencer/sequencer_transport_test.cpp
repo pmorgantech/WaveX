@@ -53,6 +53,34 @@ TestTransport MakeTransport() {
 
 // ---- Pattern edits ----
 
+TEST(SequencerTransportTest, EditsPreserveFiredRetriggersAndRespectNewBoundaries) {
+    for (int edit = 0; edit < 4; ++edit) {
+        auto t = MakeTransport();
+        auto& step = t.pattern().tracks[0].steps[0];
+        step.on = true;
+        step.retrig_count = 2;
+        step.retrig_rate_ticks = 4;
+        t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, 0, 0, 12000, 0});
+        if (edit == 0)
+            t.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 1, 4, 65, 0, 0});
+        else if (edit == 1)
+            t.ApplyPatternOp({SEQ_OP_SET_STEP_MICRO, 0, 1, 0, 0, -18});
+        else if (edit == 2)
+            t.ApplyPatternOp({SEQ_OP_TRACK_MUTE, 0, 0, 0, 0, 0});
+        else
+            t.ApplyPatternOp({SEQ_OP_SET_MELODIC, 0, 0, 1, 0, 0});
+        const auto events = RunTicks(t, 60);
+        std::vector<uint64_t> retrigger_frames;
+        for (const auto& event: events)
+            if (event.track == 0 && event.is_retrig)
+                retrigger_frames.push_back(event.frame);
+        const std::vector<uint64_t> expected = edit == 0   ? std::vector<uint64_t>{1000, 2000}
+                                               : edit == 1 ? std::vector<uint64_t>{1000}
+                                                           : std::vector<uint64_t>{};
+        EXPECT_EQ(retrigger_frames, expected) << "edit " << edit;
+    }
+}
+
 TEST(SequencerTransportTest, PlaybackRowsIgnoreUncommittedEditorChanges) {
     auto t = MakeTransport();
     t.pattern().tracks[0].melodic = true;

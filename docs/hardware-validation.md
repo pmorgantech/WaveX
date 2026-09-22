@@ -426,6 +426,12 @@ the already recorded ten-minute captures do not satisfy the one-hour gate.
 
 ## HV-005 — Phase 2 timing and soak gate
 
+- [ ] **Retrigger edit regression (2026-09-22):** Loop a retriggered drum step
+  while editing another Track. Capture both repeats at their original offsets;
+  then mute the source row, switch it melodic, and move its next boundary
+  earlier. Verify cancellation/clipping, no late repeats after Pattern launch,
+  and matched before/after callback DWT peaks. This check is unrun.
+
 **Gate:** [Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
 **Setup:** profiled images with recorded identities, current benchmark fixture,
 logs and timing capture equipment. Use the existing

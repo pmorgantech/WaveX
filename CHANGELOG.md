@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Preserve already-scheduled drum retriggers across unrelated live Pattern
+  edits; mute/melodic changes cancel them and earlier boundaries clip them.
+
 - Retain session Track pan for future notes as well as held voices, combining
   it with Instrument/zone pan while preserving step locks and preview isolation.
 

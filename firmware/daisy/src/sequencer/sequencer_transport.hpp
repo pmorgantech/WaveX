@@ -910,7 +910,7 @@ class SequencerTransport {
     void CommitPendingPattern(bool force = true) {
         if (force || pending_pattern_dirty_) {
             active_pattern_ = *pending_pattern_;
-            scheduler_.SetPattern(&active_pattern_);
+            scheduler_.SetPattern(&active_pattern_, !force);
         } else if (lock_dirty_) {
             // Motion changes at most four locks in each touched step. Publish
             // those bounded records, not the entire 16x64 Pattern at every

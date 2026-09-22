@@ -99,11 +99,13 @@ class SequencerScheduler {
     // for as long as this scheduler points at it. Passing nullptr stops
     // scheduling (Process() becomes a no-op) without needing a separate
     // Stop() call.
-    void SetPattern(const Pattern* pattern) {
+    // In-place editor commits retain the already-fired step's retriggers.
+    // A Pattern replacement/launch keeps the default fresh scheduling state.
+    void SetPattern(const Pattern* pattern, bool preserve_retriggers = false) {
         pattern_ = pattern;
         if (playing_ && pattern_) {
             for (uint8_t t = 0; t < kMaxTracks; ++t) {
-                ClampAndRescheduleTrack(t);
+                ClampAndRescheduleTrack(t, preserve_retriggers);
             }
         }
     }
@@ -520,13 +522,18 @@ class SequencerScheduler {
     // best-effort. See sequencer.md §4 for the intended discipline
     // (swaps happen at step boundaries in practice); this is a defensive
     // fallback, not a precision guarantee across an in-flight swap.
-    void ClampAndRescheduleTrack(uint8_t track_index) {
+    void ClampAndRescheduleTrack(uint8_t track_index, bool preserve_retriggers) {
         TrackState& ts = track_state_[track_index];
         const uint8_t len = PatternLength();
         if (ts.step_index >= len)
             ts.step_index = 0;
         ts.next_trigger_tick = ComputeTriggerTick(track_index, ts.step_index, ts.loop_count);
-        ts.pending_retrigs = 0;
+        const auto& track = pattern_->tracks[track_index];
+        if (!preserve_retriggers || !track.enabled || track.melodic ||
+            ts.pending_retrig_step >= len)
+            ts.pending_retrigs = 0;
+        else
+            ts.retrig_clip_tick = std::min(ts.retrig_clip_tick, ts.next_trigger_tick);
     }
 
     static uint8_t CountLocks(const Step& step) {
