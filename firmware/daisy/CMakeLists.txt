@@ -65,6 +65,7 @@ set(WAVEX_COLD_SOURCES
     src/storage/bank_file_job.cpp
     src/storage/bank_session.cpp
     src/storage/sample_file_job.cpp
+    src/storage/sample_load_job.cpp
     src/storage/recording_save.cpp
     src/audio/recording_session.cpp
     src/storage/project_file_job.cpp
@@ -101,6 +102,7 @@ set(FIRMWARE_SOURCES
     src/storage/bank_file_job.cpp
     src/storage/bank_session.cpp
     src/storage/sample_file_job.cpp
+    src/storage/sample_load_job.cpp
     src/storage/recording_save.cpp
     src/audio/recording_session.cpp
     src/storage/project_file_job.cpp

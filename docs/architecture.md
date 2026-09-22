@@ -139,6 +139,14 @@ Key subsystems:
 
 - **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via the fixed-point linear interpolator in `linear_resampler.hpp`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
 - **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MiB contains a 512 KiB Sample Registry and 3.5 MiB offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
+  Resident WAV loads run as foreground `SampleLoadJob` phases, with at most
+  4 KiB of payload read per main-loop pass through aligned AXI SRAM scratch.
+  The file and allocation remain job-owned until the complete PCM, sidecar
+  and file close validate; only then does the Pool receive a playable identity.
+  Note/control/clock dispatch continues between passes. Conflicting storage
+  jobs and streamed audition are rejected while loading, and terminal status
+  survives UART backpressure. Individual card-operation latency still needs
+  physical validation; a chunk budget is not a bound on a failing SD card.
   Sequencing reserves one fixed allocation from that arena for its immutable
   prepared-zone handoff; it remains allocated across Sample Pool resets and
   is included in allocator usage. See features/sequencer.md for ownership.

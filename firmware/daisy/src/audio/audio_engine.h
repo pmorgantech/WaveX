@@ -53,6 +53,8 @@ void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m);
 void PumpEnvelopeJob();
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
+void PumpSampleLoad();
+bool SampleLoadBusy();
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 
 // SFZ v1 boot importer. Parses and loads one resident instrument into `slot`

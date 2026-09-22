@@ -1,6 +1,6 @@
 #pragma once
 
-// HAL-free resident-sample admission and geometry extraction. OnSampleLoad()
+// HAL-free resident-sample admission and geometry extraction. SampleLoadJob
 // owns FatFS/SDRAM operations; this helper owns the validation policy and is
 // host-tested so malformed files are rejected before eviction or allocation.
 

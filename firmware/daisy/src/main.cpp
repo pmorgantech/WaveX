@@ -1088,6 +1088,7 @@ int main(void) {
         WaveX::AudioEngine::PumpRecording();
         WaveX::AudioEngine::PumpProjectSession();
         WaveX::AudioEngine::PumpSampleFile();
+        WaveX::AudioEngine::PumpSampleLoad();
         WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
         WaveX::AudioEngine::PumpTrackBinding();

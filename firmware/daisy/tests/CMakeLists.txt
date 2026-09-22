@@ -302,6 +302,13 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    if(test_name STREQUAL "sample_load_job_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/sample_load_job.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/sample_file_job.cpp
+        )
+    endif()
+
     if(test_name STREQUAL "project_file_job_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_file_job.cpp

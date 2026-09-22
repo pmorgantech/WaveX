@@ -426,6 +426,17 @@ the already recorded ten-minute captures do not satisfy the one-hour gate.
 
 ## HV-005 — Phase 2 timing and soak gate
 
+- [ ] **Resident loading liveness (2026-09-22):** On matched images, loop a
+  Pattern and hold a gated keyboard note while loading a large admitted WAV.
+  Release/repress the note, move controls and send MIDI clock throughout the
+  load; verify bounded delivery, continued heartbeat and no RX overflow or
+  stuck notes. Attempt another load, recording, save and audition while busy:
+  they must leave the active load intact. Remove the card during payload I/O,
+  verify no partial Pool entry/allocation leak, then reinsert and explicitly
+  retry. Capture maximum foreground pass duration, UART overflow counts and
+  callback DWT peaks under the same workload before/after. Host job tests pass
+  separately; no device latency, SD recovery or capacity acceptance is implied.
+
 - [ ] **Probability regression (2026-09-22):** Capture repeated 25/50/75%
   steps over a long run and compare hit rates to their settings. Verify seeded
   restart repeatability and collect matched before/after DWT peaks for the

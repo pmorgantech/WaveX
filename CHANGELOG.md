@@ -623,6 +623,11 @@ versioning and release process.
 
 ### Fixed
 
+- Make resident sample loading cooperative so UART notes, releases, controls
+  and MIDI clock are serviced between bounded payload reads. Keep incomplete
+  PCM private, reject conflicting storage work, release failed allocations,
+  and retain completion/error replies when the UART queue is full.
+
 - Match streamed audition to resident sample gain across -24 through +12 dB:
   retain attenuation at the minimum, amplify positive settings with saturating
   CMSIS q15 scaling, and preserve bit-exact unity playback.

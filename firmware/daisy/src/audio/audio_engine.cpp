@@ -9,6 +9,7 @@
 #include "audio/sample_channels.hpp"
 #include "audio/sample_gain.hpp"
 #include "audio/sample_loop.hpp"
+#include "storage/sample_load_job.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
 #include <daisy.h>  // For CpuLoadMeter
@@ -677,84 +678,12 @@ static uint32_t s_loop_gap_remaining = 0;
 // ============================
 // Sample loading state
 // ============================
-// (Review C2: a SampleLoadState tracker for MSG_SAMPLE_DATA streaming sat
-// here; its `loading` flag was never set true anywhere, so the whole
-// push-sample-data-over-the-link receive path was unreachable. Removed -
-// samples load from the Daisy's own SD card via OnSampleLoad below.)
-//
-// FIL structure is large (~600 bytes with SDMMC sector buffer); keep it static in normal BSS
-// (matches the audition/playback path). Keep I/O buffers in normal BSS as well, but 32-byte aligned
-// so cache maintenance in the SD driver works correctly.
-static FIL s_sample_load_file;
-// Sample-load staging buffer. Read size is the dominant factor in load time:
-// FatFS and the SDMMC driver charge a largely FIXED cost per f_read (cluster
-// walk, bookkeeping, IDMA setup), so cutting the call count cuts most of the
-// overhead rather than a proportional slice. This was 1 KB while the streaming
-// path next door used 8 KB (SD_BUFFER_SIZE) - loading issued eight times the
-// calls to move the same bytes, for no reason anyone recorded.
-//
-// WHY 32 KB AND NOT MORE. The obvious ceiling would be main-loop blocking: a
-// long f_read starves the WAV ring, which has only ~42 ms of headroom. It does
-// not bind here, because OnSampleLoad calls CloseWav() before this loop -
-// nothing is streaming during a load, so there is no ring to starve. What
-// binds is the SD driver's own sector-count contract (below),
-// and after that AXI SRAM - this is a permanent static allocation for a
-// transient purpose. Beyond one cluster the read is a contiguous multi-block
-// transfer running at the card's streaming rate anyway, so a larger buffer has
-// little left to exploit even where the driver would allow it.
-//
-// HARD CEILING, learned the hard way: libDaisy's SD_read() (sd_diskio.c)
-// documents "count: Number of sectors to read (1..128)", and FatFS passes the
-// contiguous sector count straight through - ff.c clips it at the CLUSTER
-// boundary, not at 128. A 64 KB request on a 64 KB-cluster card therefore
-// becomes a single 128-sector disk_read, sitting exactly on the documented
-// limit, against a driver this firmware had only ever run at 16 sectors (the
-// 8 KB streaming path). That is what a first attempt at 64 KB did, and it
-// crashed on load.
-//
-// 32 KB keeps the sector count at or below 64 whatever the cluster size:
-// FatFS's clip means cc <= min(request, cluster), so bounding the request
-// bounds cc. That is half the documented ceiling and four times the size this
-// driver is proven at, which is the right side of a limit to sit on.
-//
-// The static_assert below is the point: this is enforced rather than
-// remembered, so raising the constant fails the build instead of the card.
-static constexpr UINT kSdSectorBytes = 512;
-static constexpr UINT kSdMaxSectorsPerRead = 128;  // sd_diskio.c SD_read() contract
-static constexpr UINT kSampleLoadChunkMax = 32768;
-static_assert(kSampleLoadChunkMax / kSdSectorBytes <= kSdMaxSectorsPerRead / 2,
-              "Sample-load reads must stay well inside SD_read()'s 1..128 sector contract; "
-              "FatFS clips only at the cluster boundary, so the request size is the bound.");
-alignas(32) static uint8_t s_sample_io[kSampleLoadChunkMax];
-
-// Picks the read size from the mounted filesystem's actual geometry rather than
-// a constant that guesses at it. FatFS is most efficient reading whole
-// clusters: a read that ends mid-cluster leaves the next one straddling a
-// boundary, which costs an extra FAT walk on every pass.
-//
-// Cluster size comes free from the open file (FIL::obj.fs->csize) - no
-// f_getfree(), which would scan the entire FAT to count free clusters and can
-// take seconds on a large card. Sector size is a compile-time 512 here
-// (_MAX_SS == _MIN_SS == 512), so FATFS::ssize does not even exist to read.
-//
-// Refinement not taken: the first read starts at the WAV's data offset, which
-// is not cluster-aligned (typically 44 B in), so every read straddles a
-// boundary by that much. Sizing the first read to reach the next boundary would
-// align all the rest. Worth doing only if a measurement says the boundary
-// crossings cost more than the extra branch - for a contiguous file FatFS
-// already issues one multi-sector transfer across it.
-static UINT pick_sample_load_chunk(const FIL& file) {
-    if (!file.obj.fs || file.obj.fs->csize == 0) {
-        return kSampleLoadChunkMax;
-    }
-    const UINT cluster_bytes = static_cast<UINT>(file.obj.fs->csize) * kSdSectorBytes;
-    if (cluster_bytes == 0 || cluster_bytes > kSampleLoadChunkMax) {
-        // One cluster is bigger than the buffer: read the whole buffer, which
-        // is still a whole number of sectors.
-        return kSampleLoadChunkMax;
-    }
-    return (kSampleLoadChunkMax / cluster_bytes) * cluster_bytes;
-}
+// Shared foreground scratch for resident loading and Instrument imports.
+// AXI SRAM is SDMMC-reachable; each borrower returns it before yielding.
+// The resident job limits payload reads to 4 KiB; imports retain their budget.
+alignas(32) static uint8_t s_sample_io[32768];
+static BssStatic<Storage::SampleLoadJob> s_sample_load;
+static uint32_t s_sample_load_started_ms = 0;
 
 // ============================
 // The Sample Pool (track-and-patch-model.md §4)
@@ -2822,7 +2751,7 @@ void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
 
 void OnSeqFileOp(const SeqFileOpMessage& request) {
     const bool accepted = WaveX::PatternStore::Request(
-        request, s_pattern_exchange_storage.Get(), s_recording.Get().Busy());
+        request, s_pattern_exchange_storage.Get(), s_recording.Get().Busy() || SampleLoadBusy());
     if (accepted && (request.op == SEQ_FILE_SAVE_COPY || request.op == SEQ_FILE_LOAD))
         CloseWav();  // file jobs own SD bandwidth; resident Track voices continue
 }
@@ -2834,10 +2763,10 @@ void OnSongOp(const SeqSongOpMessage& request) {
     if (!IsValidSeqSongOp(request))
         return;
     if (s_project_session.Get()) {
-        if (s_project_session.Get()->RequestSong(request,
-                                                 BankBusy() || SampleFileBusy() ||
-                                                     SfzLoader::Busy() || PatternStore::Busy() ||
-                                                     Storage::CardService::Busy()) &&
+        if (s_project_session.Get()->RequestSong(
+                request,
+                BankBusy() || SampleFileBusy() || SampleLoadBusy() || SfzLoader::Busy() ||
+                    PatternStore::Busy() || Storage::CardService::Busy()) &&
             request.op == SEQ_SONG_PLAY)
             PublishSequencerVoiceMap();
     } else {
@@ -2854,10 +2783,10 @@ void OnPatternSlotOp(const SeqSlotOpMessage& request) {
     if (!IsValidSeqSlotOp(request))
         return;
     if (s_project_session.Get()) {
-        s_project_session.Get()->RequestPattern(request,
-                                                BankBusy() || SampleFileBusy() ||
-                                                    SfzLoader::Busy() || PatternStore::Busy() ||
-                                                    Storage::CardService::Busy());
+        s_project_session.Get()->RequestPattern(
+            request,
+            BankBusy() || SampleFileBusy() || SampleLoadBusy() || SfzLoader::Busy() ||
+                PatternStore::Busy() || Storage::CardService::Busy());
     } else {
         SeqSlotStatusMessage status;
         status.request_id = request.request_id;
@@ -2882,8 +2811,8 @@ void OnProjectOp(const ProjectOpMessage& request) {
     }
     const bool accepted = s_project_session.Get()->Request(
         request,
-        s_recording.Get().Busy() || SampleFileBusy() || BankBusy() || SfzLoader::Busy() ||
-            PatternStore::Busy() || Storage::CardService::Busy());
+        s_recording.Get().Busy() || SampleFileBusy() || SampleLoadBusy() || BankBusy() ||
+            SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
     if (accepted) {
         CancelEnvelopeJob();
         CloseWav();
@@ -2907,7 +2836,7 @@ bool BankBusy() {
     return s_bank_session.Get() && s_bank_session.Get()->Busy();
 }
 static bool BankExternalBusy() {
-    return s_recording.Get().Busy() ||
+    return s_recording.Get().Busy() || SampleLoadBusy() ||
            (s_project_session.Get() && s_project_session.Get()->Busy()) || PatternStore::Busy() ||
            SampleFileBusy() || Storage::CardService::Busy() || (!BankBusy() && SfzLoader::Busy());
 }
@@ -3001,12 +2930,12 @@ void PumpProjectSession() {
         session->ReplySent();
 }
 bool StorageJobBusy() {
-    return s_recording.Get().Busy() || SampleFileBusy() || BankBusy() ||
+    return s_recording.Get().Busy() || SampleFileBusy() || SampleLoadBusy() || BankBusy() ||
            (s_project_session.Get() && s_project_session.Get()->Busy()) || SfzLoader::Busy() ||
            WaveX::PatternStore::Busy();
 }
 void OnRecordOp(const RecordOpMessage& request) {
-    const bool other_busy = SampleFileBusy() || BankBusy() ||
+    const bool other_busy = SampleFileBusy() || SampleLoadBusy() || BankBusy() ||
                             (s_project_session.Get() && s_project_session.Get()->Busy()) ||
                             SfzLoader::Busy() || WaveX::PatternStore::Busy() ||
                             Storage::CardService::Busy();
@@ -3448,6 +3377,8 @@ void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& req) {
 }
 
 void PumpEnvelopeJob() {
+    if (SampleLoadBusy())
+        return;
     if (!s_env_scan.Active()) {
         return;
     }
@@ -3492,7 +3423,7 @@ void PumpEnvelopeJob() {
 }
 
 bool LoadSfzInstrument(const char* path, uint8_t slot) {
-    if (!s_pool) {
+    if (!s_pool || SampleLoadBusy()) {
         return false;
     }
     return SfzLoader::Load(path, slot, *s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
@@ -3546,7 +3477,7 @@ void OnPadSoundOp(const InstPadSoundOpMessage& request) {
 }
 
 void OnInstrumentOp(const InstOpMessage& request) {
-    if (s_recording.Get().Busy()) {
+    if (s_recording.Get().Busy() || SampleLoadBusy()) {
         InstStatusMessage status;
         status.request_id = request.request_id;
         status.slot = request.slot;
@@ -3637,283 +3568,56 @@ static void ReportSampleLoadFailed(uint16_t sample_id, SampleLoadFailReason reas
     WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
 }
 
+bool SampleLoadBusy() {
+    return s_sample_load.Get().Busy() || s_sample_load.Get().ReplyPending();
+}
+
 void OnSampleLoad(const SampleLoadMessage& sl) {
-    if (!s_sample_memory_available) {
-        if (s_hw)
-            WaveX::Log::PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
+    if (!s_sample_memory_available || !s_pool) {
         ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_NO_SDRAM);
         return;
     }
-    // An import's admitted records and hit ids belong to its transaction
-    // until Commit/Fail. They must not look like completed loads or be removed
-    // by another Pool mutation during a cooperative yield.
-    if (SfzLoader::Busy() || s_recording.Get().Busy()) {
+    if (StorageJobBusy() || Storage::CardService::Busy() || !s_sample_load.Get().Begin(sl)) {
         ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_BUSY);
         return;
     }
-    if (s_hw) {
-        WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' request=%u", sl.path, (unsigned)sl.sample_id);
+    if (!s_sample_load.Get().Busy())
+        return;  // invalid path: the job retains its terminal failure reply
+    // Admission owns the read-only file and private allocation, not live
+    // voices. Return to dispatch immediately; no delay or nested link pump.
+    if (!s_pool->FindByPath(sl.path)) {
+        CloseWav();
+        CancelEnvelopeJob();
     }
-    // The Pool is refcounted by path: a file that is already resident is a
-    // hit, not a second copy. The user's explicit load pins it, and the
-    // frontend hears the id it already had.
-    if (SamplePool::Record* hit = s_pool->FindByPath(sl.path)) {
-        s_pool->SetPinned(hit->sample_id, true);
-        s_pool->NoteNewest(hit->sample_id);
-        PushSampleMeta(hit->payload);
-        SampleStatusMessage status{};
-        status.sample_id = hit->sample_id;
-        status.state = SAMPLE_STATUS_LOAD_COMPLETE;
-        status.channels = hit->payload.channels;
-        status.sample_rate = hit->payload.sample_rate;
-        status.frames_played = hit->payload.meta.total_frames;
-        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
-        if (s_hw) {
+    s_sample_load_started_ms = System::GetNow();
+}
+
+void PumpSampleLoad() {
+    auto& job = s_sample_load.Get();
+    const bool was_busy = job.Busy();
+    if (was_busy && s_pool)
+        job.Pump(*s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
+    if (was_busy && !job.Busy()) {
+        const auto& status = job.Status();
+        if (status.state == SAMPLE_STATUS_LOAD_COMPLETE) {
+            if (const auto* info = find_loaded_sample(status.sample_id))
+                PushSampleMeta(*info);
             WaveX::Log::PrintLine(
-                "SAMPLE_LOAD: '%s' already resident as id=%u", sl.path, (unsigned)hit->sample_id);
-        }
-        return;
-    }
-
-    // CRITICAL: Stop ALL SD activity (playback) and ensure PumpWavIO is not running.
-    // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
-    // will conflict with f_open/f_read calls here if s_wav.open is true.
-    CloseWav();
-
-    // No voice-stop barrier here any more: a load into the Pool frees and
-    // rewrites nothing (admission fails rather than evicting), so nothing a
-    // sounding voice reads is touched. Loading no longer cuts notes off.
-    // Add a small delay to ensure any in-flight SD DMA completes
-    System::Delay(10);
-
-    // Use static FIL (too large for stack - ~600 bytes with SDMMC buffer).
-    // Keep in normal BSS like s_wav.file so cache maintenance works correctly.
-    // CRITICAL: Do NOT memset() the FIL - it has internal buffer pointers managed by FatFS.
-    FIL& file = s_sample_load_file;
-
-    // Try raw path first (matches playback/audition). If that fails and path does not include a
-    // drive prefix, retry with "0:" prefix to be tolerant of mount styles.
-    FRESULT fr = f_open(&file, sl.path, FA_READ);
-    if (fr != FR_OK && strncmp(sl.path, "0:", 2) != 0) {
-        char alt_path[sizeof(sl.path) + 2];
-        snprintf(alt_path, sizeof(alt_path), "0:%s", sl.path);
-        fr = f_open(&file, alt_path, FA_READ);
-        if (fr != FR_OK && s_hw) {
-            WaveX::Log::PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s' and alt '%s'",
-                                  (int)fr,
-                                  sl.path,
-                                  alt_path);
-        }
-    } else if (fr != FR_OK && s_hw) {
-        WaveX::Log::PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
-    }
-    if (fr != FR_OK) {
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_OPEN);
-        return;
-    }
-
-    // Shared RIFF walk (wav/wav_header_parser.hpp, review M12 - the old
-    // hand-rolled copy here skipped odd-sized chunks without the RIFF pad
-    // byte and mis-parsed WAVs with odd LIST/INFO chunks before data).
-    WaveX::Wav::WavInfo wav_info;
-    WaveX::Storage::FatFsWavReader reader(file);
-    const auto parse_result = WaveX::Wav::ParseWavHeader(reader, wav_info);
-    if (parse_result != WaveX::Wav::ParseResult::Ok) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("SAMPLE_LOAD: invalid WAV header (parse result %d)",
-                                  (int)parse_result);
-        }
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
-        return;
-    }
-    ResidentSampleInfo resident;
-    if (!BuildResidentSampleInfo(sl,
-                                 wav_info,
-                                 static_cast<uint32_t>(f_size(&file)),
-                                 WaveX::SdramLayout::kLargeSamplePoolBytes,
-                                 resident)) {
-        if (s_hw) {
-            WaveX::Log::PrintLine(
-                "SAMPLE_LOAD: invalid or unsupported resident WAV rate=%lu bits=%u ch=%u "
-                "data_off=%lu data_size=%lu file_size=%lu resident_max=%lu",
-                (unsigned long)wav_info.sample_rate,
-                (unsigned)wav_info.bits_per_sample,
-                (unsigned)wav_info.num_channels,
-                (unsigned long)wav_info.data_offset,
-                (unsigned long)wav_info.data_size,
-                (unsigned long)f_size(&file),
-                (unsigned long)WaveX::SdramLayout::kLargeSamplePoolBytes);
-        }
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
-        return;
-    }
-
-    const uint16_t num_ch = resident.channels;
-    const uint32_t sample_rate = resident.sample_rate;
-    const uint16_t bits = resident.bit_depth;
-    const uint32_t data_off = wav_info.data_offset;
-    const uint32_t data_size = resident.data_size;
-
-    SampleFile::Document saved;
-    saved.file_bytes = f_size(&file);
-    saved.data_offset = data_off;
-    saved.sample.sample_rate = sample_rate;
-    saved.sample.total_frames = resident.total_frames;
-    saved.sample.channels = static_cast<uint8_t>(num_ch);
-    saved.sample.bits_per_sample = static_cast<uint8_t>(bits);
-    saved.sample.Resolve();
-    const auto sidecar = Storage::ReadSampleSidecar(sl.path, saved, saved.sample);
-    if (sidecar == Storage::SampleSidecarResult::Invalid ||
-        sidecar == Storage::SampleSidecarResult::IoError) {
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
-        return;
-    }
-
-    // Admission: an entry and the bytes, or a reason. Nothing is evicted to
-    // make room - the user unloads; the engine never guesses (§4).
-    SamplePool::Record* record = nullptr;
-    if (s_pool->AdmitPath(sl.path, &record) != SamplePool::Admit::Ok) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("SAMPLE_LOAD: pool full (%u entries)",
-                                  (unsigned)WAVEX_SAMPLE_POOL_CAPACITY);
-        }
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_REGISTRY_FULL);
-        return;
-    }
-    const uint16_t sample_id = record->sample_id;
-    wxsamp_t handle = {};
-    if (!s_sample_mem_mgr.alloc(data_size, &handle)) {
-        if (s_hw) {
-            wxsamp_stats_t st{};
-            s_sample_mem_mgr.stats(&st);
-            WaveX::Log::PrintLine(
-                "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
-                (unsigned long)data_size,
-                (unsigned long)st.largest_free_bytes,
-                (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
-        }
-        s_pool->Remove(sample_id);
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
-        return;
-    }
-
-    void* sample_ptr = nullptr;
-    if (!s_sample_mem_mgr.ptr(handle, &sample_ptr)) {
-        s_sample_mem_mgr.release(&handle);
-        s_pool->Remove(sample_id);
-        f_close(&file);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
-        return;
-    }
-
-    f_lseek(&file, data_off);
-    uint32_t remaining = data_size;
-    uint32_t written = 0;
-    UINT br = 0;
-    // Wall-clock for the read loop, so load throughput is a number rather than
-    // an impression. AGENTS.md wants a measurement before a performance claim,
-    // and this is the one place a stopwatch is both cheap and meaningful - the
-    // loop runs on the main loop for seconds, so a millisecond timer is ample
-    // and there is no callback budget to protect.
-    const uint32_t load_start_ms = System::GetNow();
-    // Use a 32-byte-aligned AXI-SRAM staging buffer; stack/DTCM is not
-    // accessible to SDMMC IDMA.
-    uint8_t* temp = s_sample_io;
-    const UINT kIoChunk = pick_sample_load_chunk(file);
-    // Captured before the loop because f_close() below invalidates obj.fs, and
-    // the completion log (after the close) reports it.
-    const unsigned cluster_bytes =
-        file.obj.fs ? static_cast<unsigned>(file.obj.fs->csize) * kSdSectorBytes : 0u;
-
-    while (remaining > 0) {
-        UINT to_read = (remaining > kIoChunk) ? kIoChunk : remaining;
-
-        fr = f_read(&file, temp, to_read, &br);
-
-        if (fr != FR_OK || br == 0) {
-            if (s_hw) {
-                WaveX::Log::PrintLine(
-                    "SAMPLE_LOAD: read error %d after %lu bytes", (int)fr, (unsigned long)written);
-            }
-            s_sample_mem_mgr.release(&handle);
-            s_pool->Remove(sample_id);
-            f_close(&file);
-            ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_READ);
-            return;
-        }
-        memcpy(static_cast<uint8_t*>(sample_ptr) + written, temp, br);
-        written += br;
-        remaining -= br;
-
-        // Progress, rate-limited to whole percent. A large sample off a slow
-        // card takes seconds; without this the frontend has nothing to show
-        // but an indeterminate spinner. state 0x11 is progress, distinct from
-        // 0x10 (complete), so an existing frontend ignores it.
-        if (data_size > 0) {
-            const uint8_t pct =
-                static_cast<uint8_t>((static_cast<uint64_t>(written) * 100ull) / data_size);
-            static uint8_t s_last_pct = 0xFF;
-            if (pct != s_last_pct) {
-                s_last_pct = pct;
-                SampleStatusMessage progress{};
-                progress.sample_id = sample_id;
-                progress.state = SAMPLE_STATUS_LOAD_PROGRESS;  // frames_played = percent
-                progress.channels = static_cast<uint8_t>(num_ch);
-                progress.sample_rate = sample_rate;
-                progress.frames_played = pct;
-                WaveX::Comm::LinkSend(
-                    WaveX::Protocol::MSG_SAMPLE_STATUS, &progress, sizeof(progress));
-                // The link is not pumped from here, so drain one frame or the
-                // 4-deep TX queue fills and later progress is silently lost.
-                WaveX::Comm::LinkPumpTx();
-            }
+                "SAMPLE_LOAD: loaded id=%u bytes=%lu in %lu ms",
+                static_cast<unsigned>(status.sample_id),
+                static_cast<unsigned long>(job.BytesRead()),
+                static_cast<unsigned long>(System::GetNow() - s_sample_load_started_ms));
+        } else {
+            WaveX::Log::PrintLine("SAMPLE_LOAD: failed request=%u reason=%lu after %lu bytes",
+                                  static_cast<unsigned>(status.sample_id),
+                                  static_cast<unsigned long>(status.frames_played),
+                                  static_cast<unsigned long>(job.BytesRead()));
         }
     }
-
-    f_close(&file);
-
-    CancelEnvelopeJob();
-    FillLoadedSample(record->payload, sample_id, sl.path, resident, handle);
-    SampleFile::Apply(saved, record->payload.meta);
-    // The user asked for it by name: only an explicit unload releases it.
-    s_pool->SetPinned(sample_id, true);
-    s_pool->NoteNewest(sample_id);
-    PushSampleMeta(record->payload);
-
-    if (s_hw) {
-        // Report throughput and the geometry it was achieved with, not just the
-        // size. "3.1 MB in 900 ms (3444 KB/s, 65536 B reads, 32768 B clusters)"
-        // is directly comparable across cards and buffer sizes, and shows
-        // whether the read size actually tracked the filesystem; "loaded 3.1 MB"
-        // is comparable to nothing.
-        const uint32_t elapsed_ms = System::GetNow() - load_start_ms;
-        const unsigned long kbps =
-            elapsed_ms > 0 ? (unsigned long)((uint64_t)data_size / elapsed_ms) : 0;
-        WaveX::Log::PrintLine(
-            "SAMPLE_LOAD: Loaded %lu bytes as sample %u in %lu ms "
-            "(%lu KB/s, %u B reads, %u B clusters)",
-            (unsigned long)data_size,
-            (unsigned)sample_id,
-            (unsigned long)elapsed_ms,
-            kbps,
-            (unsigned)kIoChunk,
-            cluster_bytes);
-    }
-
-    // Notify host (ESP32) that sample load completed - with the Pool's id,
-    // which is the one every later message must use.
-    SampleStatusMessage status{};
-    status.sample_id = sample_id;
-    status.state = SAMPLE_STATUS_LOAD_COMPLETE;
-    status.channels = static_cast<uint8_t>(num_ch);
-    status.sample_rate = sample_rate;
-    status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded
-    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+    // A full UART queue must not lose the terminal result and strand the UI.
+    if (job.ReplyPending() &&
+        Comm::LinkSend(MSG_SAMPLE_STATUS, &job.Status(), sizeof(job.Status())) >= 0)
+        job.ReplySent();
 }
 
 void GetSampleMemStatus(SampleMemStatusMessage& out) {
@@ -4127,6 +3831,8 @@ bool AuditionSample(uint16_t sample_id) {
 }
 
 bool OpenWav(const char* path) {
+    if (SampleLoadBusy())
+        return false;
     // Reject an unrepresentable identity before replacing a working stream.
     if (!path || path[0] == '\0' || std::strlen(path) >= sizeof(s_wav.path)) {
         return false;
