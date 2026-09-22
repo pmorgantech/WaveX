@@ -93,6 +93,12 @@ class SequencerTransport {
         return song_project_ ? song_project_->patterns[active_slot_].pattern : *pending_pattern_;
     }
 
+    // Callback playback decisions must use the committed pattern, not pending
+    // editor state. Song playback borrows the foreground-frozen Project slot.
+    const Pattern& PlaybackPattern() const {
+        return song_project_ ? song_project_->patterns[active_slot_].pattern : active_pattern_;
+    }
+
     uint32_t PatternEpoch() const { return active_epoch_; }
     uint32_t PatternRevision() const { return pattern_revision_; }
     // Callback only. Persistence validates before handing this private buffer

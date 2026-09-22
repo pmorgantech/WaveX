@@ -53,6 +53,17 @@ TestTransport MakeTransport() {
 
 // ---- Pattern edits ----
 
+TEST(SequencerTransportTest, PlaybackRowsIgnoreUncommittedEditorChanges) {
+    auto t = MakeTransport();
+    t.pattern().tracks[0].melodic = true;
+    t.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, 0, 0, 12000, 0});
+    t.ApplyPatternOp({SEQ_OP_SET_MELODIC, 0, 0, 0, 0, 0});
+    EXPECT_FALSE(t.pattern().tracks[0].melodic);
+    EXPECT_TRUE(t.PlaybackPattern().tracks[0].melodic);
+    RunTicks(t, 1);
+    EXPECT_FALSE(t.PlaybackPattern().tracks[0].melodic);
+}
+
 TEST(SequencerTransportTest, SetStepOpEnablesStepWithVelocity) {
     auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP, 2, 5, 1, 99, 0));

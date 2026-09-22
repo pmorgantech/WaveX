@@ -1907,6 +1907,10 @@ Use unique Pattern/Project save-copy names; preserve source assets.
   live key and force stealing/rebinding. **Pass:** exact gate timing in capture,
   bounded release tails, no stale releases and no stuck melodic notes; the
   independent live key survives sequence Stop.
+  Include a Song whose melodic/enabled rows differ from the previously edited
+  Pattern and change between sections: held notes must survive beyond one audio
+  block and release only at their gate or section boundary. Capture DWT peaks
+  for the same Song before/after the 2026-09-22 cleanup fix (not yet measured).
 - [ ] **024c — Recording:** Record a two-bar four-note progression over drums
   from physical MIDI. Check quantize on/off, first-note shared microtiming,
   repeated pitches, a fifth-note replacement, step-record cursor advancement,

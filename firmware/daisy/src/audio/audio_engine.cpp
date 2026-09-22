@@ -460,9 +460,9 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         pattern_epoch = s_seq_transport.PatternEpoch();
     }
     uint16_t muted = 0;
+    const auto& playing_pattern = s_seq_transport.PlaybackPattern();
     for (uint8_t t = 0; t < 16; ++t)
-        if (!s_seq_transport.pattern().tracks[t].enabled ||
-            !s_seq_transport.pattern().tracks[t].melodic)
+        if (!playing_pattern.tracks[t].enabled || !playing_pattern.tracks[t].melodic)
             muted |= static_cast<uint16_t>(1u << t);
     s_voice_manager.EndSequence(muted);
 

@@ -623,6 +623,9 @@ versioning and release process.
 
 ### Fixed
 
+- Keep melodic Song gates alive by deriving callback cleanup from the playing
+  Project pattern; pending editor changes no longer affect cleanup early.
+
 - Publish complete Instrument arpeggiator settings to the audio callback,
   including updates and disable across reused snapshot slots.
 

@@ -59,6 +59,25 @@ TEST_F(SongPlaybackTest, RepeatsSwitchAndStopInsideBlocksWithoutForegroundServic
     exchange.Retire();
     EXPECT_EQ(exchange.state(), PatternExchange::State::Idle);
 }
+TEST_F(SongPlaybackTest, PlaybackRowsFollowSongSectionsInsteadOfWorkingPattern) {
+    transport.pattern().tracks[0].enabled = false;
+    project->patterns[0].pattern.tracks[0].melodic = true;
+    project->patterns[1].pattern.tracks[1].melodic = true;
+    Start();
+    EXPECT_FALSE(transport.pattern().tracks[0].enabled);
+    EXPECT_TRUE(transport.PlaybackPattern().tracks[0].enabled);
+    EXPECT_TRUE(transport.PlaybackPattern().tracks[0].melodic);
+    std::vector<TriggerEvent> events;
+    for (int i = 0; i < 1000 && transport.BuildPlayhead().pattern == 0; ++i)
+        Block(events);
+    ASSERT_EQ(transport.BuildPlayhead().pattern, 1);
+    EXPECT_FALSE(transport.PlaybackPattern().tracks[0].melodic);
+    EXPECT_TRUE(transport.PlaybackPattern().tracks[1].melodic);
+    exchange.StopSong();
+    Block(events);
+    EXPECT_FALSE(transport.SongActive());
+    EXPECT_TRUE(transport.PlaybackPattern().tracks[1].melodic);
+}
 TEST_F(SongPlaybackTest, LoopSeekAndPatternEditsHaveExplicitLifetimes) {
     Start(true, 1);
     std::vector<TriggerEvent> events;
