@@ -18,6 +18,7 @@ class UISampleRecordPage : public UIPage {
    private:
     RecordAssignment assignment_;
     void assign(bool keyboard);
+    void showKeyboard();
     void adjust(uint8_t, int);
     void send(uint8_t);
     void read();

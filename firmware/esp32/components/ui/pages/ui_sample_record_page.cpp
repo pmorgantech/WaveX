@@ -91,29 +91,13 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_pos(status_label_, UI_MARGIN_X, UI_RECORD_STATUS_Y);
     lv_obj_set_width(status_label_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
-    keyboard_ = lv_keyboard_create(root_);
-    lv_keyboard_set_textarea(keyboard_, input_);
-    lv_obj_set_size(keyboard_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_RECORD_KEYBOARD_HEIGHT);
-    lv_obj_align(keyboard_, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_BG, 0);
-    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_CARD, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(keyboard_, UI_COLOR_FG, LV_PART_ITEMS);
-    lv_obj_set_style_text_font(keyboard_, UI_FONT_BODY, LV_PART_ITEMS);
-    lv_obj_add_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(
         input_,
         [](lv_event_t* e) {
-            auto* self = static_cast<UISampleRecordPage*>(lv_event_get_user_data(e));
-            lv_obj_remove_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN);
+            static_cast<UISampleRecordPage*>(lv_event_get_user_data(e))->showKeyboard();
         },
-        LV_EVENT_FOCUSED,
+        LV_EVENT_CLICKED,
         this);
-    auto close = [](lv_event_t* e) {
-        auto* self = static_cast<UISampleRecordPage*>(lv_event_get_user_data(e));
-        lv_obj_add_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN);
-    };
-    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_READY, this);
-    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_CANCEL, this);
     alive_ = inter_mcu_backend_link_alive();
     valid_ = false;
     read();
@@ -125,6 +109,27 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
         67,
         this);
 }
+void UISampleRecordPage::showKeyboard() {
+    if (keyboard_) {
+        lv_obj_remove_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    keyboard_ = lv_keyboard_create(root_);
+    lv_keyboard_set_textarea(keyboard_, input_);
+    lv_obj_set_size(keyboard_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X, UI_RECORD_KEYBOARD_HEIGHT);
+    lv_obj_align(keyboard_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_color(keyboard_, UI_COLOR_CARD, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(keyboard_, UI_COLOR_FG, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(keyboard_, UI_FONT_BODY, LV_PART_ITEMS);
+    auto close = [](lv_event_t* e) {
+        auto* self = static_cast<UISampleRecordPage*>(lv_event_get_user_data(e));
+        lv_obj_add_flag(self->keyboard_, LV_OBJ_FLAG_HIDDEN);
+    };
+    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_READY, this);
+    lv_obj_add_event_cb(keyboard_, close, LV_EVENT_CANCEL, this);
+}
+
 void UISampleRecordPage::onExit() {
     assignment_ = {};
     if (timer_)

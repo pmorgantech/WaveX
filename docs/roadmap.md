@@ -278,10 +278,10 @@ host tests or a short callback screen as the full Phase 2.5 gate.
 - **UI responsiveness:** profile Settings, Project/Track, Pad Map, Pad Sound and
   Sample Edit when changing them, including encoder/touch bursts and loading.
   Existing measurements are in [UI latency notes](ui-latency-notes.md).
-  Investigate expensive first frames in Sample Edit/Record/Play; profile smaller
-  or filled waveforms before spreading construction across frames. Reduce the
-  measured 243.52 ms full refresh when entering held-step Locks; individual
-  held-lock encoder edits already remain partial.
+  Measure entry, first use and re-entry of deferred controls in Sample Edit,
+  Record and Play on device (HV-018e). Remeasure Locks mode against the historical
+  243.52 ms baseline; the host invalidation regression does not establish device
+  latency. Retain encoder/touch bursts, loaded rendering and physical acceptance.
 - **Compiler/placement experiments:** further optimizations remain deferred.
   Keep `-O2` as the accepted reference; global `-O3` was rejected. Measure LTO
   separately, including weak HAL symbols and placement. Benchmark remaining

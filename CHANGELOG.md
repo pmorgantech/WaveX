@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Prevent sequencer Locks/Grid mode changes from overflowing LVGL's invalidation
+  list into a full-screen refresh. Real-LVGL host regression reduces submitted
+  pixels from 1,024,000 to about 270,000; device timing remains unverified.
+
 - Fixed Menu selection scrolling, Pad Map naming/sample overlays, Song
   playback labeling and disabled Song buttons on the dark UI theme. Shared
   header context now stays within the meter/CPU strip boundary and uses
@@ -802,6 +806,10 @@ versioning and release process.
   below.
 
 ### Changed
+
+- Defer hidden Sample Edit cards, Play piano keys and the Record typing keyboard
+  until first use, retaining them within the page. Host lifecycle tests cover
+  current values, reopening and note release; device first-use timing remains open.
 
 - Recording save transactions now use short temporary names after long names
   failed on real SD media; the short-name path passed two-source HIL checks,

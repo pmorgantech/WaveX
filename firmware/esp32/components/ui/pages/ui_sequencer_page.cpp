@@ -610,6 +610,14 @@ void UISequencerPage::adjust(uint8_t parameter, int delta) {
     }
 }
 void UISequencerPage::lockMode(bool enabled) {
+    if (locks_mode_ == enabled)
+        return;
+    // Seed the seven fixed card areas before changing their labels. Otherwise
+    // old/new label bounds can overflow LVGL's finite invalidation list and
+    // turn a mode change into a full-screen refresh, including the stable grid.
+    for (const auto& tile: tiles_)
+        if (tile.card)
+            lv_obj_invalidate(tile.card);
     locks_mode_ = enabled;
     drawn_lock_slot_ = 0xff;
     if (!enabled)

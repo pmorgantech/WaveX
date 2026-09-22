@@ -275,7 +275,13 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     }
 }
 
-void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
+void UISampleEditPage::buildParamStrip(lv_obj_t*) {
+    first_card_ = std::clamp<int>(focus_ - (kVisibleCards - 1), 0, PARAM_COUNT - kVisibleCards);
+    layoutParamStrip();
+    refreshFocusRing();
+}
+
+void UISampleEditPage::buildParamCard(uint8_t i) {
     static const char* titles[PARAM_COUNT] = {"START",
                                               "END",
                                               "LOOP START",
@@ -285,65 +291,53 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
                                               "FADE OUT",
                                               "CROSSFADE",
                                               "CHANNEL"};
-    // Nine parameters, four card slots. The strip shows a window onto the
-    // parameter list so the design's 305px card pitch survives; < Param /
-    // Param > scroll it. Cramming them into the same width would shrink every
-    // card below the readable-from-a-metre size the layout is built around.
-    for (int i = 0; i < PARAM_COUNT; i++) {
-        // The same widget as every other parameter card in the UI. This was a
-        // private near-copy - label, mono value, track, fill and handle built
-        // by hand - which is exactly how two "identical" cards drift apart.
-        cards_[i] = valueTileCreate(parent, kMargin, kStripY, kCardW, kCardH, titles[i], nullptr);
-        lv_obj_add_event_cb(
-            cards_[i].card,
-            [](lv_event_t* event) {
-                auto* self = static_cast<UISampleEditPage*>(lv_event_get_user_data(event));
-                if (self->seam_pending_)
-                    return;
-                for (uint8_t p = 0; p < PARAM_COUNT; ++p) {
-                    if (self->cards_[p].card == lv_event_get_current_target(event)) {
-                        self->focus_ = p;
-                        self->refreshFocusRing();
-                        break;
-                    }
+    cards_[i] = valueTileCreate(root_, kMargin, kStripY, kCardW, kCardH, titles[i], nullptr);
+    lv_obj_add_event_cb(
+        cards_[i].card,
+        [](lv_event_t* event) {
+            auto* self = static_cast<UISampleEditPage*>(lv_event_get_user_data(event));
+            if (self->seam_pending_)
+                return;
+            for (uint8_t p = 0; p < PARAM_COUNT; ++p) {
+                if (self->cards_[p].card == lv_event_get_current_target(event)) {
+                    self->focus_ = p;
+                    self->refreshFocusRing();
+                    break;
                 }
-            },
-            LV_EVENT_PRESSED,
-            this);
-        const int idx = i;
-        valueTileSetOnAdjust(cards_[i], [this, idx](int steps) {
-            focus_ = static_cast<uint8_t>(idx);
-            refreshFocusRing();
-            adjustFocused(steps);
-        });
-    }
-    refreshFocusRing();
+            }
+        },
+        LV_EVENT_PRESSED,
+        this);
+    valueTileSetOnAdjust(cards_[i], [this, i](int steps) {
+        focus_ = i;
+        refreshFocusRing();
+        adjustFocused(steps);
+    });
 }
 
-// Places the visible window of cards so the focused one is always on screen.
-void UISampleEditPage::layoutParamStrip() {
-    // Keep a visible tile under the finger when it takes focus. Only page
-    // the strip when focus actually leaves its current visible window.
-    int first = 0;
-    while (first < PARAM_COUNT && lv_obj_has_flag(cards_[first].card, LV_OBJ_FLAG_HIDDEN))
-        ++first;
-    if (first > PARAM_COUNT - kVisibleCards) {
-        first = PARAM_COUNT - kVisibleCards;
-    }
-    if (focus_ < first) {
-        first = focus_;
-    } else if (focus_ >= first + kVisibleCards) {
-        first = focus_ - (kVisibleCards - 1);
-    }
-    for (int i = 0; i < PARAM_COUNT; i++) {
-        const int slot = i - first;
+// Only the four visible cards are needed on entry. A later page of controls
+// initializes from the same parameter state, then keeps its widgets until exit.
+bool UISampleEditPage::layoutParamStrip() {
+    if (focus_ < first_card_)
+        first_card_ = focus_;
+    else if (focus_ >= first_card_ + kVisibleCards)
+        first_card_ = focus_ - (kVisibleCards - 1);
+    bool created = false;
+    for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
+        const int slot = i - first_card_;
         if (slot < 0 || slot >= kVisibleCards) {
-            lv_obj_add_flag(cards_[i].card, LV_OBJ_FLAG_HIDDEN);
+            if (cards_[i].card)
+                lv_obj_add_flag(cards_[i].card, LV_OBJ_FLAG_HIDDEN);
         } else {
+            if (!cards_[i].card) {
+                buildParamCard(i);
+                created = true;
+            }
             lv_obj_remove_flag(cards_[i].card, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_x(cards_[i].card, kMargin + slot * kCardPitch);
         }
     }
+    return created;
 }
 
 void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
@@ -832,10 +826,12 @@ void UISampleEditPage::refreshParams() {
 
     snprintf(buf, sizeof(buf), "%u ms", unsigned(crossfade_ms_));
     valueTileSetValue(cards_[PARAM_CROSSFADE], crossfade_ms_ ? buf : "off");
-    valueTileSetFill(cards_[PARAM_CROSSFADE], crossfade_ms_ / 20.f);
+    if (cards_[PARAM_CROSSFADE].card)
+        valueTileSetFill(cards_[PARAM_CROSSFADE], crossfade_ms_ / 20.f);
     static const char* const modes[] = {"Recorded", "Left", "Right", "Mono Sum"};
     valueTileSetValue(cards_[PARAM_CHANNEL], modes[channel_mode_ <= 3 ? channel_mode_ : 0]);
-    valueTileSetFill(cards_[PARAM_CHANNEL], channel_mode_ / 3.f);
+    if (cards_[PARAM_CHANNEL].card)
+        valueTileSetFill(cards_[PARAM_CHANNEL], channel_mode_ / 3.f);
     layoutParamStrip();
 
     // Turning Loop off while a loop marker is focused has to drop the seam
@@ -1059,7 +1055,8 @@ void UISampleEditPage::refreshFocusRing() {
     // The strip has to follow too. It was laid out only with the values, so
     // Param > onto a card past the visible four put the ring on a hidden
     // card and left the strip where it was until some value changed.
-    layoutParamStrip();
+    if (layoutParamStrip())
+        refreshParams();
     for (uint8_t i = 0; i < PARAM_COUNT; i++) {
         if (!cards_[i].card) {
             continue;

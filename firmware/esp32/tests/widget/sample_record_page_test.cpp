@@ -173,3 +173,34 @@ TEST_F(SampleRecordPageTest, AssignmentNavigatesOnlyAfterSuccessfulDoneAcknowled
     EXPECT_TRUE(assigned_keyboard);
     wavex_ui::UINavigator::instance().pop();  // Return to Record for fixture teardown.
 }
+
+namespace {
+lv_obj_t* FindType(lv_obj_t* obj, const lv_obj_class_t* type) {
+    if (lv_obj_check_type(obj, type))
+        return obj;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(obj); ++i)
+        if (auto* found = FindType(lv_obj_get_child(obj, i), type))
+            return found;
+    return nullptr;
+}
+}  // namespace
+TEST_F(SampleRecordPageTest, DeferredKeyboardReopensAndRetainsTheTakeName) {
+    EXPECT_EQ(FindType(lv_screen_active(), &lv_keyboard_class), nullptr);
+    auto* input = FindType(lv_screen_active(), &lv_textarea_class);
+    ASSERT_NE(input, nullptr);
+    lv_obj_send_event(input, LV_EVENT_CLICKED, nullptr);
+    Advance(1);
+    auto* keyboard = FindType(lv_screen_active(), &lv_keyboard_class);
+    ASSERT_NE(keyboard, nullptr);
+    EXPECT_FALSE(lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    lv_textarea_set_text(input, "Retained take");
+    lv_obj_send_event(keyboard, LV_EVENT_READY, nullptr);
+    EXPECT_TRUE(lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    lv_obj_send_event(input, LV_EVENT_CLICKED, nullptr);
+    EXPECT_EQ(FindType(lv_screen_active(), &lv_keyboard_class), keyboard);
+    EXPECT_FALSE(lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    EXPECT_STREQ(lv_textarea_get_text(input), "Retained take");
+    lv_obj_send_event(keyboard, LV_EVENT_CANCEL, nullptr);
+    EXPECT_TRUE(lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    EXPECT_TRUE(mutations.empty());
+}

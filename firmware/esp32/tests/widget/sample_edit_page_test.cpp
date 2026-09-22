@@ -299,3 +299,23 @@ TEST_F(SampleEditPageTest, ChannelControlPublishesCompleteEditAndSeamUsesConfirm
     EXPECT_EQ(requests.back().expected.channel_mode, SAMPLE_CH_RIGHT);
     EXPECT_EQ(requests.back().generation, 4);
 }
+
+TEST_F(SampleEditPageTest, DeferredParameterCardsInitializeFromLiveStateAndSurvivePaging) {
+    EXPECT_EQ(FindLabel(lv_screen_active(), "GAIN"), nullptr);
+    EXPECT_EQ(FindLabel(lv_screen_active(), "CHANNEL"), nullptr);
+    meta.gain_db_x10 = -120;
+    ++meta.generation;
+    Advance(5);
+    Focus(4);
+    Advance(1);
+    auto* gain = FindLabel(lv_screen_active(), "GAIN");
+    ASSERT_NE(gain, nullptr);
+    EXPECT_NE(FindLabel(lv_obj_get_parent(gain), "-12.0 dB"), nullptr);
+    Focus(8);
+    Adjust(2);
+    EXPECT_EQ(meta.channel_mode, SAMPLE_CH_RIGHT);
+    Focus(0);
+    Focus(4);
+    EXPECT_EQ(FindLabel(lv_screen_active(), "GAIN"), gain);
+    EXPECT_FALSE(lv_obj_has_flag(lv_obj_get_parent(gain), LV_OBJ_FLAG_HIDDEN));
+}

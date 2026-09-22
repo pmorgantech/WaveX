@@ -128,6 +128,8 @@ class UIPlayPage : public UIPage {
     int key_count_ = 0;
 
     lv_obj_t* tabview_ = nullptr;
+    lv_obj_t* keys_tab_ = nullptr;
+    bool keys_built_ = false;
     /// The Pads tab's right-hand column (design turn 3b): the focused
     /// parameter as a full tile, then four small ones for the performance
     /// state you change without leaving the surface. Keys keeps the whole

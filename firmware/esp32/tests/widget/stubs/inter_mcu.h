@@ -65,3 +65,12 @@ inline bool inter_mcu_take_lock_notice(WaveX::Protocol::SeqLockNoticeMessage*) {
 
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage&);
 bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage*);
+
+esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage&);
+esp_err_t inter_mcu_send_seq_slot_edit(const WaveX::Protocol::SeqSlotEditMessage&);
+esp_err_t inter_mcu_request_seq_slot_page(const WaveX::Protocol::SeqPatternRequestMessage&);
+bool inter_mcu_get_seq_slot_page(WaveX::Protocol::SeqSlotPageMessage*);
+bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage*);
+esp_err_t inter_mcu_send_control_change(uint8_t, uint8_t, uint16_t);
+esp_err_t inter_mcu_send_note_on_track(uint8_t, uint8_t, uint8_t);
+esp_err_t inter_mcu_send_note_off_track(uint8_t, uint8_t);

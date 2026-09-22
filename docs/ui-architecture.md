@@ -98,6 +98,17 @@ Bank, Scene and Song work is tracked in the
 - `contextLine()` identifies the Track, Instrument or sample being edited.
   The navigator copies its text; call `refreshContext()` when it changes.
 
+Sample Edit creates its four visible parameter cards on entry and creates later
+cards when their parameter window first appears. Play creates the piano keys on
+first Keys entry; Record creates the typing keyboard on the first name-field
+click. Each page initializes these controls from current state, reuses them until
+exit, and clears their pointers on exit. Tab changes still release Play notes.
+First-use timing remains a hardware check alongside page-entry timing.
+
+Sequencer Locks mode reuses its grid and cards. It invalidates the seven card
+bounds before relabeling, keeping LVGL's dirty-area list bounded without forcing
+a full-screen refresh. See [rendering evidence](ui-latency-notes.md#menu-entry-and-locks-invalidation-follow-up--2026-09-21).
+
 The selected Track (`ui/current_track.h`) and selected sample
 (`ui/current_sample.h`) are explicit shared UI state. Pages must not infer
 them from the previous page. Replacing an occupied Track follows the

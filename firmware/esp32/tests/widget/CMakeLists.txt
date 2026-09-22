@@ -115,7 +115,7 @@ foreach(test_source IN LISTS widget_tests)
             ${PARAMETER_WIDGET_FONTS})
     endif()
 
-    if(test_name STREQUAL "mixer_page_test" OR test_name STREQUAL "project_files_page_test" OR test_name STREQUAL "pattern_slots_page_test" OR test_name STREQUAL "song_page_test" OR test_name STREQUAL "sample_picker_page_test" OR test_name STREQUAL "bank_page_test" OR test_name STREQUAL "sample_file_page_test" OR test_name STREQUAL "sample_edit_page_test" OR test_name STREQUAL "sample_record_page_test" OR test_name STREQUAL "instrument_tags_page_test")
+    if(test_name STREQUAL "mixer_page_test" OR test_name STREQUAL "project_files_page_test" OR test_name STREQUAL "pattern_slots_page_test" OR test_name STREQUAL "song_page_test" OR test_name STREQUAL "sample_picker_page_test" OR test_name STREQUAL "bank_page_test" OR test_name STREQUAL "sample_file_page_test" OR test_name STREQUAL "sample_edit_page_test" OR test_name STREQUAL "sample_record_page_test" OR test_name STREQUAL "instrument_tags_page_test" OR test_name STREQUAL "sequencer_page_test" OR test_name STREQUAL "play_page_test")
         file(GLOB MIXER_FONTS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
         if(test_name STREQUAL "mixer_page_test")
@@ -130,6 +130,17 @@ foreach(test_source IN LISTS widget_tests)
                 ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_value_tile.cpp
                 ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/multi_touch_input.cpp
                 ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/current_sample.cpp)
+        elseif(test_name STREQUAL "sequencer_page_test" OR test_name STREQUAL "play_page_test")
+            if(test_name STREQUAL "sequencer_page_test")
+                set(WAVEX_PAGE_SOURCE ui_sequencer_page.cpp)
+            else()
+                set(WAVEX_PAGE_SOURCE ui_play_page.cpp)
+                target_sources(${test_name} PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_tab_group.cpp
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/encoder_strip.cpp)
+            endif()
+            target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui)
+            target_sources(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_value_tile.cpp)
         elseif(test_name STREQUAL "instrument_tags_page_test")
             set(WAVEX_PAGE_SOURCE ui_instrument_tags_page.cpp)
             target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui)

@@ -1236,6 +1236,17 @@ console connections; paired Daisy for playback/load checks.
   audio underruns; record any tearing separately. Partial flushes do not
   establish tear-free scanout or close the full phase gate.
 
+- [ ] **018e — Menu first use and Locks redraw:** On matched images, measure
+  Sample Edit entry and the first visit to every parameter window, Play entry
+  and first/repeated Keys switches, and Record entry and name-keyboard open/close.
+  Repeat while notes/streaming run; capture RENDER/sysmon, free heap and both
+  image identities. All values must initialize correctly; no clipped controls,
+  lost edits, stranded notes, heap growth across page cycles or audio underruns.
+  Enter/leave held-step Locks with transport stopped and running: require partial
+  redraws, measure against the historical 243.52 ms full refresh and record any
+  remaining frame-budget overruns. Host-only invalidation and lifecycle tests
+  pass; device measurements are **unrun** (flash approval outstanding).
+
 **Initial run:** 2026-09-18, ESP32 debug build from `f63e590` (display code
 unchanged by the subsequent documentation reconciliation in `1d5834b`),
 firmware version 0.5.0. App SHA-256:

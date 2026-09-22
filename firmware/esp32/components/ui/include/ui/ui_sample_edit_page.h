@@ -142,7 +142,9 @@ class UISampleEditPage : public UIPage {
 
     void buildWaveformPanel(lv_obj_t* parent);
     void buildParamStrip(lv_obj_t* parent);
-    void layoutParamStrip();
+    bool layoutParamStrip();
+    void buildParamCard(uint8_t parameter);
+    int first_card_ = 0;
     void buildInfoStrip(lv_obj_t* parent);
 
     static void uiTimerCb(lv_timer_t* t);

@@ -483,8 +483,9 @@ This is a repaint check, not a loaded rendering or physical touch-latency gate.
 | Diagnostics / edit | 2 / 0 | 768,256 | 64.34 | 127.49 |
 
 Record source, Arp octave, global rate and held-lock encoder edits remain partial.
-Entering the Locks layout from the grid rebuilds the content and costs a full
-243.52 ms refresh; this mode-entry cost remains a UI follow-up. Navigation
+Entering the Locks layout from the grid cost a full 243.52 ms refresh.
+The follow-up below identifies invalidation-list overflow rather than widget
+reconstruction as the cause; device timing remains to be remeasured. Navigation
 entry/re-entry includes Main Menu and the default tab before selecting the target,
 so those totals are not isolated page-construction timings. Their largest
 single refresh was 259.20 ms. Idle Arp, global LFO and sequencer submit no pixels;
@@ -494,3 +495,41 @@ Evidence: `logs/task3-ui-render.json`, `logs/task3-ui-render.log` and
 `logs/task3-ui-sysmon.log`; sysmon retains render/flush splits. No general speed
 comparison is claimed. Normal firmware restores profiling off. Physical feel,
 loaded rendering and callback/soak acceptance remain in HV-018/HV-030–HV-032.
+
+## Menu entry and Locks invalidation follow-up — 2026-09-21
+
+The sequencer already retained its grid and seven cards during a Locks mode
+change. Updating old/new label bounds overflowed LVGL's finite invalidation list,
+which falls back to the entire display. Seeding the seven card bounds before
+relabeling contains those invalidations without repainting the stable grid.
+Ordinary single-parameter updates keep their existing granular path.
+
+A real-LVGL 9.5 host regression at 1280×800 reproduces the full refresh with
+only the containment loop removed and passes with it restored:
+
+| Interaction | Baseline submitted pixels | Candidate submitted pixels | Full-screen baseline / candidate |
+|---|---:|---:|---:|
+| Enter held-step Locks | 1,024,000 | 269,543 | 1 / 0 |
+| Return to Grid | 1,024,000 | 271,846 | 1 / 0 |
+
+After returning to Grid, ten unchanged service intervals submit zero pixels.
+Evidence: `logs/menu-locks-baseline.{log,xml}` and
+`logs/menu-locks-candidate.{log,xml}`; the committed `sequencer_page_test` checks
+partial redraws, retained grid widgets and idle behavior. This uses host direct
+rendering, not the device's partial PSRAM buffers/PPA/DSI path. It establishes an
+invalidation reduction, **not** a device millisecond result or physical latency.
+The historical 243.52 ms hardware sample remains the comparison baseline.
+
+Page entry also defers hidden controls: Sample Edit initially constructs four
+visible cards rather than nine, Play constructs its 16 pads before building the
+25 piano keys on first Keys entry, and Record constructs its typing keyboard on
+first name-field click. These widgets are reused within the page and discarded
+on exit. Tests cover authoritative values on first use, repeat paging, name
+retention/reopening, transposition before Keys creation and note release across
+tab changes. The continuous/splice waveform rendering remains unchanged.
+
+Both first-use and re-entry timing must be measured on device: work deferred from
+entry can add first-use latency. No page-entry speedup is claimed from widget
+counts alone. Automatic approval review blocked the proposed firmware flash;
+no new image was flashed for this follow-up. HV-018e retains the matched-image
+RENDER/sysmon, loaded rendering and physical interaction checks.

@@ -161,11 +161,12 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
 
     tabview_ = tabGroupCreate(tab_host);
     lv_obj_t* t_pads = tabGroupAddTab(tabview_, "Pads");
-    lv_obj_t* t_keys = tabGroupAddTab(tabview_, "Keys");
+    keys_tab_ = tabGroupAddTab(tabview_, "Keys");
+    keys_built_ = false;
 
     buildPads(t_pads);
     buildParamColumn(t_pads);
-    buildKeys(t_keys);
+    // Build the keyboard on first use; Pads entry needs only its 16 keys.
 
     // Switching tabs releases everything. A latched note whose key is on the
     // other tab is a note you cannot see and will not think to stop - the same
@@ -194,7 +195,8 @@ void UIPlayPage::onExit() {
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
-        tabview_ = nullptr;
+        tabview_ = keys_tab_ = nullptr;
+        keys_built_ = false;
 
         param_tile_ = ValueTile{};
         octave_tile_ = ValueTile{};
@@ -212,6 +214,10 @@ void UIPlayPage::tabChangedCb(lv_event_t* e) {
     auto* self = static_cast<UIPlayPage*>(lv_event_get_user_data(e));
     if (self) {
         self->releaseAll();
+        if (!self->keys_built_ && lv_tabview_get_tab_active(self->tabview_) == 1) {
+            self->buildKeys(self->keys_tab_);
+            self->keys_built_ = true;
+        }
         self->refreshKeys();
     }
 }
@@ -237,7 +243,7 @@ lv_obj_t* UIPlayPage::makeKey(
     // Shared styles, not per-object local ones.
     //
     // Every lv_obj_set_style_*() call stores a property in the object's OWN
-    // style list, which allocates. This page builds 41 keys, each a button
+    // style list, which allocates. This page can build 41 keys, each a button
     // plus a label, so the six local properties these used to set were ~500
     // property stores on a single page entry - and page entry is the whole
     // cost of this page (docs/roadmap.md). What genuinely varies per key is
@@ -274,9 +280,8 @@ lv_obj_t* UIPlayPage::makeKey(
     lv_obj_t* btn = lv_btn_create(parent);
     // Drop the theme's default button styling before adding ours. The default
     // theme applies a substantial style to every button it sees - gradients,
-    // shadows, transitions, pressed transforms - and this page creates 41 of
-    // them in one go. None of it survives our own styling visually, so paying
-    // to apply it 41 times and then override it is pure page-entry cost.
+    // shadows, transitions, pressed transforms - across up to 41 keys. None
+    // of it survives our styling visually, so discard it before adding ours.
     lv_obj_remove_style_all(btn);
     lv_obj_add_style(btn, &s_key_base, LV_PART_MAIN);
     lv_obj_add_style(
