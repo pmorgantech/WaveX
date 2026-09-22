@@ -623,6 +623,10 @@ versioning and release process.
 
 ### Fixed
 
+- Removed the uncalled UART stop API and its incomplete teardown/reinitialization
+  path. The frontend link retains application lifetime; UI suspension does not
+  destroy the driver or its synchronization objects.
+
 - Removed the unused ESP32 packet-router singleton and accessor; the injected
   ApplicationContext router remains the sole frontend routing owner.
 

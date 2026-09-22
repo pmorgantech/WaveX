@@ -288,12 +288,6 @@ audit follow-ups independent:
   races across cores and the counter can under-report exactly when it matters.
   Diagnostics-only, but it is the pattern §14 asks us not to ship. Split the RX
   and TX overflow counters, or make them atomic.
-- [ ] **`uart_link_stop()` leaves the mutex allocated when driver teardown
-  fails.** It returns early on that path, so `s_uart_mutex` stays non-null and
-  a later `uart_link_init()` takes its "already initialised" early return
-  without reinstalling the driver — a silently dead link. Currently latent:
-  nothing calls `uart_link_stop()`. Either finish the teardown on the error
-  path or drop the unused stop entry point.
 - [ ] **The link's router fallback fails silently.** When no router has been
   injected, the getter returns a function-local throwaway instance, so every
   inbound message would be parsed, counted and discarded with no diagnostic.

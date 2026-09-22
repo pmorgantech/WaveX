@@ -386,8 +386,7 @@ void uart_task(void* /*param*/) {
     }
 
     UART_LOGI(TAG, "UART task stopping");
-    // Publish the exit before self-deleting: uart_link_stop() waits on this
-    // before deleting the queue and mutex this task blocks on.
+    // The link has application lifetime; no task tears down its resources.
     s_uart_task_handle = nullptr;
     vTaskDelete(nullptr);
 }
@@ -594,49 +593,6 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
     UART_LOG_DUMP_PACKET(TAG, entry.frame, frame_len);
 
     return len;
-}
-
-esp_err_t uart_link_stop(void) {
-    s_uart_running = false;
-
-    // Wait for the task to leave its loop and self-delete.
-    //
-    // The previous version sent a task notification and slept 20 ms. Neither
-    // did what it looked like: the task blocks in xQueueReceive(), which a
-    // notification does not wake, and the fixed sleep was a guess rather than
-    // a handshake. It then cleared the handle and deleted the queue, mutex and
-    // driver the task could still be parked on - deleting a FreeRTOS object a
-    // task is blocked on is undefined behaviour.
-    //
-    // The loop's own 10 ms event-wait timeout bounds how long it can take to
-    // notice; the allowance below covers a pass that is mid-transmit.
-    for (int waited_ms = 0; s_uart_task_handle && waited_ms < 300; waited_ms += 10) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    if (s_uart_task_handle) {
-        // Freeing what it is blocked on would be worse than leaking it.
-        UART_LOGE(TAG, "UART task did not exit; leaving the link resources allocated");
-        return ESP_ERR_TIMEOUT;
-    }
-
-    // The driver owns the event queue returned by uart_driver_install().
-    // Deleting this borrowed handle first double-frees it in driver teardown.
-    if (s_uart_driver_installed) {
-        const esp_err_t err = uart_driver_delete(WAVEX_ESP_UART_INTER_NUM);
-        if (err != ESP_OK) {
-            return err;
-        }
-        s_uart_driver_installed = false;
-        s_uart_event_queue = nullptr;
-    }
-    s_tx_wake_pending.store(false);
-
-    if (s_uart_mutex) {
-        vSemaphoreDelete(s_uart_mutex);
-        s_uart_mutex = nullptr;
-    }
-
-    return ESP_OK;
 }
 
 void uart_link_log_stats(void) {

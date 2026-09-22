@@ -34,8 +34,6 @@ esp_err_t uart_link_start(void);
 // Returns payload length queued, or <0 on error.
 int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len);
 
-esp_err_t uart_link_stop(void);
-
 void uart_link_log_stats(void);
 
 #ifdef __cplusplus
