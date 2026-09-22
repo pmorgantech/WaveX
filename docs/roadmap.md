@@ -400,9 +400,13 @@ read failures at HV-023 before claiming recovery acceptance.
 - Fold legacy UART/Daisy logging into the module table incrementally; choose the
   release ceiling from field-diagnostics needs. Measure backend link counter
   cost before changing its release/build-profile policy.
-- Evaluate a third filter topology only with a design and measured capacity:
-  Korg35/diode-ladder candidates remain unscheduled. Share inactive topology
-  storage if additional implementations justify it.
+- **Filter quality, unscheduled:** use the [VA filter notes](features/virtual-analog-filters.md)
+  to characterize sweep artifacts, aliasing and nonlinear ladder approximation
+  error before comparing control smoothing, SVF-input ADAA or a bounded
+  nonlinear solve. Adoption needs matched DWT/full-load and listening evidence;
+  the existing capacity checkpoint remains open. Korg35/diode-ladder candidates
+  still require a separate design and measured capacity. Share inactive
+  topology storage only if additional implementations justify it.
 - Verify Diagnostics with a populated Pool and Sample IDs above 255; the wire
   entry, backend copy and table formatter already retain the 16-bit ID.
   Audit active-voice/round-trip and MIDI/drop telemetry for remaining gaps before

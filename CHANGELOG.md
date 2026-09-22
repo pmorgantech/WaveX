@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added virtual-analog filter design notes grounded in the existing TPT SVF,
+  ZDF ladder and measured topology costs, with primary references and an
+  unscheduled, capacity-gated plan for modulation and antialiasing comparisons.
+
 - Added revision-checked Instrument Tags editing with Apply/Revert and WXI
   persistence. Instrument Browser can filter the eight categories using bounded,
   cooperative metadata reads without loading sample audio; wire protocol and

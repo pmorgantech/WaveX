@@ -54,6 +54,7 @@ implementation.
 | [analog-voice-board.md](features/analog-voice-board.md) | Target design, Stage A buildable | PCM1690 TDM-8, per-voice VCF/VCA, CV calibration (Phase 3) |
 | [offline-sample-editing.md](features/offline-sample-editing.md) | Target design | Offline render-job model for destructive editing and mangling DSP (Phase 4) |
 | [vintage-sampler-math.md](features/vintage-sampler-math.md) | Research proposal | Fixed-48 kHz engine with virtual sample clocks, companding and reconstruction; numerical reference only |
+| [virtual-analog-filters.md](features/virtual-analog-filters.md) | Research; comparisons unscheduled | Existing TPT SVF/ZDF ladder, nonlinear-solve and antialiasing tradeoffs, analog measurements and capacity-gated evaluation |
 | [scenes-and-performance.md](features/scenes-and-performance.md) | Target design | Song mode/pattern chaining, performance macros, scenes with morph (Phase 5) |
 | [tuning-and-scales.md](features/tuning-and-scales.md) | Target design | Master tune, 12-degree tables, scale-constrained input surfaces (Phase 5) |
 
