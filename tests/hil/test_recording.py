@@ -10,6 +10,7 @@ import pytest
 @pytest.mark.parametrize("source", [0, 3])
 def test_capture_audition_save_and_assign(at_home, daisy, source):
     esp = at_home
+    esp.track(15)
     esp.open_menu("Sample")
     esp.page("TAB", "Record")
     initial = esp.wait_state(tab="Record", recready="1")
@@ -46,12 +47,21 @@ def test_capture_audition_save_and_assign(at_home, daisy, source):
     assert saved["recsaved"] == "1", saved
     assert saved["recerror"] == "0", saved
     assert int(saved["recsample"]) == sample
-    esp.softkey("Done")
-    esp.wait_state(recready="1", recstate="0")
-    # The same normal Pool identity survives Save/Done and can be assigned.
-    daisy.bind_track(15, sample)
-    assert daisy.tracks()[15] == f"sample:{sample}"
-    daisy.note(15, 60, 100, True)
-    daisy.note(15, 60, 0, False)
+    esp.key("SHIFT")
+    esp.softkey("To keys" if source == 3 else "To pad")
+    prefix = "key" if source == 3 else "kit"
+    esp.wait_state(**{prefix + "ready": "1", "assigntake": sample})
+    esp.softkey("New keys" if source == 3 else "New kit")
+    esp.softkey("Confirm")
+    esp.wait_state(**{prefix + "view": "1"})
+    esp.page("NAME", "HIL recorded assignment")
+    esp.softkey("Confirm")
+    esp.wait_state(**{prefix + "ready": "1", prefix + "editable": "1"})
+    esp.softkey("Assign take")
+    esp.wait_state(**{prefix + "ready": "1", prefix + "sample": sample})
+    note = 60
+    daisy.note(15, note, 100, True)
+    daisy.note(15, note, 0, False)
+    esp.home()
     daisy.unbind_track(15)
     daisy.unload_sample(sample)

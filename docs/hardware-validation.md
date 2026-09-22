@@ -2409,6 +2409,17 @@ controls, listening and save/reboot acceptance remain open.
 
 ## HV-030 — Codec and internal-mix recording
 
+- [ ] **030a — Direct assignment:** after a successful codec/internal Save,
+  use Shift → To pad / To keys, select an empty and an occupied destination,
+  then Assign take. Confirm the same Pool sample is assigned, existing ranges
+  and sound settings survive, and other Tracks keep playing. Cancel/back must
+  leave maps untouched; unsaved takes disable the shortcut. Disconnect during
+  Done must not navigate or replay the action after reconnect. Save/reload the
+  resulting Instrument and listen. Host acknowledgment tests and frontend
+  build cover the implementation; this physical check remains open because
+  the card write CRC currently prevents reliable save/reload acceptance.
+
+
 **Design:** [Sampling and recording](features/sampling-and-recording.md).
 **Status:** partial; implementation continuation authorized on 2026-09-21.
 

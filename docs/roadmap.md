@@ -137,8 +137,7 @@ subject to the callback checkpoint:
 4. **Recording and arpeggiator acceptance.** Complete codec-input and internal
    master-mix signal/listening, save/reboot/recovery and full-load recording
    checks (HV-030). Complete arpeggiator physical MIDI-clock alignment, generated
-   note recording, persistence and pressure checks (HV-031). Add a direct
-   post-recording zone assignment shortcut. Add admission-controlled concurrent
+   note recording, persistence and pressure checks (HV-031). Add admission-controlled concurrent
    streamed voices; the current SD/ring path is singleton-only.
 5. **Instrument browsing follow-up.** Add tag metadata/filtering.
 

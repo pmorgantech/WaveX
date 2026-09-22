@@ -1,5 +1,6 @@
 #pragma once
 #include "components/ui_value_tile.h"
+#include "record_assignment.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
 namespace wavex_ui {
@@ -10,10 +11,13 @@ class UISampleRecordPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent&) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
     size_t consoleState(char*, size_t, size_t) override;
     bool consoleCommand(const char*, char*, size_t) override;
 
    private:
+    RecordAssignment assignment_;
+    void assign(bool keyboard);
     void adjust(uint8_t, int);
     void send(uint8_t);
     void read();

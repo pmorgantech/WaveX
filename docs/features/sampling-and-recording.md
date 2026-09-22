@@ -53,7 +53,13 @@ Auto-trim is nondestructive: first/last samples of magnitude at least 33 are
 padded by 480 frames, with silent takes retaining their full span. Save binds
 the final path to the same Pool identity. Done releases session ownership and
 selects the saved sample for the existing Sample Edit/Pool and Instrument
-assignment workflows. A dedicated post-recording zone picker is not present.
+assignment workflows. Shift → To pad / To keys performs the same acknowledged
+Done operation, then opens the existing map with the saved sample carried by
+identity. Choose a destination and press Assign take; entering the map never
+replaces a zone automatically. New kit/keys retains its replacement confirmation,
+and assignment preserves existing ranges and sound settings. An unsaved take
+cannot use this shortcut. Leaving Record or losing the link cancels the
+navigation intent; stale or failed acknowledgments cannot open a map.
 
 Write failure leaves the RAM take available for retry or discard. Cleanup
 removes only transaction-owned files. Sidecar and WAV are published separately;

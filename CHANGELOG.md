@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added Record → Shift → To pad / To keys: wait for the saved take's Done
+  acknowledgment, then choose and explicitly assign a destination in the existing
+  map editor. Failed/stale replies, link loss and navigation cannot assign a take.
+
 - Extended SD diagnostics with card/silicon identity, payload/directory/cadence
   comparisons and guarded debug-only aligned-buffer, hardware-flow-control and
   transfer-spacing experiments. Production defaults remain unchanged; repeated

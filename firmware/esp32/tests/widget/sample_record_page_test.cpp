@@ -16,6 +16,8 @@ namespace {
 uint16_t pixels[1280 * 800];
 uint32_t ticks = 0, read_id = 0;
 bool alive = true, respond = true;
+uint16_t assigned_sample = 0;
+bool assigned_keyboard = false;
 RecordStatusMessage status;
 std::vector<RecordOpMessage> mutations;
 uint32_t Tick() {
@@ -50,6 +52,7 @@ class SampleRecordPageTest : public ::testing::Test {
         alive = respond = true;
         status = {};
         mutations.clear();
+        assigned_sample = 0;
         page = wavex_ui::createSampleRecordPage();
         wavex_ui::UINavigator::instance().push(page);
         Advance(5);
@@ -75,6 +78,13 @@ class SampleRecordPageTest : public ::testing::Test {
     std::shared_ptr<wavex_ui::UIPage> page;
 };
 }  // namespace
+namespace wavex_ui {
+std::shared_ptr<UIPage> createRecordedSampleMap(bool keyboard, uint16_t sample) {
+    assigned_sample = sample;
+    assigned_keyboard = keyboard;
+    return std::make_shared<EmptyPage>();
+}
+}  // namespace wavex_ui
 bool inter_mcu_backend_link_alive() {
     return alive;
 }
@@ -138,4 +148,28 @@ TEST_F(SampleRecordPageTest, DisconnectAndLeavingPageNeverReplayOrDiscardTake) {
     respond = false;
     Advance(20);
     EXPECT_FALSE(page->getSoftkeys()[1].enabled);
+}
+
+TEST_F(SampleRecordPageTest, AssignmentNavigatesOnlyAfterSuccessfulDoneAcknowledgement) {
+    status.state = REC_READY;
+    status.take_id = 42;
+    status.sample_id = 1234;
+    status.frames = status.max_frames = 48000;
+    Advance(5);
+    EXPECT_FALSE(page->getShiftedSoftkeys()[2].enabled);
+    std::strcpy(status.path, "/wavex/recordings/Take.wav");
+    Advance(5);
+    auto key = page->getShiftedSoftkeys()[2];
+    ASSERT_TRUE(key.enabled);
+    key.onPress();
+    ASSERT_EQ(mutations.size(), 1u);
+    Advance(5);
+    EXPECT_EQ(assigned_sample, 0);
+    status = {};
+    status.completed_request_id = mutations.back().request_id;
+    status.completed_op = REC_DISCARD;
+    Advance(5);
+    EXPECT_EQ(assigned_sample, 1234);
+    EXPECT_TRUE(assigned_keyboard);
+    wavex_ui::UINavigator::instance().pop();  // Return to Record for fixture teardown.
 }

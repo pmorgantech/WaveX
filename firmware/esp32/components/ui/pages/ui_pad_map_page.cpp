@@ -315,7 +315,11 @@ void UIPadMapPage::render() {
                       selected_ + 1,
                       valid_ ? (keyboard_ ? uint8_t{0} : map_.pads[selected_].choke_group) : 0);
         label(title_, text);
-        label(status_, !alive_ ? "Audio engine disconnected" : message_);
+        label(status_,
+              !alive_ ? "Audio engine disconnected"
+              : assign_sample_ && editable() && !failed_
+                  ? "Select a pad, then Assign take. Its sound settings are preserved."
+                  : message_);
         for (uint8_t i = 0; i < 16; ++i) {
             SampleMetadata meta;
             const uint16_t id = valid_ && map_.editable ? map_.pads[i].sample_id : uint16_t{0};
@@ -560,8 +564,13 @@ std::array<Softkey, NUM_SOFTKEYS> UIPadMapPage::getSoftkeys() {
         return keys;
     }
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
-    keys[1] = {"Assign",
-               [this] { showSamples(); },
+    keys[1] = {assign_sample_ ? "Assign take" : "Assign",
+               [this] {
+                   if (assign_sample_)
+                       setPad(assign_sample_, keyboard_ ? 0 : map_.pads[selected_].choke_group);
+                   else
+                       showSamples();
+               },
                editable() && !keyDirty(),
                "Create an Instrument; Apply/Revert edits first"};
     if (!keyboard_) {
@@ -671,6 +680,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIPadMapPage::getShiftedSoftkeys() {
 }
 size_t UIPadMapPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
+    len = AppendKvInt(out, cap, len, "assigntake", assign_sample_);
     if (keyboard_) {
         len = AppendKvInt(out, cap, len, "keyosc", oscillator_ + 1);
         len = AppendKvInt(
@@ -813,10 +823,16 @@ void UIPadMapPage::renderKeys() {
                           : !map_.editable        ? "Create New keys or load a keyboard Instrument."
                           : !selectedSample()     ? "Assign a resident sample to this zone."
                                                   : message_;
-    label(status_, message);
+    label(status_,
+          assign_sample_ && editable() && !keyDirty() && !failed_
+              ? "Select a zone, then Assign take. Existing ranges are preserved."
+              : message);
 }
 std::shared_ptr<UIPage> createKeyMapPage(uint8_t oscillator) {
     return std::make_shared<UIPadMapPage>(true, oscillator);
+}
+std::shared_ptr<UIPage> createRecordedSampleMap(bool keyboard, uint16_t sample) {
+    return std::make_shared<UIPadMapPage>(keyboard, 0, sample);
 }
 std::shared_ptr<UIPage> createPadMapPage() {
     return std::make_shared<UIPadMapPage>();

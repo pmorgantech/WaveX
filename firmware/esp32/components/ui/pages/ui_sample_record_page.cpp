@@ -5,6 +5,7 @@
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_pad_map_page.h"
 #include "ui_theme.h"
 
 #include <algorithm>
@@ -125,6 +126,7 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
         this);
 }
 void UISampleRecordPage::onExit() {
+    assignment_ = {};
     if (timer_)
         lv_timer_delete(timer_);
     timer_ = nullptr;
@@ -169,6 +171,7 @@ void UISampleRecordPage::service() {
     if (alive != alive_) {
         alive_ = alive;
         valid_ = false;
+        assignment_ = {};
         if (alive)
             read();
     }
@@ -185,16 +188,24 @@ void UISampleRecordPage::service() {
             config_.preroll_ms = status_.preroll_ms;
             config_.monitor = status_.monitor;
         }
+        if (assignment_.Complete(received)) {
+            const auto assignment = assignment_;
+            assignment_ = {};
+            pending_ = 0;
+            UINavigator::instance().push(
+                createRecordedSampleMap(assignment.keyboard, assignment.sample));
+            return;  // Navigation deletes this page's widgets/timer.
+        }
         if (pending_ && received.completed_request_id == pending_) {
+            assignment_ = {};
             pending_ = 0;
             std::snprintf(message_, sizeof(message_), "%s", errors[received.error]);
             if (received.completed_op == REC_SAVE && received.error == REC_OK) {
                 setCurrentSampleId(received.sample_id);
-                std::snprintf(
-                    message_,
-                    sizeof(message_),
-                    "Saved: %s. Done releases the take to Sample Edit/Pool for assignment.",
-                    received.path);
+                std::snprintf(message_,
+                              sizeof(message_),
+                              "Saved: %s. Shift: To pad / To keys, or Done to keep it in the Pool.",
+                              received.path);
             }
         } else if (pending_ && received.active_request_id != pending_ && !received.take_id &&
                    received.state == REC_IDLE) {
@@ -255,7 +266,7 @@ void UISampleRecordPage::render() {
                   status_.peak_r * 100u / 32768u,
                   static_cast<unsigned long>(status_.clip_count),
                   status_.capture_error ? errors[status_.capture_error]
-                  : status_.path[0]     ? "Saved. Press Done to use this sample."
+                  : status_.path[0]     ? "Saved. Shift: To pad / To keys, or Done."
                                         : hints[status_.state],
                   message_);
     text(status_label_, text_buffer);
@@ -316,6 +327,20 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleRecordPage::getSoftkeys() {
                [this] { send(REC_DISCARD); },
                ready() && take,
                "Stop first"};
+    return keys;
+}
+void UISampleRecordPage::assign(bool keyboard) {
+    if (!ready() || status_.state != REC_READY || !status_.path[0])
+        return;
+    send(REC_DISCARD);
+    if (pending_)
+        assignment_.Begin(status_, pending_, keyboard);
+}
+std::array<Softkey, NUM_SOFTKEYS> UISampleRecordPage::getShiftedSoftkeys() {
+    auto keys = getSoftkeys();
+    const bool saved = ready() && status_.state == REC_READY && status_.path[0];
+    keys[1] = {"To pad", [this] { assign(false); }, saved, "Save the take first"};
+    keys[2] = {"To keys", [this] { assign(true); }, saved, "Save the take first"};
     return keys;
 }
 size_t UISampleRecordPage::consoleState(char* out, size_t cap, size_t len) {
