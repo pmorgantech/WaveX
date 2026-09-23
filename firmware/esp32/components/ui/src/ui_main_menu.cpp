@@ -29,16 +29,6 @@
 
 static const char* TAG = "UI_MAIN_MENU";
 
-// USB MIDI input needs both flags, and the inner one is only *defined* when
-// the outer is on (hardware_config.h), so the pair has to be resolved by the
-// preprocessor rather than tested as a C++ expression. This is the same
-// condition usb_midi_task.cpp compiles itself out on.
-#if WAVEX_ESP_USB_MIDI_ENABLED && WAVEX_USB_MIDI_INPUT_ENABLED
-#define WAVEX_UI_USB_MIDI_IN 1
-#else
-#define WAVEX_UI_USB_MIDI_IN 0
-#endif
-
 namespace wavex_ui {
 
 namespace {
@@ -211,32 +201,6 @@ std::shared_ptr<UIPage> createDisplaySettingsPage() {
     page->addInfo("Screen blanking", "after 5 min; touch/button/encoder wakes");
     page->addUnimplemented("Rotation", "not implemented - fixed landscape");
     page->addUnimplemented("Save on power-off", "not implemented - settings reset at boot");
-
-    return page;
-}
-
-std::shared_ptr<UIPage> createMidiSettingsPage() {
-    auto page = std::make_shared<UISettingsPage>("MIDI");
-
-    // Receive channel is per Track now (Track.midi_in, MSG_TRACK_OP;
-    // track-and-patch-model.md §2.2), not a global filter here - a Track set
-    // to a channel could otherwise be silenced by this page with nothing on
-    // screen to say why. The Track page (stage 4) is where it is edited.
-    page->addInfo("Receive channel", "per Track - see Project");
-
-    page->addInfo("DIN MIDI in", WAVEX_ESP_DIN_MIDI_ENABLED ? "enabled" : "disabled in build");
-    page->addInfo("USB MIDI in", WAVEX_UI_USB_MIDI_IN ? "enabled" : "disabled in build");
-
-    // Everything below is named because it is the first thing anyone looks for
-    // on a MIDI settings page, and finding nothing is ambiguous in a way that
-    // "not implemented" is not.
-    page->addUnimplemented("Velocity curve", "not implemented - velocity passes through unchanged");
-    page->addInfo("Clock source", "Internal or MIDI - set in Sequencer");
-    page->addInfo("MIDI clock out", "DIN / USB - set in Sequencer");
-    page->addInfo("Expression", "CC1 Mod Wheel / Channel Pressure - Instrument Mod");
-    page->addInfo("Controller reset", "CC121 clears Mod Wheel and Pressure");
-    page->addUnimplemented("Save on power-off",
-                           "not implemented - Track routing resets to one channel per Track");
 
     return page;
 }

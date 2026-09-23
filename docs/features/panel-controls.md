@@ -29,7 +29,7 @@ references are the audit trail; re-verify before trusting):
 | LEDs (temporary TLC5947) | `panel_task` owns SPI2 DMA and complete-frame latching; logical policy and diagnostics implemented. HV-012 open. |
 | Pot ADC (MCP3208) | Eight-channel DMA scans, RV112FF 20 kΩ decoder, calibration and page bindings implemented; HV-013 open. |
 | DIN MIDI | Compiled out since 2026-09-04: RX sat on the USB-Serial/JTAG D- pin. Pins moved 2026-09-05; still off until rewired (§5). UART2 RX/TX rings and clock/transport serializer implemented; enable only after wiring confirmation (HV-014). |
-| USB MIDI | Device on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Note input plus queued clock/transport output; input/output flags work independently. Enumeration and timing remain unverified (HV-014). |
+| USB MIDI | Saved Device/Host selection on the **USB 2.0 High-Speed OTG** controller (`TINYUSB_DEFAULT_CONFIG()` selects the HS port on the P4), i.e. the board's 4-pin USB connector, independent of the flash port. Note input plus queued clock/transport output; input/output flags work independently. Enumeration and timing remain unverified (HV-014, HV-035). See [port roles](#usb-midi-port-roles-2026-09-23). |
 | Input plumbing | `InputEvent` → `InputDispatcher` queue (64 deep) → drained on the UI task under the LVGL lock → global Shift/Back → `UIPage::onInput()`. The debug console injects the same events (`KEY`, `ENC`, `POT`). |
 
 The good news is that everything downstream of `InputDispatcher::post()` is
@@ -321,7 +321,7 @@ notes sound; `make test` and `make test-hil` green.
 2. The second full-speed USB pair is reserved for a future host port; the
    dormant SPI-slave pins stay reserved (§3.1). Together that is seven GPIO
    held back, leaving one spare after the panel.
-3. USB MIDI stays on the HS OTG port (already true) — the 4-pin connector is
+3. USB MIDI uses the HS OTG port in either Device or Host mode (2026-09-23 user-authorized Phase 2 addition) — the 4-pin connector is
    *the* USB MIDI port; the Type-C is only ever flash/debug.
 4. Key and LED maps live in `hardware_config.h` alongside the other wiring
    truth rather than in a third config file.
@@ -330,8 +330,8 @@ notes sound; `make test` and `make test-hil` green.
 
 ## 7. Out of scope / later
 
-RGB pads; velocity-sensing pads; USB host (needs the reserved FS pair, a
-`usb_host` stack and a power switch — Phase 5); MIDI THRU (hardware only, if
+RGB pads; velocity-sensing pads; a second simultaneous USB host port (the
+reserved FS pair, stack support and a power switch — Phase 5); MIDI THRU (hardware only, if
 the panel PCB has room); moving MIDI DIN out to the Daisy if clock jitter over
 the link proves too high (subject to the transport decision in `../architecture.md`).
 
@@ -489,3 +489,55 @@ fault behavior remain HV-014 gates.
 
 References: [ESP-IDF UART driver](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/uart.html)
 and the pinned TinyUSB MIDI class in `firmware/esp32/managed_components/`.
+
+
+## USB MIDI port roles (2026-09-23)
+
+Settings → MIDI offers **USB port mode: Device / Host**. Select with the
+encoder or **Device / Host** softkey, press **Save mode**, wait for **Saved —
+restart to apply**, then restart WaveX. Active mode, saved mode, connection
+and save result are separate readbacks. Leaving without saving discards the
+draft. Device remains the default when no setting exists; invalid/unreadable
+NVS also boots Device and reports the settings error. NVS is never erased
+automatically, and failed writes preserve the last confirmed saved choice.
+This is a device setting, independent of Track routing and Project persistence.
+
+Device mode keeps the existing TinyUSB computer/DAW connection. Host mode
+uses ESP-IDF's host library on the same HS OTG controller, with one directly
+connected class-compliant **USB MIDI 1.0** input adapter. The first eligible
+alternate-zero MIDIStreaming interface and cable zero are used; additional
+cables, devices/hubs, vendor-specific drivers and MIDI 2.0 UMP are not supported.
+An input-only adapter is accepted. If the interface also supplies an OUT
+endpoint, Sequencer USB clock/Start/Continue/Stop/SPP output uses it. Musical
+note/CC output and MIDI THRU remain outside this change.
+
+`usb_midi_port.cpp` owns the synchronized role/settings snapshot. The main
+application loop services the queued NVS save, without holding the UI lock.
+The USB host worker alone owns its device/interface and two reusable IDF
+transfer allocations. Callbacks only retire transfers and mark received data;
+parsing/forwarding runs outside callbacks. It validates descriptor lengths,
+MIDI version, endpoint shapes and event packet sizes, skips other cables,
+and uses the existing MIDI parsers and inter-MCU protocol. Up to one 512-byte
+RX transfer and one output packet are serviced per tick. Transfer errors close
+the session and require reconnection; no failed clock packet is replayed.
+Disconnect/fault cleanup stops output, flushes endpoints, releases admitted
+held notes in bounded groups through the existing note-release retry service,
+and waits for all DMA completions before releasing the interface. Buffers are
+allocated once per boot, never per MIDI event or reconnection.
+
+The connector adapter must carry data and provide suitable 5 V VBUS power to
+the attached MIDI device. Firmware host mode alone does not provide a power
+supply or change board wiring; this implementation adds no VBUS GPIO control.
+Check the board revision/cable power path before the host bench test. Device
+and Host are mutually exclusive on this port; the independent USB Serial/JTAG
+console remains available. Switch back to Device and restart before connecting
+the OTG port to a computer.
+
+Validation: eleven production-driver/parser/settings tests pass under ASan/UBSan,
+including truncated descriptors, input-only adapters, cable isolation, DMA
+cancellation, held-note cleanup, clock completion and NVS failure. Hardware
+support, rendering, power, latency and jitter are **unverified**; see
+[HV-035](../hardware-validation.md#hv-035--usb-midi-host-and-port-mode).
+
+References: [ESP-IDF 5.5 USB host API](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/usb_host.html),
+[USB MIDI 1.0 class specification](https://www.usb.org/sites/default/files/midi10.pdf).

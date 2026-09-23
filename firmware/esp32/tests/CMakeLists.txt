@@ -193,6 +193,8 @@ endforeach()
 
 target_sources(midi_forward_test PRIVATE ../main/midi_task.cpp)
 
+add_subdirectory(usb)
+
 target_sources(pot_service_test PRIVATE ../main/panel/pot_service.cpp)
 set_source_files_properties(../main/panel/pot_service.cpp PROPERTIES
     COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/mocks/panel_lock_host.h")

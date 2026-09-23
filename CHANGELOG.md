@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added USB MIDI 1.0 host support for a directly connected adapter on the first
+  cable, plus a saved Settings → MIDI Device/Host port-mode choice applied after
+  restart, connection and save feedback, and MIDI clock output. Hardware
+  acceptance remains open.
+
 - Extended filter research with self-oscillation and circuit-nonlinearity
   comparisons, primary ladder-paper findings and a proposed DSP-cost admission
   budget for trading polyphony for quality. Runtime behavior is unchanged.

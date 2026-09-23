@@ -18,6 +18,8 @@ idf_component_register(
         "midi_task.cpp"
         "midi_out.cpp"
         "usb_midi_task.cpp"
+        "usb_midi_host.cpp"
+        "usb_midi_port.cpp"
         "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/comm_interface_impl.cpp"
@@ -47,6 +49,7 @@ idf_component_register(
         "esp_mm"
         "esp_app_format"  # esp_app_get_description(): version from the root VERSION file
     PRIV_REQUIRES
+        "usb"
         "shared"
         "frontend_contracts"
         "ui"

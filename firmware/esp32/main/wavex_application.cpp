@@ -45,7 +45,7 @@ typedef int esp_err_t;
 #include "pcnt_task.h"
 // MIDI input tasks (roadmap Phase 1 item 8)
 #include "midi_task.h"
-#include "usb_midi_task.h"
+#include "usb_midi_port_internal.h"
 #endif
 
 static const char* TAG = "WaveXApplication";
@@ -100,7 +100,7 @@ bool WaveXApplication::initialize() {
     if (midi_task_start() != ESP_OK) {
         ESP_LOGE(TAG, "DIN MIDI init failed - continuing without DIN MIDI input");
     }
-    if (usb_midi_task_start() != ESP_OK) {
+    if (wavex_midi::StartUsbPort() != ESP_OK) {
         ESP_LOGE(TAG, "USB MIDI init failed - continuing without USB MIDI input");
     }
 #endif
@@ -135,6 +135,9 @@ void WaveXApplication::run() {
 
         logSystemStatus();
 
+#ifndef WAVEX_TEST_BUILD
+        wavex_midi::ServiceUsbSettings();
+#endif
         // UART operations are handled by inter_mcu
 
 #ifdef ESP_PLATFORM

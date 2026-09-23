@@ -52,7 +52,7 @@ Dual-MCU split, each processor doing what it is best at:
 | Concern | Owner | Rationale |
 |---|---|---|
 | UI, navigation, waveform display | ESP32-P4 | PSRAM + PPA + MIPI-DSI bandwidth |
-| MIDI I/O | ESP32-P4 | USB device + DIN UART; forwards notes over the inter-MCU link |
+| MIDI I/O | ESP32-P4 | USB device/host + DIN UART; forwards notes over the inter-MCU link |
 | Sample storage (SD card) | Daisy | Audio engine streams directly; no sample data crosses the SPI link during playback |
 | Real-time audio, voices, mixing | Daisy | Deterministic bare-metal loop, FPU, SDRAM |
 | CV/Gate + analog voice control | Daisy | Generated at the 1 kHz control tick, phase-aligned with audio |
@@ -75,7 +75,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | logical key map and interrupt/FIFO adapter implemented; polling fallback retained; physical validation HV-011 open |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× RV112FF 20 kΩ endless pots via MCP3208 | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3208 driver/calibration/bindings implemented (2.P.4), HV-013 open |
 | LEDs | 2× TLC5947 chained, temporary | SPI2 DMA, `panel_task` only | implemented (2.P.3), HV-012 open; chip-independent frames, PCA9956B stub for later board |
-| MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB note input implemented; clock/transport output ports and route implemented (2.P.5), HV-014 open; Daisy clock generation, external-clock ingest and SPP implemented; physical sync unverified |
+| MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device or host (saved Settings → MIDI choice, applied after restart) on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB note input implemented; clock/transport output ports and route implemented (2.P.5), HV-014 open; Daisy clock generation, external-clock ingest and SPP implemented; physical sync unverified |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
 | Multi-out DAC | PCM1690 8-ch | SAI2 TDM-8 + I2C control | planned (Phase: analog voice board) |
@@ -229,11 +229,24 @@ only inline magic numbers:
 | `panel_task` | 5 | 4096 | any | 2 ms delay; LED DMA completion | Owns PCNT polling and SPI2; changed LED frames checked every 20 ms |
 | `tca8418_task` | 5 | 4096 | 1 | INT notification / 100 ms safety poll | Bounded FIFO service; 10 ms fallback if INT registration is unavailable (HV-011) |
 | `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
-| `usb_midi` | 5 | 4096 | any | task notification | Woken by TinyUSB's device task |
+| `usb_midi` | 5 | 4096 | any | semaphore / 1 ms | Device mode, woken by TinyUSB |
+| `usb_midi_host` | 5 | 4096 | any | 1 RTOS tick | Host mode, sole owner of IDF host library/client and transfer state |
 | `log_drain` | 1 | 3072 | any | 20 ms delay | Drains the log ring to the console |
 | `scrshot` | 3 | 4096 | any | UART read, 200 ms | Debug builds only |
 | TinyUSB device | esp_tinyusb default | — | — | USB events | Calls `tud_midi_rx_cb` |
 | esp_timer task | 22 | — | 0 | timer queue | Shared; keep callbacks short (guide §11) |
+
+The HS OTG controller runs exactly one MIDI role per boot. Settings → MIDI
+stages and saves Device/Host in the frontend's NVS; Device is the default.
+The application main loop owns NVS writes, and the UI polls synchronized
+saved/active/connection values. Changing the saved role requires restart;
+there is no live stack handover or automatic fallback after host startup failure.
+The device-mode TinyUSB tasks are absent in host mode. The host worker pumps
+both IDF library and client events, handles one RX transfer and one queued
+clock packet per pass, and releases admitted held notes on disconnect/fault.
+IDF allocates the fixed reusable USB transfer buffers and owns their DMA/cache
+maintenance. See [USB MIDI roles](features/panel-controls.md#usb-midi-port-roles-2026-09-23)
+and HV-035 for supported adapters, power checks and remaining acceptance.
 
 `panel_task` retains the PCNT 2 ms polling cadence and consumes accumulated
 counts. ESP-IDF limit watch points extend the hardware count with its IRAM-safe

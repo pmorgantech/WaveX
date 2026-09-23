@@ -117,6 +117,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-031 | Instrument arpeggiator | Partial | Host timing and edit/generated-voice HIL pass; physical timing, persistence and soak remain open |
 | HV-032 | Global LFO, held locks and diagnostic counts | Partial | Four console-driven board tests pass; physical controls, listening and extended checks remain open |
 | HV-033 | Instrument tags and filtering | Pending | Matched protocol-9 images; reliable card required for save/reboot |
+| HV-035 | USB MIDI host and port mode | Pending | Adapter VBUS/data wiring, physical role selection and USB timing unverified |
 
 ## HV-001 — SD card formatting
 
@@ -2733,3 +2734,52 @@ Failure follow-up / remaining cases:
 - [Flashing](flashing.md)
 - [Performance monitoring](performance_monitoring.md)
 - [Callback performance evidence](callback-performance-log.md)
+
+
+## HV-035 — USB MIDI host and port mode
+
+**Status:** Pending. Source build and eleven ASan/UBSan tests are not physical
+acceptance; no image was flashed or adapter exercised for this entry.
+**Gate:** [Phase 2.P](roadmap.md#2p--panel-controls-and-midi-io-physical-integration),
+[port role contract](features/panel-controls.md#usb-midi-port-roles-2026-09-23).
+**Setup:** Record date, both image hashes/versions, board revision, adapter
+make/model and USB VID/PID, cable wiring and 5 V VBUS source. Use a directly
+connected class-compliant MIDI 1.0 adapter, MIDI source, MIDI capture/DAW,
+a sustained gated Instrument, headphones and timing capture. Verify the
+connector's power path and supply budget; no software-switched VBUS is added.
+
+- [ ] **035a — Settings / power cycle:** With Device active, change the mode
+  using both touch softkeys and encoder. Exit without saving and confirm no
+  change. Save Host, wait for saved/restart feedback, and navigate away/back.
+  Active must remain Device until restart. Restart with a suitable adapter;
+  saved/active must both show Host. Repeat back to Device before connecting a
+  computer. Confirm the independent Serial/JTAG console remains accessible.
+  Verify scrolling, text fit, idle repaint behavior and UI stack headroom.
+- [ ] **035b — Host input / output:** Connect at boot and hot-plug. Confirm
+  Connected, channel-aware notes/velocity, note-on-zero releases, CC1, CC121,
+  pressure, Program Change and external clock/SPP through existing routes.
+  Exercise an input-only device. If OUT exists, capture Clock and
+  Start/Continue/Stop/SPP; verify no output-ready claim for input-only devices.
+  Verify first-cable isolation on a multi-cable adapter and explicit refusal
+  of unsupported devices. Record adapter descriptors and serial diagnostics.
+- [ ] **035c — Recovery / ownership:** Unplug with held and repeated notes,
+  during RX and output clock traffic. Require no stuck notes, no crash and no
+  note release redirected to a different Track. Repeat at least 100 cycles,
+  including reconnect during cleanup. Compare free/minimum heap; require no
+  progressive leak. Inject transfer stall/error and verify fault feedback,
+  bounded cleanup and explicit reconnect recovery. Exercise link congestion
+  while releasing; pending releases must recover through the existing service.
+- [ ] **035d — Timing / regression:** Repeat HV-014 device enumeration and
+  clock checks after switching back. In both modes measure MIDI-in-to-sound
+  latency and clock jitter, then run the Phase 2 ten-minute DAW sync workload.
+  Include UI navigation, mode-setting saves and current full audio workload;
+  record callback DWT peaks, underruns and MIDI/drop counters. These selected
+  checks do not replace HV-005/HV-019 one-hour capacity/soak acceptance.
+- [ ] **035e — Persistence failure:** Exercise unavailable/full NVS and a
+  failed commit in a recoverable test setup. Require visible save failure,
+  retained confirmed selection and working retry; calibration must survive.
+  Invalid stored mode boots Device with error feedback. Confirm no automatic
+  NVS erase or restart while a save is pending.
+
+**Blockers:** Physical adapter identity/power and all steps above remain unrun.
+Keep the 85.3713% / 86.5040% capacity findings and existing phase gates open.

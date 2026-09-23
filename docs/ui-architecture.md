@@ -61,6 +61,11 @@ offline backend. Context refresh requests run only while the menu is visible.
 - **Project:** eight Tracks per view, Instrument assignment, MIDI input, Track level, pan/balance and mute.
 - **Settings:** Display, Storage, MIDI, System, Calibrate, Pots, Global LFO.
 
+  MIDI offers a saved USB Device/Host choice, applied after restart. The
+  page keeps its draft separate from saved/active values and polls connection
+  and asynchronous NVS-save status. Save work runs in the application main
+  loop; unchanged status rows do not repaint. See [USB port roles](features/panel-controls.md#usb-midi-port-roles-2026-09-23).
+
   Storage offers Format Card, followed by a separate **ALL CARD DATA WILL BE
   LOST** confirmation with Cancel and Erase all data. The backend owns the
   expiring confirmation and format result; read-only polling recovers lost

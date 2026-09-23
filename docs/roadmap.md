@@ -100,6 +100,10 @@ Complete wiring and physical acceptance using
   the replaceable backend for the later PCA9956B.
 - **HV-013:** RV112FF 20 kΩ waveforms, MCP3208 acquisition/settling,
   calibration, saved settings, feel and shared-bus timing.
+- **HV-035:** USB MIDI host adapter power/enumeration, saved Device/Host
+  selection across restart, disconnect-held-note recovery and host/device
+  timing under load. The same-port host addition was authorized 2026-09-23;
+  a second simultaneous port remains deferred.
 - **HV-014:** DIN wiring and latency, USB enumeration, clock jitter,
   Start/Continue/Stop and SPP synchronization with a DAW.
 - **HV-018:** 8-DSI-TOUCH-A display startup, touch coordinates, brightness,

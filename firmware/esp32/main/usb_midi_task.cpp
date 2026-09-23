@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "inter_mcu.h"
 #include "midi_out.h"
+#include "usb_midi_port_internal.h"
 
 #include "midi/clock_input.hpp"
 #include "midi/event_ring.hpp"
@@ -156,6 +157,8 @@ static void usb_midi_task(void* arg) {
         }
         generation = current_generation;
         connected_before = connected;
+        wavex_midi::SetUsbConnection(connected ? wavex_midi::UsbConnection::Connected
+                                               : wavex_midi::UsbConnection::Waiting);
         wavex_midi::Ready(wavex_midi::Port::Usb, connected && WAVEX_USB_MIDI_OUTPUT_ENABLED);
         RxChunk chunk;
         for (unsigned pass = 0; pass < 4 && s_rx_chunks.Pop(chunk); ++pass) {
