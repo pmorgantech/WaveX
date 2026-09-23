@@ -336,6 +336,37 @@ the release ELF contains no probe/experiment symbols.
   and buffer placement. Do not promote a short software workaround to production
   without repeated recorder, byte-readback and loaded-audio acceptance.
 
+### Replacement-card write probe, 2026-09-23
+
+User confirmed the replacement card was installed before this run. The existing
+running image reported four-bit 25 MHz (`CLKCR=0x4004`), experiment mode 0,
+silicon ID `0x20036450`, and CID `1b534d30 30303030 106ca815 5a00d784`.
+The serial log confirms removal/unmount followed by insertion and successful
+remount of a 7497 MiB card (15,353,856 sectors) at 25 MHz/four-bit.
+Neither board was reflashed or reset for this run; running image hashes were
+not independently verified, so this is not a controlled matched-image card A/B.
+The initial retained-error latch was clear; voices, resident samples, streaming
+and sampled underruns were all zero.
+
+`scripts/bench_sd_write.py` stopped at the first default case: a 512-byte file,
+4 KiB application chunk, no prefix/shift/gap. Exclusive creation succeeded,
+then the write failed at offset 0 with FatFs `FR_DISK_ERR` (`1`), after 2 ms
+for the probe. The failed scratch file `/wx338aaa.tmp` was retained. The
+4 KiB, 1 MiB and 48 MiB cases were not run; sync/readback was not reached.
+
+First failure: write, LBA 3314, one sector, aligned AXI buffer/IDMA base
+`0x240057e0`, IRQ captured, pre-handler `STA=0x1008`, `DCOUNT=0`,
+post-handler HAL error `0x0c` (data timeout plus command-response timeout).
+The primary captured error is data timeout, unlike the earlier card's CRC
+failure; this is not evidence of an absent SD interrupt or a 30-second software
+completion wait. Sampled underruns remained zero. The failure latch was left
+intact and no recovery, retry, formatting or clock change was attempted.
+
+Evidence: `logs/sd-card-swap-20260923-write.jsonl` and corresponding
+`SDIO_FAIL seq=1248` / `SDIO_REG` records in `logs/daisy.log`.
+HV-001g remains partial: repeat with verified image identities/fresh mount and
+alternate cards before attributing the difference to card identity alone.
+
 **Remaining:** isolate card/socket/wiring integrity and the reproduced wider-bus
 write failure; successful reads alone do not prove write stability. Measure
 sustained WAV streaming and write soak with negotiated clocks. Cancellation,
