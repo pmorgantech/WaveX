@@ -117,7 +117,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-031 | Instrument arpeggiator | Partial | Host timing and edit/generated-voice HIL pass; physical timing, persistence and soak remain open |
 | HV-032 | Global LFO, held locks and diagnostic counts | Partial | Four console-driven board tests pass; physical controls, listening and extended checks remain open |
 | HV-033 | Instrument tags and filtering | Pending | Matched protocol-9 images; reliable card required for save/reboot |
-| HV-035 | USB MIDI host and port mode | Pending | Adapter VBUS/data wiring, physical role selection and USB timing unverified |
+| HV-035 | USB MIDI host and port mode | Partial | ESP32 flashed and MIDI settings readback confirmed; adapter, role change and timing unverified |
 
 ## HV-001 — SD card formatting
 
@@ -2738,8 +2738,8 @@ Failure follow-up / remaining cases:
 
 ## HV-035 — USB MIDI host and port mode
 
-**Status:** Pending. Source build and eleven ASan/UBSan tests are not physical
-acceptance; no image was flashed or adapter exercised for this entry.
+**Status:** Partial startup check only. Source build and eleven ASan/UBSan tests
+pass; physical USB adapter and mode-change acceptance remain open.
 **Gate:** [Phase 2.P](roadmap.md#2p--panel-controls-and-midi-io-physical-integration),
 [port role contract](features/panel-controls.md#usb-midi-port-roles-2026-09-23).
 **Setup:** Record date, both image hashes/versions, board revision, adapter
@@ -2781,5 +2781,20 @@ connector's power path and supply budget; no software-switched VBUS is added.
   Invalid stored mode boots Device with error feedback. Confirm no automatic
   NVS erase or restart while a save is pending.
 
-**Blockers:** Physical adapter identity/power and all steps above remain unrun.
+**Blockers:** Physical adapter identity/power and full acceptance steps above remain unrun.
 Keep the 85.3713% / 86.5040% capacity findings and existing phase gates open.
+
+
+**2026-09-23 — ESP32 flash and startup only:** Flashed the frontend from
+commit `6a69930` through native USB Serial/JTAG; esptool verified all programmed
+regions and reset successfully. ESP32 ELF SHA-256:
+`76fba82bb40e12cad7d38dfc04a0003a28059552e40f2f3bbb69737cd1ddc129`;
+build BIN SHA-256:
+`f64143ce60819e9bea79c8021550e303034379417a43e6b4d3b8d19a0978e9e9`.
+Daisy was not flashed or tested in this check. Boot reached the application UI,
+and acknowledged console navigation reached Settings → MIDI with Device/Host
+and Save mode softkeys. Readback: `usbmode=0 usbsaved=0 usbconnection=2
+usbsaving=0 usbsaveerror=0` (Device active/saved, waiting, no save error).
+Evidence: `logs/usb-host-flash-20260923.log` (local, gitignored). Left the MIDI
+page open; no mode save/restart or adapter I/O was exercised. This does not
+close 035a–035e, physical rendering, musical timing or any audio/capacity gate.
